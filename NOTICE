@@ -1,0 +1,66 @@
+Namioto — copyright notice, license and third-party attributions
+================================================================
+
+Copyright (C) 2026 sitiyou
+
+Namioto is free software: you can redistribute it and/or modify it under the terms of the GNU
+Affero General Public License as published by the Free Software Foundation, version 3 of the
+License. Namioto is distributed in the hope that it will be useful, but WITHOUT ANY WARRANTY;
+without even the implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
+GNU Affero General Public License (LICENSE) for more details.
+
+SPDX-License-Identifier: AGPL-3.0-only
+
+
+Why AGPL-3.0
+------------
+Two separate obligations force a copyleft, AGPLv3-compatible license on the whole program:
+
+1. NoteDigger (https://github.com/madderscientist/noteDigger) is licensed GPL-3.0 and is used as
+   the reference implementation, including verbatim reuse of code. GPLv3 section 13 permits
+   combining a GPLv3 work with an AGPLv3 work into a single combined work; the result is
+   conveyed under the AGPLv3 terms.
+2. namioto/tempo.py reimplements the TempoCNN front end described by Essentia
+   (https://essentia.upf.edu, AGPL-3.0). Keeping the program under AGPLv3 stays compliant
+   whether or not that module is judged to be a derivative of Essentia's implementation.
+
+In addition, the GUI links PyQt6, which Riverbank licenses under GPL-3.0 (or a commercial
+license), so a permissive license was never an option for this program.
+
+
+Third-party code and assets
+---------------------------
+
+### noteDigger
+- License: GNU GPL version 3 (see refs/noteDigger/LICENSE in a checkout with the reference clone)
+- Used for: the functional reference for spectrum analysis, the timing model (seconds internally,
+  bar axis on top) and, where noted in individual files, reused code
+- Files that carry reused code keep an attribution header naming noteDigger as the origin
+
+### Essentia (Music Technology Group, Universitat Pompeu Fabra)
+- License: GNU AGPL version 3
+- Used for: the TempoCNN algorithm and its audio front end (mel spectrogram parameters, patch
+  extraction and normalisation) that namioto/tempo.py reimplements with librosa and ONNX Runtime
+
+### TempoCNN model  (namioto/models/deeptemp-k16-3.onnx)
+- Upstream: Essentia `deeptemp-k16-3` (TempoCNN, MTG-UPF), https://essentia.upf.edu/models.html
+- License: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+  (namioto/models/LICENSE-CC-BY-NC-SA-4.0.txt) — NOT AGPL-3.0
+- The model is an independent work aggregated with the program, not a derivative of the AGPL code,
+  and it keeps its own license. Upstream states that all models created by the MTG are licensed
+  under CC BY-NC-SA 4.0 and are available under a proprietary license on request.
+- Consequence: any distribution of Namioto that includes this file is non-commercial. Remove it
+  (or supply a permissively licensed replacement) if a commercial distribution is required.
+- See namioto/models/README.md for the attribution and the list of changes.
+
+### Dependencies (all AGPL-compatible)
+| Component | License |
+| --- | --- |
+| PyQt6 | GPL-3.0-only (or commercial) |
+| Qt 6 runtime (pyqt6-qt6) | LGPL-3.0 |
+| pyqt6-sip | BSD-2-Clause |
+| librosa | ISC |
+| onnxruntime | MIT |
+| numpy, scipy, scikit-learn, joblib, pooch, soundfile | BSD-3-Clause |
+| soxr | LGPL-2.1-or-later |
+| pytest (development only) | MIT |
