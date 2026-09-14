@@ -625,17 +625,12 @@ class FakeSong:
 
     def __init__(self, duration: float = 30.0) -> None:
         self.gain = 1.0
-        self.samples = np.zeros(0, dtype=np.float32)  # nothing to rerender, so no stretch thread starts
-        self.stretch = 1.0
+        self.speed = 1.0
         self.is_loaded = True
         self.duration = duration
         self.position = 0.0
         self.is_playing = False
         self.calls: list[str] = []
-
-    def set_stretched(self, buffer, stretch: float) -> None:
-        self.stretch = stretch
-        self.calls.append("set_stretched")
 
     def play(self, seconds: float = 0.0) -> None:
         self.position = seconds
@@ -663,7 +658,6 @@ def test_a_speed_change_reaches_the_notes_while_they_play(window, monkeypatch) -
     window.view.clear_notes()
     window.view.add_note(69, 0.0, 2.0)
     window.transport.speed.set_value(1.0)
-    song.stretch = 1.0
     window.transport.play_pause.click()
     assert notes.is_playing and notes.programs[-1][1] == 1.0
     song.position = 1.0  # the song is the master clock, and it is a second in
@@ -677,32 +671,12 @@ def test_a_speed_change_reaches_the_notes_while_they_play(window, monkeypatch) -
     window.transport.speed.set_value(0.8)
     window._apply_speed()
     assert notes.programs[-1][1] == 0.8 and notes.position == pytest.approx(1.4)
+    assert song.speed == 0.8  # the song takes the same speed, with nothing to rerender first
     assert notes.calls.count("set_program") == 3
 
     window.transport.speed.set_value(1.0)
     window._stop()
     window.view.clear_notes()
-
-
-def test_a_speed_the_song_has_not_been_rendered_at_defers_the_play(window, monkeypatch) -> None:
-    song, notes = FakeSong(), FakeOutput()
-    monkeypatch.setattr(window, "song", song)
-    monkeypatch.setattr(window, "player", notes)
-    rendered: list[bool] = []
-    monkeypatch.setattr(window, "_start_stretch", lambda: rendered.append(True))
-
-    window.transport.speed.set_value(1.5)
-    window.transport.play_pause.click()
-
-    assert rendered == [True] and window.pending_play  # the rerender was asked for
-    assert song.calls == [] and notes.calls == []  # and nothing plays before it lands
-
-    window._on_stretch_loaded(np.zeros(10, dtype=np.float32), 1.5)
-    assert song.calls == ["set_stretched", "play"] and not window.pending_play
-    assert notes.calls == ["set_program", "play"]
-
-    window.transport.speed.set_value(1.0)  # put the slider back for the tests that follow
-    window._stop()
 
 
 def test_the_roll_waits_for_a_pause_before_it_seeks(window, monkeypatch) -> None:
@@ -827,7 +801,6 @@ def test_the_audio_file_plays_alongside_the_notes(window, monkeypatch) -> None:
     window.view.clear_notes()
     window.view.add_note(69, 0.0, 1.0)
     window.transport.speed.set_value(0.5)
-    song.stretch = 0.5  # the song has already been rerendered for this speed
     song.position = 4.0  # the playhead already sits inside the file
 
     window.transport.play_pause.click()

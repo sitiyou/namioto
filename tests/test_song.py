@@ -11,7 +11,7 @@ from PyQt6.QtMultimedia import QtAudio
 from PyQt6.QtWidgets import QApplication
 
 from namioto.ui import theme
-from namioto.ui.song import SongPlayer, _SongSource, load_song, stretch_song
+from namioto.ui.song import SongPlayer, TimeStretcher, _SongSource, load_song
 
 
 class FakeSink(QObject):
@@ -38,6 +38,17 @@ class FakeSink(QObject):
     def processedUSecs(self) -> int:
         """A sink that has processed nothing, so the playhead stays where the song left it."""
         return 0
+
+
+class TimedSink(FakeSink):
+    """A sink a test can tell how much of the stream it has played."""
+
+    def __init__(self, *_args) -> None:
+        super().__init__(*_args)
+        self.usecs = 0
+
+    def processedUSecs(self) -> int:
+        return self.usecs
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -93,6 +104,17 @@ def test_the_source_serves_the_song_in_order() -> None:
     assert source.cursor == 12.0
 
 
+def render(samples: np.ndarray, speed: float, sample_rate: int, chunk: int = 4096) -> np.ndarray:
+    """Play a whole song through the vocoder in one go, the way the sink pulls it."""
+    stretcher = TimeStretcher()
+    stretcher.load(samples, sample_rate)
+    stretcher.start(0.0, speed)
+    pieces = []
+    while stretcher.remaining():
+        pieces.append(stretcher.read(chunk))
+    return np.concatenate(pieces) if pieces else np.zeros(0, dtype=np.float32)
+
+
 def test_stretching_keeps_the_pitch_where_it_was() -> None:
     rate = 44100
     time = np.arange(rate) / rate
@@ -103,34 +125,41 @@ def test_stretching_keeps_the_pitch_where_it_was() -> None:
         return float(np.fft.rfftfreq(len(samples), 1 / rate)[spectrum.argmax()])
 
     for speed in (0.8, 1.25, 2.0):
-        stretched = stretch_song(tone, speed)
+        stretched = render(tone, speed, rate)
         assert len(stretched) / rate == pytest.approx(1.0 / speed, rel=0.01)  # the tempo moved
         assert peak(stretched) == pytest.approx(440, abs=1)  # the pitch did not
 
-    assert np.array_equal(stretch_song(tone, 1.0), tone)  # 1x is handed back untouched
+    assert np.array_equal(render(tone, 1.0, rate), tone)  # 1x is handed back untouched
+
+
+def test_the_stretcher_reads_the_same_in_any_chunk_size() -> None:
+    rate = 4410
+    tone = np.sin(2 * np.pi * 220 * np.arange(rate) / rate).astype(np.float32)
+    assert np.array_equal(render(tone, 1.3, rate, chunk=100_000), render(tone, 1.3, rate, chunk=512))
 
 
 def test_the_source_serves_the_rerendered_song() -> None:
-    buffer = np.arange(1000, dtype=np.float32) / 1000.0
-    player = SongPlayer()
-    player.load(np.zeros(500, dtype=np.float32), 1000)  # a half second song
-    player.set_stretched(buffer, 2.0)  # rerendered at twice the speed, so it is half as long again
-    _source = _SongSource(player)
-
-    assert read(_source, 8) == pytest.approx([0.0, 0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007], abs=1e-4)
-    assert _source.cursor == 8
-    assert player.duration == pytest.approx(0.5)  # the song's own length, not the buffer's
-    assert player.stretch == 2.0
-
-
-def test_a_stretched_song_keeps_the_playhead_in_song_seconds(monkeypatch) -> None:
-    monkeypatch.setattr("namioto.ui.song.QAudioSink", FakeSink)
     player = SongPlayer()
     player.load(np.zeros(4000, dtype=np.float32), 1000)  # a four second song
-    player.set_stretched(np.zeros(2000, dtype=np.float32), 2.0)  # rerendered at 2x: two seconds long
+    player.speed = 2.0  # rerendered at twice the speed, so half as many samples come out
+    source = _SongSource(player)
 
-    player.play(3.0)  # three seconds into the song is one and a half into the buffer
-    assert player._source.cursor == 1500  # noqa: SLF001 - the cursor is what reaches the sink
+    assert player.duration == pytest.approx(4.0)  # the song's own length, not the output's
+    assert player.remaining == 2000  # at 2x, a two second buffer
+    assert player.speed == 2.0
+    assert read(source, 8) == pytest.approx([0.0] * 8, abs=1e-4)  # a silent song, served as it goes
+
+
+def test_a_seek_serves_the_song_from_where_the_playhead_lands(monkeypatch) -> None:
+    monkeypatch.setattr("namioto.ui.song.QAudioSink", FakeSink)
+    player = SongPlayer()
+    player.load(np.arange(4000, dtype=np.float32) / 4000.0, 1000)
+
+    player.play(3.0)  # three seconds into the song
+    assert player.position == pytest.approx(3.0)
+    source = player._source
+    assert source is not None
+    assert read(source, 4) == pytest.approx([0.75, 0.75025, 0.7505, 0.75075], abs=1e-4)
     player.pause()
     assert player.position == pytest.approx(3.0)
     player.seek(1.0)
@@ -138,19 +167,53 @@ def test_a_stretched_song_keeps_the_playhead_in_song_seconds(monkeypatch) -> Non
     player.stop()
 
 
-def test_handing_over_a_stretched_song_carries_on_from_the_playhead(monkeypatch) -> None:
+def test_a_speed_change_while_playing_carries_on_from_the_playhead(monkeypatch) -> None:
+    monkeypatch.setattr("namioto.ui.song.QAudioSink", FakeSink)
     player = SongPlayer()
-    player.load(np.zeros(4000, dtype=np.float32), 1000)
-    started: list[float] = []
-    monkeypatch.setattr(SongPlayer, "is_playing", property(lambda self: True))
-    monkeypatch.setattr(SongPlayer, "position", property(lambda self: 2.5))
-    monkeypatch.setattr(SongPlayer, "play", lambda self, seconds=0.0: started.append(seconds))
+    player.load(np.arange(4000, dtype=np.float32) / 4000.0, 1000)  # a four second song
+    player.play(1.0)
+    assert player.is_playing and player.position == pytest.approx(1.0)
 
-    buffer = np.ones(2000, dtype=np.float32)
-    player.set_stretched(buffer, 2.0)
-    assert started == [pytest.approx(2.5)]  # the song carries on from where it was
-    assert player.stretch == 2.0 and player.buffer is not None
-    assert np.array_equal(player.buffer, buffer)
+    player.speed = 2.0
+    assert player.speed == 2.0 and player.is_playing
+    assert player.position == pytest.approx(1.0)  # carries on from where it was
+    assert player.remaining == 1500  # at 2x, the rest of the four second song
+    player.pause()
+
+
+def test_a_speed_change_does_not_restart_the_sink(monkeypatch) -> None:
+    created: list[FakeSink] = []
+
+    class CountingSink(FakeSink):
+        def __init__(self, *_args) -> None:
+            super().__init__(*_args)
+            created.append(self)
+
+    monkeypatch.setattr("namioto.ui.song.QAudioSink", CountingSink)
+    player = SongPlayer()
+    player.load(np.zeros(8000, dtype=np.float32), 1000)
+    player.play(0.0)
+    assert len(created) == 1
+
+    player.speed = 2.0
+    assert len(created) == 1  # the vocoder retuned where it stood, the sink kept running
+    assert player.is_playing
+
+
+def test_the_playhead_counts_each_rate_from_where_it_changed(monkeypatch) -> None:
+    monkeypatch.setattr("namioto.ui.song.QAudioSink", TimedSink)
+    player = SongPlayer()
+    player.load(np.zeros(8000, dtype=np.float32), 1000)
+    player.play(0.0)
+    assert player._sink is not None
+    player._sink.usecs = 1_000_000  # a second of output at 1x is a second of song
+
+    player.speed = 2.0
+    assert player.position == pytest.approx(1.0)  # no jump when the rate changes
+
+    player._sink.usecs = 1_500_000  # another half second of output at 2x is a second more
+    assert player.position == pytest.approx(2.0)
+    player.pause()
 
 
 def test_the_source_scales_with_the_song_volume() -> None:

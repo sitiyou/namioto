@@ -221,12 +221,11 @@ up and down the keyboard. While the file is playing that
 press only edits: the cursor is left alone, and the timeline ruler is what seeks, from where the
 sound carries on. `Space` starts and pauses; the playhead, the readout and the timeline grid all
 follow the file. The audio is streamed to Qt's audio output one buffer at a time, mono at the sample
-rate of the file, so seeking is a cursor move. **Speed** rerenders the song with a phase vocoder
-before it plays: the rhythm moves and the pitch does not, the way WaveTone's speed and pitch sliders
-are separate. That rerender takes a couple of seconds for a whole song and runs in the background, so
-the window stays live while the status bar says it is working. It also applies while the transport
-runs: the notes are handed over at the new speed at once and the song picks it up when the rerender
-lands, carrying on from where it had got to.
+rate of the file, so seeking is a cursor move. **Speed** stretches the song with a phase vocoder as it
+streams: the rhythm moves and the pitch does not, the way WaveTone's speed and pitch sliders are
+separate. Only the samples the output asks for are generated, so a speed change costs a reset rather
+than a rerender of the whole song, and it applies while the transport runs too - the notes and the
+song both pick the new speed up at once, carrying on from where they had got to.
 
 The notes go to a **software MIDI synth** when one is listening on the
 MIDI bus - TiMidity and FluidSynth are recognised by name, and the tooltip of the **MIDI** slider
