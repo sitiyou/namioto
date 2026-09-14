@@ -1,10 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Control bars: playback, edit, spectrum and mix, each grouped into captioned blocks."""
+"""Control bars: playback, edit, spectrum and mix, grouped into blocks laid out on one grid."""
 
 from __future__ import annotations
 
-from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPen, QPixmap, QPolygonF
+from collections.abc import Sequence
+
+from PyQt6.QtCore import QObject, QPoint, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QAction
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -18,149 +20,66 @@ from PyQt6.QtWidgets import (
     QSpinBox,
     QStyle,
     QStyleOptionSlider,
-    QToolBar,
     QToolButton,
     QWidget,
 )
 
+from namioto.ui import icons
 from namioto.ui.roll import format_time
 
-ICON_PX = 32
 ICON_SIZE = 17
-ICON_COLOR = "#cfd6e4"
 BUTTON_HEIGHT = 24
 FIELD_HEIGHT = 24
-SUGGESTION_COLOR = "#cfd6e4"
-WEAK_COLOR = "#7f8b9e"
-WEAK_AGREEMENT = 0.5
 
-
-def _icon(kind: str) -> QIcon:
-    pixmap = QPixmap(ICON_PX, ICON_PX)
-    pixmap.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pixmap)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.setBrush(QColor(ICON_COLOR))
-    size = float(ICON_PX)
-
-    def shape(points: list[tuple[float, float]]) -> None:
-        painter.drawPolygon(QPolygonF([QPointF(x * size, y * size) for x, y in points]))
-
-    def box(x: float, y: float, width: float, height: float) -> None:
-        painter.drawRoundedRect(QRectF(x * size, y * size, width * size, height * size), 0.05 * size, 0.05 * size)
-
-    if kind == "rewind":
-        shape([(0.58, 0.16), (0.58, 0.84), (0.33, 0.50)])
-        shape([(0.34, 0.16), (0.34, 0.84), (0.09, 0.50)])
-    elif kind == "forward":
-        shape([(0.42, 0.16), (0.42, 0.84), (0.67, 0.50)])
-        shape([(0.66, 0.16), (0.66, 0.84), (0.91, 0.50)])
-    elif kind == "play":
-        shape([(0.26, 0.16), (0.26, 0.84), (0.80, 0.50)])
-    elif kind == "pause":
-        box(0.28, 0.18, 0.15, 0.64)
-        box(0.57, 0.18, 0.15, 0.64)
-    elif kind == "playstart":
-        box(0.16, 0.16, 0.10, 0.68)
-        shape([(0.40, 0.16), (0.40, 0.84), (0.90, 0.50)])
-    elif kind == "stop":
-        box(0.24, 0.24, 0.52, 0.52)
-    elif kind == "pen":
-        shape([(0.82, 0.31), (0.69, 0.18), (0.22, 0.65), (0.35, 0.78)])
-        shape([(0.35, 0.78), (0.22, 0.65), (0.14, 0.86)])
-    elif kind == "edit":
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(ICON_COLOR), 0.09 * size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
-        painter.drawRect(QRectF(0.13 * size, 0.13 * size, 0.74 * size, 0.74 * size))
-        painter.drawLine(QPointF(0.50 * size, 0.13 * size), QPointF(0.50 * size, 0.87 * size))
-        painter.drawLine(QPointF(0.13 * size, 0.50 * size), QPointF(0.87 * size, 0.50 * size))
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(ICON_COLOR))
-        box(0.52, 0.38, 0.30, 0.10)  # two notes on the grid
-        box(0.18, 0.54, 0.30, 0.10)
-    elif kind == "select":
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(ICON_COLOR), 0.10 * size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
-        painter.drawRect(QRectF(0.12 * size, 0.18 * size, 0.76 * size, 0.64 * size))
-    elif kind == "beat":
-        painter.drawEllipse(QPointF(0.32 * size, 0.72 * size), 0.16 * size, 0.11 * size)
-        painter.drawRect(QRectF(0.42 * size, 0.14 * size, 0.07 * size, 0.58 * size))
-    elif kind == "seconds":
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(ICON_COLOR), 0.09 * size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        center = QPointF(0.5 * size, 0.5 * size)
-        painter.drawEllipse(center, 0.36 * size, 0.36 * size)
-        painter.drawLine(center, QPointF(0.5 * size, 0.26 * size))
-        painter.drawLine(center, QPointF(0.70 * size, 0.58 * size))
-    elif kind == "check":
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(ICON_COLOR), 0.13 * size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawLine(QPointF(0.18 * size, 0.54 * size), QPointF(0.42 * size, 0.78 * size))
-        painter.drawLine(QPointF(0.42 * size, 0.78 * size), QPointF(0.82 * size, 0.24 * size))
-    elif kind == "cross":
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(ICON_COLOR), 0.12 * size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
-        painter.drawLine(QPointF(0.28 * size, 0.28 * size), QPointF(0.72 * size, 0.72 * size))
-        painter.drawLine(QPointF(0.72 * size, 0.28 * size), QPointF(0.28 * size, 0.72 * size))
-    elif kind == "gear":
-        center = QPointF(0.5 * size, 0.5 * size)
-        for step in range(8):
-            painter.save()
-            painter.translate(center)
-            painter.rotate(step * 45.0)
-            box(-0.10, -0.47, 0.20, 0.17)
-            painter.restore()
-        painter.drawEllipse(center, 0.30 * size, 0.30 * size)
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
-        painter.drawEllipse(center, 0.12 * size, 0.12 * size)
-        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
-    elif kind == "refresh":
-        painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.setPen(QPen(QColor(ICON_COLOR), 0.10 * size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
-        painter.drawArc(QRectF(0.20 * size, 0.20 * size, 0.60 * size, 0.60 * size), 100 * 16, 250 * 16)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(QColor(ICON_COLOR))
-        shape([(0.38, 0.02), (0.74, 0.16), (0.44, 0.34)])
-    painter.end()
-    return QIcon(pixmap)
-
-
-def caption_font() -> QFont:
-    font = QFont()
-    font.setPixelSize(10)
-    font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.8)
-    return font
+# Every block sits in one of these columns and every row is laid out on them, so the blocks line up
+# down the window. They are widths, not weights: nothing stretches, and the room a wider window has
+# left over stays to the right of the last block.
+COLUMN_WIDTH = (110, 175, 192, 203, 188, 231)
 
 
 class Cluster(QWidget):
-    """A block of related controls sharing one caption, the WaveTone grouping."""
+    """A block of related controls, the WaveTone grouping, with a rule where kinds of control meet."""
 
-    def __init__(self, caption: str, spacing: int = 8):
+    def __init__(self, name: str, spacing: int = 6):
         super().__init__()
+        self.name = name
         self.setObjectName("cluster")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.body = QGridLayout()
         self.body.setContentsMargins(0, 0, 0, 0)
         self.body.setSpacing(spacing)
         self.body.setAlignment(Qt.AlignmentFlag.AlignVCenter)
-        self.caption = QLabel(caption.upper())
-        self.caption.setObjectName("clusterCaption")
-        self.caption.setFont(caption_font())
-        self.caption.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(10, 3, 10, 3)
-        layout.setSpacing(10)
-        layout.addWidget(self.caption)
+        layout.setContentsMargins(9, 4, 9, 4)
+        layout.setSpacing(6)
         layout.addLayout(self.body)
         self._columns: dict[int, int] = {}
 
     def add(self, widget: QWidget, row: int = 0) -> QWidget:
+        # the column after the last control takes the room left over, so the group stays at the left
         column = self._columns.get(row, 0)
         self.body.addWidget(widget, row, column)
+        self.body.setColumnStretch(column, 0)
+        self.body.setColumnStretch(column + 1, 1)
         self._columns[row] = column + 1
         return widget
+
+    def add_sliders(self, sliders: Sequence[ValueSlider]) -> None:
+        """Stack sliders, on one width for the names, so tracks and values line up in columns."""
+        width = max(slider.caption.sizeHint().width() for slider in sliders)
+        for row, slider in enumerate(sliders):
+            slider.caption.setFixedWidth(width)
+            self.add(slider, row=row)
+
+
+def separator() -> QWidget:
+    """A vertical rule that tells apart the kinds of control sharing one block."""
+    rule = QWidget()
+    rule.setObjectName("separator")
+    rule.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    rule.setFixedSize(1, 16)
+    return rule
 
 
 class AbsoluteSlider(QSlider):
@@ -223,7 +142,7 @@ class ValueSlider(QWidget):
         suffix: str = "",
         scale: int = 1,
         step: float = 0.0,
-        slider_width: int = 92,
+        slider_width: int = 80,
     ):
         super().__init__()
         self._suffix = suffix
@@ -241,7 +160,7 @@ class ValueSlider(QWidget):
         self.caption.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         self.value_label = QLabel()
         self.value_label.setObjectName("sliderValue")
-        self.value_label.setFixedWidth(38)
+        self.value_label.setFixedWidth(self._value_width(minimum, maximum))
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
         layout = QHBoxLayout(self)
@@ -261,8 +180,16 @@ class ValueSlider(QWidget):
     def set_value(self, value: float) -> None:
         self.slider.setValue(round(value * self._scale))
 
+    def _format(self, value: float) -> str:
+        return f"{value:.{self._decimals}f}{self._suffix}"
+
+    def _value_width(self, minimum: float, maximum: float) -> int:
+        """Room for either end of the range, at whatever font the theme brings."""
+        metrics = self.value_label.fontMetrics()
+        return max(metrics.horizontalAdvance(self._format(value)) for value in (minimum, maximum))
+
     def _refresh(self) -> None:
-        self.value_label.setText(f"{self.value():.{self._decimals}f}{self._suffix}")
+        self.value_label.setText(self._format(self.value()))
 
     def _on_value_changed(self, value: int) -> None:
         snapped = round(value / self._step) * self._step
@@ -274,14 +201,23 @@ class ValueSlider(QWidget):
 
 
 def field_label(caption: str) -> QLabel:
-    label = QLabel(caption)
-    label.setObjectName("fieldLabel")
+    return QLabel(caption)
+
+
+def icon_label(kind: str, tooltip: str = "") -> QLabel:
+    """A glyph standing where a word would, for what an icon says better."""
+    label = QLabel()
+    ratio = label.devicePixelRatioF()
+    pixmap = icons.icon(kind).pixmap(round(ICON_SIZE * ratio), round(ICON_SIZE * ratio))
+    pixmap.setDevicePixelRatio(ratio)
+    label.setPixmap(pixmap)
+    label.setToolTip(tooltip)
     return label
 
 
 def icon_button(kind: str, tooltip: str, checkable: bool = False) -> QToolButton:
     button = QToolButton()
-    button.setIcon(_icon(kind))
+    button.setIcon(icons.icon(kind))
     button.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
     button.setToolTip(tooltip)
     button.setCheckable(checkable)
@@ -290,7 +226,7 @@ def icon_button(kind: str, tooltip: str, checkable: bool = False) -> QToolButton
     return button
 
 
-def text_button(caption: str, tooltip: str, checkable: bool = False, width: int = 0) -> QToolButton:
+def text_button(caption: str, tooltip: str, checkable: bool = False) -> QToolButton:
     button = QToolButton()
     button.setText(caption)
     button.setToolTip(tooltip)
@@ -298,19 +234,23 @@ def text_button(caption: str, tooltip: str, checkable: bool = False, width: int 
     button.setAutoRaise(True)
     button.setFixedHeight(BUTTON_HEIGHT)
     button.setObjectName("textButton")
-    if width:
-        button.setFixedWidth(width)
     return button
 
 
 class TempoSuggestion(QWidget):
-    """A tempo the audio suggests: apply it or drop it, but nothing changes on its own."""
+    """The tempo the analyser found, in a balloon under the BPM field.
+
+    A suggestion is not worth a row of its own, and it is not worth resizing the field for either, so
+    it floats: the row keeps its size whether or not there is an estimate to offer.
+    """
 
     applied = pyqtSignal(float)
     dismissed = pyqtSignal()
 
     def __init__(self, parent=None):
-        super().__init__(parent)
+        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        self.setObjectName("suggestion")
+        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._bpm = 0.0
         self.label = QLabel()
         self.apply_button = icon_button("check", "Use this tempo")
@@ -319,13 +259,11 @@ class TempoSuggestion(QWidget):
         self.dismiss_button.clicked.connect(self.dismissed)
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(2)
+        layout.setContentsMargins(9, 4, 9, 4)
+        layout.setSpacing(4)
         layout.addWidget(self.label)
         layout.addWidget(self.apply_button)
         layout.addWidget(self.dismiss_button)
-        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        self.hide()
 
     def estimate(
         self,
@@ -335,14 +273,17 @@ class TempoSuggestion(QWidget):
         source: str,
         residual: float | None = None,
     ) -> None:
-        """Show `bpm` as a candidate, dimmed while few of the analysed windows agree on it."""
+        """Offer `bpm`, and say how many of the analysed windows agree on it."""
         self._bpm = bpm
         self.label.setText(f"≈{bpm:.0f} BPM")
-        self.label.setStyleSheet(f"color: {SUGGESTION_COLOR if agreement >= WEAK_AGREEMENT else WEAK_COLOR}")
         detail = f"{source}, over {windows} windows: {agreement:.0%} of them agree."
         if residual is not None:
             detail += f"\nBeat fit residual {1000 * residual:.0f} ms."
         self.setToolTip(f"{detail}\nNothing changes until you click the tick.")
+
+    def show_under(self, anchor: QWidget) -> None:
+        self.adjustSize()
+        self.move(anchor.mapToGlobal(QPoint(0, anchor.height() + 4)))
         self.show()
 
 
@@ -405,7 +346,44 @@ class LatencyBox(_SelectAll, QSpinBox):
     """Milliseconds; the unit is a label beside the field, the way WaveTone shows it."""
 
 
-class TransportBar(QToolBar):
+class _Group(QObject):
+    """Blocks that belong together, and the cell each one takes in the control grid.
+
+    A group is not a widget and not a row: the blocks of one group can sit on different rows, which is
+    how the wide mix blocks cover two rows of the shorter ones beside them.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._placements: list[tuple[Cluster, int, int, int, int]] = []
+
+    def place(self, cluster: Cluster, row: int, column: int, span: int = 1, rows: int = 1) -> Cluster:
+        self._placements.append((cluster, row, column, span, rows))
+        return cluster
+
+    def placements(self) -> tuple[tuple[Cluster, int, int, int, int], ...]:
+        return tuple(self._placements)
+
+
+class ControlArea(QWidget):
+    """Every block of every group, on one grid."""
+
+    def __init__(self, groups: Sequence[_Group], parent=None):
+        super().__init__(parent)
+        self.setObjectName("controlArea")
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(6, 3, 6, 3)
+        self.grid.setHorizontalSpacing(6)
+        self.grid.setVerticalSpacing(3)
+        for column, width in enumerate(COLUMN_WIDTH):
+            self.grid.setColumnMinimumWidth(column, width)
+        self.grid.setColumnStretch(len(COLUMN_WIDTH), 1)  # the room left over stays at the right
+        for group in groups:
+            for cluster, row, column, span, rows in group.placements():
+                self.grid.addWidget(cluster, row, column, rows, span)
+
+
+class TransportBar(_Group):
     """Playback transport, position, playback speed, tempo and latency."""
 
     rewind_requested = pyqtSignal()
@@ -417,10 +395,10 @@ class TransportBar(QToolBar):
     save_requested = pyqtSignal()
 
     def __init__(self, parent=None):
-        super().__init__("Transport", parent)
-        self.setObjectName("transportBar")  # saveState needs one to remember the toolbar
-        self.open = text_button("Open", "Open a project (.nto) — Ctrl+O")
-        self.save = text_button("Save", "Save the project — Ctrl+S, with Shift for Save As")
+        super().__init__(parent)
+        self.setObjectName("transportBar")
+        self.open = icon_button("open", "Open a project (.nto) — Ctrl+O")
+        self.save = icon_button("save", "Save the project — Ctrl+S, with Shift for Save As")
         self.open.clicked.connect(self.open_requested)
         self.save.clicked.connect(self.save_requested)
         self.rewind = icon_button("rewind", "Rewind to the beginning")
@@ -437,14 +415,14 @@ class TransportBar(QToolBar):
         self.position = QLabel("00:00.000")
         self.position.setObjectName("position")
         self.position.setToolTip("Playback position")
-        self.position.setFixedWidth(76)
+        self.position.setFixedWidth(84)
         self.position.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.speed = ValueSlider("", 0.1, 2.0, 1.0, suffix="x", scale=100, step=0.05)
+        self.speed = ValueSlider("Speed", 0.1, 2.0, 1.0, suffix="x", scale=100, step=0.05)
         self.speed.slider.setToolTip(
             "Playback speed in 5% steps, 0.10x to 2.00x: the song is rerendered, so the pitch stays"
         )
-        self.speed_reset = text_button("1.0", "Reset the playback speed to 1.00x", width=40)
+        self.speed_reset = text_button("1.0", "Reset the playback speed to 1.00x")
         self.speed_reset.clicked.connect(lambda: self.speed.set_value(1.0))
 
         self.bpm = TempoBox()
@@ -454,67 +432,70 @@ class TransportBar(QToolBar):
         self.bpm.setToolTip(
             "Tempo of the beat grid in BPM, until a tempo map is analysed\nRight-click to double or halve it"
         )
-        self.bpm.setFixedWidth(78)
+        self.bpm.setFixedWidth(self.bpm.sizeHint().width())
         self.bpm.setFixedHeight(FIELD_HEIGHT)
         self.bpm.setKeyboardTracking(False)
 
         self.detect = icon_button("refresh", "Estimate the tempo of the loaded audio")
         self.detect.setEnabled(False)
-        self.tempo = TempoSuggestion()
+        self.suggestion = TempoSuggestion()
+        self.settings_button = icon_button("gear", "Settings: what the program remembers between runs")
 
         self.latency = LatencyBox()
         self.latency.setRange(-500, 500)
         self.latency.setValue(0)
         self.latency.setToolTip("Global offset between audio playback and the displayed waveform")
-        self.latency.setFixedWidth(74)
+        self.latency.setFixedWidth(self.latency.sizeHint().width())
         self.latency.setFixedHeight(FIELD_HEIGHT)
         self.latency.setKeyboardTracking(False)
 
-        project = Cluster("Project")
-        project.add(self.open, row=0)
-        project.add(self.save, row=0)
+        project = Cluster("project")
+        project.add(self.open)
+        project.add(self.save)
+        project.add(self.settings_button)
 
-        playback = Cluster("Playback")
+        playback = Cluster("playback")
         for button in (self.rewind, self.stop, self.play_from_start, self.play_pause, self.forward):
-            playback.add(button, row=0)
-        playback.add(self.position, row=0)
+            playback.add(button)
+        playback.add(separator())
+        playback.add(self.position)
+        playback.add(separator())
+        playback.add(self.latency)
+        playback.add(field_label("ms"))
 
-        speed = Cluster("Speed")
-        speed.add(self.speed, row=0)
-        speed.add(self.speed_reset, row=0)
+        bpm = Cluster("bpm")
+        bpm.add(self.bpm)
+        bpm.add(field_label("BPM"))
+        bpm.add(self.detect)
 
-        tempo = Cluster("Tempo")
-        tempo.add(self.bpm, row=0)
-        tempo.add(self.detect, row=0)
-        tempo.add(self.tempo, row=0)
+        speed = Cluster("speed")
+        speed.add(self.speed)
+        speed.add(self.speed_reset)
 
-        latency = Cluster("Latency")
-        latency.add(self.latency, row=0)
-        latency.add(field_label("ms"), row=0)
-
-        for cluster in (project, playback, speed, tempo, latency):
-            self.addWidget(cluster)
+        self.place(project, 0, 0)
+        self.place(playback, 0, 1, 2)
+        self.place(bpm, 1, 2)
+        self.place(speed, 0, 5, rows=2)
 
     def set_playing(self, playing: bool) -> None:
         """Playing and pausing share one button the way WaveTone shows it, so it turns into a
         pause button while the sound runs."""
-        self.play_pause.setIcon(_icon("pause" if playing else "play"))
+        self.play_pause.setIcon(icons.icon("pause" if playing else "play"))
         self.play_pause.setToolTip("Pause playback (Space)" if playing else "Play from the cursor (Space)")
 
     def set_position(self, seconds: float) -> None:
         self.position.setText(format_time(seconds))
 
 
-class EditBar(QToolBar):
-    """Tools, time-axis division, snapping, and note cleanup."""
+class EditBar(_Group):
+    """Tools, time-axis division and snapping."""
 
     tool_changed = pyqtSignal(str)
     mode_changed = pyqtSignal(bool)
     division_changed = pyqtSignal(str)
-    clear_requested = pyqtSignal()
 
     def __init__(self, snap_choices, parent=None):
-        super().__init__("Edit", parent)
+        super().__init__(parent)
         self.setObjectName("editBar")
         self.mode = icon_button(
             "edit",
@@ -538,19 +519,16 @@ class EditBar(QToolBar):
             self.snap.addItem(label, beats)
         self.snap.setCurrentIndex(self.snap.findText("1/8"))
         self.snap.setToolTip("Snap grid for the pen tool")
-        self.snap.setFixedWidth(66)
+        self.snap.setFixedWidth(self.snap.sizeHint().width())
         self.snap.setFixedHeight(FIELD_HEIGHT)
 
-        self.clear = text_button("Clear", "Delete every note")
-        self.clear.clicked.connect(self.clear_requested)
-
-        tools = Cluster("Tools")
-        tools.add(self.mode, row=0)
-        tools.add(self.pen, row=0)
-        tools.add(self.select, row=0)
-        tools.add(field_label("Snap"), row=0)
-        tools.add(self.snap, row=0)
-        tools.add(self.clear, row=0)
+        tools = Cluster("tools")
+        tools.add(self.mode)
+        tools.add(self.pen)
+        tools.add(self.select)
+        tools.add(separator())
+        tools.add(icon_label("snap", "Snap grid for the pen tool: the note the grid is divided by"))
+        tools.add(self.snap)
 
         self.division_beats = icon_button("beat", "Divide the time axis by beats of the tempo map", checkable=True)
         self.division_seconds = icon_button("seconds", "Divide the time axis by seconds", checkable=True)
@@ -561,13 +539,11 @@ class EditBar(QToolBar):
         self.division.addButton(self.division_seconds)
         self.division_beats.clicked.connect(lambda: self.division_changed.emit("beats"))
         self.division_seconds.clicked.connect(lambda: self.division_changed.emit("seconds"))
+        tools.add(separator())
+        tools.add(self.division_beats)
+        tools.add(self.division_seconds)
 
-        division = Cluster("Division")
-        division.add(self.division_beats, row=0)
-        division.add(self.division_seconds, row=0)
-
-        self.addWidget(tools)
-        self.addWidget(division)
+        self.place(tools, 1, 0, 2)
 
     def set_mode(self, editing: bool) -> None:
         """Open in a mode, or leave it, without a click: the settings say where the editor starts."""
@@ -597,15 +573,14 @@ class EditBar(QToolBar):
     def _set_mode(self, editing: bool) -> None:
         self.mode.setChecked(editing)
         self.snap.setEnabled(editing)
-        self.clear.setEnabled(editing)
         self.mode_changed.emit(editing)
 
 
-class MixBar(QToolBar):
+class MixBar(_Group):
     """Spectrum display parameters and the audio/MIDI mix."""
 
     def __init__(self, parent=None):
-        super().__init__("Mix", parent)
+        super().__init__(parent)
         self.setObjectName("mixBar")
         self.gain = ValueSlider("Gain", 10, 600, 240)
         self.gain.slider.setToolTip("Spectrum gain: how much energy it takes to reach full red")
@@ -616,19 +591,11 @@ class MixBar(QToolBar):
         self.midi_volume = ValueSlider("MIDI", 0, 100, 80, suffix="%")
         self.midi_volume.slider.setToolTip("Volume of the note playback")
 
-        spectrum = Cluster("Spectrum", spacing=12)
-        spectrum.add(self.gain, row=0)
-        spectrum.add(self.contrast, row=0)
+        spectrum = Cluster("spectrum")
+        spectrum.add_sliders((self.gain, self.contrast))
 
-        volume = Cluster("Volume", spacing=12)
-        volume.add(self.audio_volume, row=0)
-        volume.add(self.midi_volume, row=0)
+        volume = Cluster("volume")
+        volume.add_sliders((self.audio_volume, self.midi_volume))
 
-        self.settings_button = icon_button("gear", "Settings: what the program remembers between runs")
-        spacer = QWidget()
-        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-
-        self.addWidget(spectrum)
-        self.addWidget(volume)
-        self.addWidget(spacer)
-        self.addWidget(self.settings_button)
+        self.place(spectrum, 0, 3, rows=2)
+        self.place(volume, 0, 4, rows=2)

@@ -11,3 +11,4 @@ build/
 AGENTS.md
 .firecrawl/
 *_PLAN.md
+.envrc

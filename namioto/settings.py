@@ -616,7 +616,6 @@ SECTIONS: tuple[Section, ...] = (
         "Session",
         (
             Field("geometry", "text", "", "Window geometry", hidden=True),
-            Field("window_state", "text", "", "Window state", hidden=True),
             Field(
                 "center_x",
                 "float",

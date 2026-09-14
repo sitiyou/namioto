@@ -11,7 +11,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from PyQt6.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtGui import QDesktopServices, QFont
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
 
 from namioto import settings as store
 from namioto.settings import Field
-from namioto.ui.controls import caption_font, text_button
+from namioto.ui.controls import text_button
 from namioto.ui.roll import SNAP_CHOICES
 
 SAVE_DELAY_MS = 1000
@@ -176,8 +176,10 @@ class SettingsDialog(QDialog):
                 continue
             if advanced:
                 caption = QLabel("ADVANCED")
-                caption.setObjectName("clusterCaption")
-                caption.setFont(caption_font())
+                font = QFont()
+                font.setPixelSize(10)
+                font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.8)
+                caption.setFont(font)
                 layout.addWidget(caption)
             form = QFormLayout()
             form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -203,7 +205,6 @@ class SettingsDialog(QDialog):
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         hint = QLabel("Analysis changes reach the spectrum the next time a file is loaded.")
-        hint.setObjectName("fieldLabel")
         layout.addWidget(hint)
         if can_reanalyse:
             again = text_button("Re-analyse now", "Run the analysis again with these settings")

@@ -435,6 +435,7 @@ dependencies = [
     { name = "platformdirs" },
     { name = "pyqt6" },
     { name = "python-rtmidi" },
+    { name = "qtawesome" },
     { name = "scipy" },
 ]
 
@@ -450,6 +451,7 @@ requires-dist = [
     { name = "platformdirs", specifier = ">=4.11.8" },
     { name = "pyqt6", specifier = ">=6.11.0" },
     { name = "python-rtmidi", specifier = ">=1.5.8" },
+    { name = "qtawesome", specifier = ">=1.4.2" },
     { name = "scipy", specifier = ">=1.11" },
 ]
 
@@ -753,6 +755,30 @@ wheels = [
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/6f/5b/dc19c53d9d512b74dc2cca3725591cc612b9465645695a0696352a8c8b54/python_rtmidi-1.5.8-cp312-cp312-manylinux_2_28_aarch64.whl", hash = "sha256:25f5a5db7be98911c41ca5bebb262fcf9a7c89600b88fd3c207ceafd3101e721" },
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/f6/92/5a60f56dfb2740e644e932233928947423cd2101895319b331f84527eb31/python_rtmidi-1.5.8-cp312-cp312-manylinux_2_28_x86_64.whl", hash = "sha256:cec30924e305f55284594ccf35a71dee7216fd308dfa2dec1b3ed03e6f243803" },
     { url = "https://pypi.tuna.tsinghua.edu.cn/packages/93/46/6af077d262f521ea2bf1ab60b8aad72f34fe6dd55af739176605369d449c/python_rtmidi-1.5.8-cp312-cp312-win_amd64.whl", hash = "sha256:052c89933cae4fca354012d8ca7248f4f9e1e3f062471409d48415a7f7d7e59e" },
+]
+
+[[package]]
+name = "qtawesome"
+version = "1.4.2"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "qtpy" },
+]
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/cf/bc/475c8df94de4f358bbf7703747c13b16ae3c0c4cda50d5243b99cb45e2a8/qtawesome-1.4.2.tar.gz", hash = "sha256:b2bf9351beb335095006892796f072ffd9755a2d7e5113dc71918dcd9ba4ef4a", size = 2614207, upload-time = "2026-04-10T18:49:46.037Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/25/b1/da1d826ccc9258674b26dd0abcbbb1c55cab06e7fbf2697518b67edc79fc/qtawesome-1.4.2-py3-none-any.whl", hash = "sha256:dbf08524428fa2df73918ce362153254cd44f089380576d84bfaad8f40eece45", size = 2593557, upload-time = "2026-04-10T18:49:44.219Z" },
+]
+
+[[package]]
+name = "qtpy"
+version = "2.4.3"
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+dependencies = [
+    { name = "packaging" },
+]
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/70/01/392eba83c8e47b946b929d7c46e0f04b35e9671f8bb6fc36b6f7945b4de8/qtpy-2.4.3.tar.gz", hash = "sha256:db744f7832e6d3da90568ba6ccbca3ee2b3b4a890c3d6fbbc63142f6e4cdf5bb", size = 66982, upload-time = "2025-02-11T15:09:25.759Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/69/76/37c0ccd5ab968a6a438f9c623aeecc84c202ab2fabc6a8fd927580c15b5a/QtPy-2.4.3-py3-none-any.whl", hash = "sha256:72095afe13673e017946cc258b8d5da43314197b741ed2890e563cf384b51aa1", size = 95045, upload-time = "2025-02-11T15:09:24.162Z" },
 ]
 
 [[package]]

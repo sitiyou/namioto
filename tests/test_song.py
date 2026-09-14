@@ -10,7 +10,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtMultimedia import QtAudio
 from PyQt6.QtWidgets import QApplication
 
-from namioto.ui.app import STYLE_SHEET, dark_palette
+from namioto.ui import theme
 from namioto.ui.song import SongPlayer, _SongSource, load_song, stretch_song
 
 
@@ -44,8 +44,7 @@ class FakeSink(QObject):
 def qt_app():
     app = QApplication.instance() or QApplication([])
     app.setStyle("Fusion")
-    app.setPalette(dark_palette())
-    app.setStyleSheet(STYLE_SHEET)
+    theme.apply(app)
     return app
 
 

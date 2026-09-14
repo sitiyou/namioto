@@ -10,7 +10,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
-from PyQt6.QtGui import QColor, QFocusEvent, QImage, QKeyEvent, QMouseEvent, QWheelEvent
+from PyQt6.QtGui import QColor, QFocusEvent, QFont, QImage, QKeyEvent, QMouseEvent, QWheelEvent
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QComboBox, QFileDialog, QLabel, QMessageBox, QSlider, QSpinBox
 
@@ -18,9 +18,10 @@ from namioto import project
 from namioto import settings as store
 from namioto.beats import BeatTempo, LocalWindow
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
-from namioto.ui.app import STYLE_SHEET, MainWindow, TempoLoader, dark_palette
+from namioto.ui import theme
+from namioto.ui.app import MainWindow, TempoLoader
 from namioto.ui.audio import MidiPortOut, MidiSink, find_port, find_synth_port
-from namioto.ui.controls import WEAK_COLOR, Cluster, TransportBar, ValueSlider
+from namioto.ui.controls import Cluster, EditBar, TransportBar, ValueSlider
 from namioto.ui.roll import (
     CONTENT_MARGIN,
     GRID_BAR,
@@ -40,6 +41,7 @@ from namioto.ui.roll import (
     PLAYHEAD,
     RULER_HEIGHT,
     RULER_TIME_ROW,
+    SNAP_CHOICES,
     SPECTRUM_BAR,
     SPECTRUM_BEAT,
     SPECTRUM_OCTAVE,
@@ -68,8 +70,7 @@ DEMO_NOTES = (
 def qt_app():
     app = QApplication.instance() or QApplication([])
     app.setStyle("Fusion")
-    app.setPalette(dark_palette())
-    app.setStyleSheet(STYLE_SHEET)
+    theme.apply(app)
     return app
 
 
@@ -184,38 +185,94 @@ def draw_note(window, press: QPointF, release: QPointF | None = None) -> None:
     roll_mouse(window, QEvent.Type.MouseButtonRelease, release or press)
 
 
-def clusters(window) -> list[tuple[str, Cluster, int]]:
-    found = []
-    for bar in (window.transport, window.edit, window.mix):
-        for cluster in bar.findChildren(Cluster):
-            found.append((bar.windowTitle(), cluster, bar.height()))
-    return found
+def clusters(window) -> list[tuple[str, Cluster]]:
+    return [(cluster.name, cluster) for cluster in window.controls.findChildren(Cluster)]
+
+
+def card(window, name: str) -> Cluster:
+    return next(cluster for _, cluster in clusters(window) if cluster.name == name)
+
+
+def grid_rows(window) -> dict[int, list[Cluster]]:
+    rows: dict[int, list[Cluster]] = {}
+    for _, cluster in clusters(window):
+        rows.setdefault(cluster.geometry().top(), []).append(cluster)
+    return rows
+
+
+def test_the_roll_holds_the_keyboard_when_the_window_opens(window) -> None:
+    assert window.focusWidget() is window.view, "the bar would open with a focus ring on its first button"
 
 
 def test_bars_have_room_for_every_cluster(window) -> None:
-    for bar_name, cluster, bar_height in clusters(window):
-        caption = cluster.caption.text()
-        assert cluster.height() >= cluster.sizeHint().height(), f"{bar_name}/{caption} is squeezed"
-        assert cluster.geometry().bottom() < bar_height, f"{bar_name}/{caption} overflows {bar_name}"
+    for name, cluster in clusters(window):
+        assert cluster.height() >= cluster.sizeHint().height(), f"{name} is squeezed"
+        assert cluster.geometry().bottom() < window.controls.height(), f"{name} overflows the control area"
 
 
 def test_clusters_do_not_overlap(window) -> None:
-    for bar in (window.transport, window.edit, window.mix):
-        boxes = sorted((c.geometry() for c in bar.findChildren(Cluster)), key=lambda box: box.left())
+    for row, boxes in grid_rows(window).items():
+        boxes = sorted(boxes, key=lambda cluster: cluster.geometry().left())
         for left, right in zip(boxes, boxes[1:], strict=False):
-            assert right.left() >= left.right(), f"{bar.windowTitle()}: clusters overlap"
+            assert right.geometry().left() >= left.geometry().right(), f"row at {row}: clusters overlap"
+
+
+def test_the_blocks_line_up_on_one_grid(window) -> None:
+    area = window.controls
+    left = area.grid.contentsMargins().left()
+    project, playback = card(window, "project"), card(window, "playback")
+    tools, bpm = card(window, "tools"), card(window, "bpm")
+    assert project.geometry().left() == tools.geometry().left() == left
+    assert playback.geometry().right() == bpm.geometry().right(), "the two rows end on different lines"
+    assert tools.geometry().top() > project.geometry().top()
+
+    mix = [card(window, name) for name in ("spectrum", "volume", "speed")]
+    assert [cluster.geometry().left() for cluster in mix] == sorted(cluster.geometry().left() for cluster in mix)
+    assert all(cluster.geometry().top() == project.geometry().top() for cluster in mix)
+    assert all(cluster.geometry().bottom() == tools.geometry().bottom() for cluster in mix), (
+        "the mix blocks cover both rows, so they are as tall as the two rows beside them"
+    )
+    assert playback.geometry().right() < mix[0].geometry().left()
 
 
 def test_bars_fit_the_default_window(window) -> None:
-    width = window.width()
-    for bar in (window.transport, window.edit, window.mix):
-        assert bar.sizeHint().width() <= width, f"{bar.windowTitle()} needs {bar.sizeHint().width()}px of {width}px"
+    assert window.controls.sizeHint().width() <= window.width(), (
+        f"the controls need {window.controls.sizeHint().width()}px of {window.width()}px"
+    )
 
 
 def test_value_sliders_keep_their_caption_next_to_them(window) -> None:
     for slider in window.mix.findChildren(ValueSlider):
-        assert slider.width() == slider.sizeHint().width()
         assert slider.caption.x() < slider.slider.x() < slider.value_label.x()
+        assert slider.slider.width() >= slider.slider.minimumWidth()
+
+
+def test_the_sliders_of_one_block_line_up_in_columns(window) -> None:
+    for name in ("spectrum", "volume"):
+        sliders = card(window, name).findChildren(ValueSlider)
+        assert len(sliders) > 1
+        for part in ("caption", "slider", "value_label"):
+            columns = {getattr(slider, part).mapTo(window.controls, QPoint(0, 0)).x() for slider in sliders}
+            assert len(columns) == 1, f"{name}: {part} starts in {len(columns)} different places"
+
+
+def test_control_widths_grow_with_the_theme_font(qt_app) -> None:
+    original = qt_app.font()
+    try:
+        font = QFont(original)
+        font.setPointSizeF(original.pointSizeF() + 6)
+        qt_app.setFont(font)
+        slider = ValueSlider("Speed", 0.1, 2.0, 1.0, suffix="x", scale=100)
+        bar = TransportBar()
+        edit = EditBar(SNAP_CHOICES)
+        for field in (bar.bpm, bar.latency, bar.speed_reset, edit.snap):
+            assert field.width() >= field.sizeHint().width(), f"{type(field).__name__} is narrower than its text"
+        metrics = slider.value_label.fontMetrics()
+        for value in (slider.slider.minimum(), slider.slider.maximum()):
+            slider.slider.setValue(value)
+            assert metrics.horizontalAdvance(slider.value_label.text()) <= slider.value_label.width()
+    finally:
+        qt_app.setFont(original)
 
 
 def test_tool_buttons_switch_the_roll_mode(window) -> None:
@@ -377,8 +434,9 @@ def test_the_tempo_and_latency_fields_select_their_text(window) -> None:
 def test_the_latency_field_shows_its_unit_beside_it(window) -> None:
     field = window.transport.latency
     assert field.suffix() == ""
-    unit = next(label for label in window.transport.findChildren(QLabel) if label.text() == "ms")
-    assert unit.x() >= field.x() + field.width()  # the unit is a label behind the field
+    unit = next(label for label in window.controls.findChildren(QLabel) if label.text() == "ms")
+    # both in the control area's coordinates: the label is a sibling of the field, not a child of it
+    assert unit.mapTo(window.controls, QPoint(0, 0)).x() >= field.mapTo(window.controls, field.rect().topRight()).x()
     image = field.grab().toImage()
     lit = [
         x for x in range(image.width()) if any(image.pixelColor(x, y).lightness() > 120 for y in range(image.height()))
@@ -416,35 +474,44 @@ def fake_estimate(bpm: float = 96.0, windows: int = 10, agree: int = 6) -> BeatT
 def test_tempo_estimate_is_only_a_suggestion(window) -> None:
     window.transport.bpm.setValue(120.0)
     window._on_tempo_loaded(fake_estimate())
-    assert window.transport.tempo.isVisible()
+    assert window.transport.suggestion.isVisible()
     assert window.transport.bpm.value() == 120.0  # nothing is applied by itself
-    assert "60% of them agree" in window.transport.tempo.toolTip()
+    assert "60% of them agree" in window.transport.suggestion.toolTip()
 
-    window.transport.tempo.apply_button.click()
+    window.transport.suggestion.apply_button.click()
     assert window.transport.bpm.value() == 96.0
-    assert not window.transport.tempo.isVisible()
+    assert not window.transport.suggestion.isVisible()
+    window.transport.bpm.setValue(120.0)
+
+
+def test_tempo_already_in_the_field_is_not_offered_again(window) -> None:
+    window.transport.bpm.setValue(96.0)
+    window._on_tempo_loaded(fake_estimate(bpm=96.0, agree=10))
+    assert not window.transport.suggestion.isVisible()
     window.transport.bpm.setValue(120.0)
 
 
 def test_tempo_suggestion_can_be_dismissed_without_applying(window) -> None:
     window.transport.bpm.setValue(120.0)
     window._on_tempo_loaded(fake_estimate(bpm=100.0))
-    window.transport.tempo.dismiss_button.click()
-    assert not window.transport.tempo.isVisible()
+    window.transport.suggestion.dismiss_button.click()
+    assert not window.transport.suggestion.isVisible()
     assert window.transport.bpm.value() == 120.0
 
 
 def test_typing_a_tempo_drops_the_suggestion(window) -> None:
     window._on_tempo_loaded(fake_estimate())
     window.transport.bpm.setValue(140.0)
-    assert not window.transport.tempo.isVisible()
+    assert not window.transport.suggestion.isVisible()
     window.transport.bpm.setValue(120.0)
 
 
-def test_a_weak_tempo_estimate_is_dimmed(window) -> None:
+def test_the_tempo_suggestion_floats_without_widening_the_bar(window) -> None:
+    before = window.controls.sizeHint().width()
     window._on_tempo_loaded(fake_estimate(windows=10, agree=2))
-    assert WEAK_COLOR in window.transport.tempo.label.styleSheet()
-    window.transport.tempo.hide()
+    assert window.transport.suggestion.isVisible()
+    assert window.controls.sizeHint().width() == before, "the suggestion is not worth a wider row"
+    window.transport.suggestion.hide()
 
 
 def test_tempo_loader_reports_a_bad_file(window, tmp_path) -> None:
@@ -1195,7 +1262,7 @@ def test_the_roll_only_edits_in_edit_mode(window) -> None:
     window.edit.mode.click()  # leaving edit mode
     assert not window.view.edit_mode
     assert window.view.tool is None
-    assert not window.edit.snap.isEnabled() and not window.edit.clear.isEnabled()
+    assert not window.edit.snap.isEnabled()
 
     draw_note(window, QPointF(8.3, row), QPointF(9.6, row))
     assert [n.pitch for n in window.view.notes()] == [69]  # the pen drew nothing
@@ -1208,7 +1275,7 @@ def test_the_roll_only_edits_in_edit_mode(window) -> None:
 
     window.edit.mode.click()  # back in
     assert window.view.edit_mode and window.view.tool == "pen"
-    assert window.edit.snap.isEnabled() and window.edit.clear.isEnabled()
+    assert window.edit.snap.isEnabled()
     draw_note(window, QPointF(12.3, row), QPointF(13.6, row))  # elsewhere: the first row is taken
     assert len(window.view.notes()) == 2
     window.view.clear_notes()
@@ -1580,7 +1647,7 @@ def row_writer(dialog, section: str, name: str):
 def test_the_gear_button_opens_the_settings_window(own_window, monkeypatch) -> None:
     opened: list[SettingsDialog] = []
     monkeypatch.setattr(SettingsDialog, "exec", lambda self: opened.append(self) or 0)
-    own_window.mix.settings_button.click()
+    own_window.transport.settings_button.click()
     assert len(opened) == 1
     assert opened[0].parent() is own_window
 
@@ -1659,7 +1726,6 @@ def test_closing_the_window_remembers_the_session(own_window) -> None:
 
     saved = store.load()
     assert saved.session.geometry
-    assert saved.session.window_state  # the toolbars need an object name to be remembered, and have one
     assert saved.editor.zoom_x == 96.0
     assert saved.editor.zoom_y == 20.0
     assert saved.session.center_x > 0.0

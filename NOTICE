@@ -77,5 +77,6 @@ Third-party code and assets
 | librosa | ISC |
 | onnxruntime | MIT |
 | numpy, scipy, scikit-learn, joblib, pooch, soundfile | BSD-3-Clause |
+| qtawesome, qtpy | MIT |
 | soxr | LGPL-2.1-or-later |
 | pytest (development only) | MIT |

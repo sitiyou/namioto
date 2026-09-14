@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QTransform
+from PyQt6.QtGui import QFont, QPainter, QPen, QTransform
 from PyQt6.QtWidgets import (
     QGraphicsItem,
     QGraphicsRectItem,
@@ -17,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
+from namioto.ui import theme
 from namioto.ui.spectrogram import SpectrumImage
 
 PITCH_MIN = 21
@@ -30,30 +31,34 @@ BAR_BEATS = 4.0
 
 SNAP_CHOICES = (("1/1", 4.0), ("1/2", 2.0), ("1/4", 1.0), ("1/8", 0.5), ("1/16", 0.25), ("1/32", 0.125))
 
-BG = QColor("#191c23")
-ROW_WHITE = QColor("#262b34")
-ROW_BLACK = QColor("#20242c")
-GRID_LINE = QColor("#2f3541")
-GRID_BEAT = QColor("#434c5c")
-GRID_BAR = QColor("#6d7a92")
-NOTE_FILL = QColor("#ff2f2f")
-NOTE_EDGE_LIGHT = QColor("#ffb9b9")
-NOTE_EDGE_DARK = QColor("#550f0f")
-NOTE_SELECTED = QColor("#fecfcf")
-NOTE_SELECTED_EDGE = QColor("#fe7474")
-TEXT = QColor("#94a0b5")
-PANEL = QColor("#20242c")
-SPECTRUM_BG = QColor("#000000")
-SPECTRUM_OCTAVE = QColor("#c0c0c0")
-SPECTRUM_BEAT = QColor("#606060")
-SPECTRUM_BAR = QColor("#c0c0c0")
+# The theme is picked at startup, so the canvas is read once and the names below are what this module
+# paints with: the colours live in one place, and a second theme only has to add its own canvas.
+_CANVAS = theme.canvas()
+
+BG = _CANVAS.background
+ROW_WHITE = _CANVAS.row_white
+ROW_BLACK = _CANVAS.row_black
+GRID_LINE = _CANVAS.grid_line
+GRID_BEAT = _CANVAS.grid_beat
+GRID_BAR = _CANVAS.grid_bar
+NOTE_FILL = _CANVAS.note_fill
+NOTE_EDGE_LIGHT = _CANVAS.note_edge_light
+NOTE_EDGE_DARK = _CANVAS.note_edge_dark
+NOTE_SELECTED = _CANVAS.note_selected
+NOTE_SELECTED_EDGE = _CANVAS.note_selected_edge
+TEXT = _CANVAS.text
+PANEL = _CANVAS.panel
+SPECTRUM_BG = _CANVAS.spectrum_background
+SPECTRUM_OCTAVE = _CANVAS.spectrum_octave
+SPECTRUM_BEAT = _CANVAS.spectrum_beat
+SPECTRUM_BAR = _CANVAS.spectrum_bar
 SPECTRUM_TOP = PITCH_MAX - (MIDI_OFFSET + NOTE_COUNT - 1)
 MIN_LINE_SPACING = 16.0
 OVERTONES = (2, 3)  # the partials WaveTone marks over the row under the mouse
-HOVER_BAND = QColor(255, 255, 255, 85)
-HOVER_KEY = QColor("#ff4040")
+HOVER_BAND = _CANVAS.hover_band
+HOVER_KEY = _CANVAS.hover_key
 EDIT_DIM = 0.65  # the spectrum steps back while editing so the notes stand out over it
-PLAYHEAD = QColor("#e6ecf5")
+PLAYHEAD = _CANVAS.playhead
 MIN_GRID_SPACING = 9.0
 CLICK_SLOP_PX = 4
 RULER_TIME_ROW = 24
@@ -786,7 +791,7 @@ class TimelineRuler(QWidget):
             painter.setPen(TEXT)
             painter.drawText(QPointF(px - painter.fontMetrics().horizontalAdvance(label) / 2, 14), label)
 
-        painter.setPen(QPen(QColor("#3a4152"), 1))
+        painter.setPen(QPen(_CANVAS.ruler_line, 1))
         right_edge = viewport.width() + int(left_offset)
         painter.drawLine(int(left_offset), RULER_TIME_ROW - 1, right_edge, RULER_TIME_ROW - 1)
         painter.drawLine(int(left_offset), self.height() - 1, right_edge, self.height() - 1)
@@ -845,8 +850,8 @@ class PianoKeyboard(QWidget):
         font = QFont()
         font.setPixelSize(9)
         painter.setFont(font)
-        white = QColor("#d8dde6")
-        black = QColor("#15181e")
+        white = _CANVAS.key_white
+        black = _CANVAS.key_black
         highlighted = set(self.view.highlight_pitches())
 
         for pitch in range(PITCH_MIN, PITCH_MAX + 1):
@@ -863,10 +868,10 @@ class PianoKeyboard(QWidget):
             if pitch in highlighted:
                 painter.fillRect(QRect(0, top, self.width(), bottom - top), HOVER_KEY)
             if pitch % 12 == 0:
-                painter.setPen(QColor("#454c5a"))
+                painter.setPen(_CANVAS.key_text)
                 painter.drawText(4, (top + bottom) // 2 + 3, note_name(pitch))
 
-        painter.setPen(QPen(QColor("#101318"), 1))
+        painter.setPen(QPen(_CANVAS.key_line, 1))
         for pitch in range(PITCH_MIN, PITCH_MAX + 2):
             y = top_offset + self.view.mapFromScene(QPointF(0.0, float(PITCH_MAX - pitch))).y()
             painter.drawLine(0, y, self.width(), y)

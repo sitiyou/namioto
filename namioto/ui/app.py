@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from PyQt6.QtCore import QByteArray, QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QKeySequence, QPalette, QShortcut
+from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QMainWindow,
     QMessageBox,
+    QVBoxLayout,
     QWidget,
 )
 
@@ -24,8 +25,9 @@ from namioto import settings as store
 from namioto.beats import TOLERANCE, estimate
 from namioto.playback import note_frequency
 from namioto.spectrum import CHANNEL_MODES, NoteSpectrum
+from namioto.ui import theme
 from namioto.ui.audio import open_player, port_names
-from namioto.ui.controls import EditBar, MixBar, TransportBar
+from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
 from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler, note_name
 from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
 from namioto.ui.song import SongPlayer, load_song, stretch_song
@@ -35,73 +37,6 @@ POSITION_INTERVAL_MS = 40
 SPEED_SETTLE_MS = 400
 BEAT_SOURCE = "Beat tracking and least-squares fit"
 TEMPOCNN_SOURCE = "TempoCNN"
-
-STYLE_SHEET = """
-QMainWindow, QToolBar, QStatusBar { background: #191c23; }
-QToolBar { border: 0; spacing: 6px; padding: 2px 6px; }
-QToolBar::separator { background: #333a48; width: 1px; margin: 4px 6px; }
-QWidget#cluster { background: #232833; border: 1px solid #2f3644; border-radius: 6px; }
-QLabel { color: #94a0b5; background: transparent; }
-QLabel#clusterCaption { color: #6f7a8c; }
-QLabel#fieldLabel { color: #8c97a9; }
-QLabel#sliderValue { color: #cfd6e4; }
-QLabel#position { color: #e6ecf5; font-size: 13px; }
-QToolButton { color: #cfd6e4; background: transparent; border: 1px solid transparent;
-              border-radius: 4px; padding: 2px; }
-QToolButton:hover { background: #2b3140; }
-QToolButton:checked { background: #1f3a5c; border: 1px solid #3b9dff; }
-QToolButton#textButton { border: 1px solid #3a4152; padding: 1px 6px; }
-QToolButton#textButton:hover { background: #2b3140; }
-QToolButton#textButton:checked { background: #1f3a5c; border: 1px solid #3b9dff; }
-QToolButton:disabled { color: #5c6474; }
-QSlider::groove:horizontal { height: 4px; background: #2f3541; border-radius: 2px; }
-QSlider::sub-page:horizontal { background: #3b9dff; border-radius: 2px; }
-QSlider::handle:horizontal { width: 9px; height: 14px; margin: -5px 0;
-                             background: #cfd6e4; border-radius: 2px; }
-QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit { background: #1c2129; color: #cfd6e4;
-                                      border: 1px solid #3a4152; border-radius: 3px; padding: 1px 4px; }
-QComboBox QAbstractItemView { background: #262b34; color: #cfd6e4;
-                              selection-background-color: #1f3a5c; }
-QStatusBar::item { border: 0; }
-QLabel#cursorNote { color: #cfd6e4; }
-QDialog { background: #20242c; }
-QTabWidget::pane { border: 1px solid #2f3644; }
-QTabBar::tab { background: #262b34; color: #94a0b5; padding: 5px 11px; }
-QTabBar::tab:selected { background: #1f3a5c; color: #e6ecf5; }
-QCheckBox { color: #cfd6e4; spacing: 6px; }
-QCheckBox::indicator { width: 13px; height: 13px; border: 1px solid #3a4152;
-                       border-radius: 3px; background: #1c2129; }
-QCheckBox::indicator:checked { background: #3b9dff; border-color: #3b9dff; }
-QScrollBar:horizontal, QScrollBar:vertical { background: #191c23; border: 0; }
-QScrollBar:horizontal { height: 11px; }
-QScrollBar:vertical { width: 11px; }
-QScrollBar::handle:horizontal, QScrollBar::handle:vertical { background: #3a4152; border-radius: 5px; }
-QScrollBar::handle:horizontal { min-width: 24px; }
-QScrollBar::handle:vertical { min-height: 24px; }
-QScrollBar::handle:hover { background: #4a5468; }
-QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
-QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
-"""
-
-
-def dark_palette() -> QPalette:
-    palette = QPalette()
-    for role, color in (
-        (QPalette.ColorRole.Window, "#20242c"),
-        (QPalette.ColorRole.WindowText, "#cfd6e4"),
-        (QPalette.ColorRole.Base, "#191c23"),
-        (QPalette.ColorRole.AlternateBase, "#20242c"),
-        (QPalette.ColorRole.Text, "#cfd6e4"),
-        (QPalette.ColorRole.Button, "#262b34"),
-        (QPalette.ColorRole.ButtonText, "#cfd6e4"),
-        (QPalette.ColorRole.Highlight, "#3b9dff"),
-        (QPalette.ColorRole.HighlightedText, "#101318"),
-        (QPalette.ColorRole.ToolTipBase, "#262b34"),
-        (QPalette.ColorRole.ToolTipText, "#cfd6e4"),
-        (QPalette.ColorRole.PlaceholderText, "#6f7a8c"),
-    ):
-        palette.setColor(role, QColor(color))
-    return palette
 
 
 class TempoLoader(QThread):
@@ -228,7 +163,7 @@ class MainWindow(QMainWindow):
 
         corner = QWidget()
         corner.setFixedSize(self.keyboard.width(), self.ruler.height())
-        corner.setStyleSheet("background: #20242c;")
+        corner.setObjectName("corner")
 
         layout = QGridLayout()
         layout.setSpacing(0)
@@ -241,21 +176,20 @@ class MainWindow(QMainWindow):
         layout.setRowStretch(1, 1)
         panel = QWidget()
         panel.setLayout(layout)
-        self.setCentralWidget(panel)
 
         self.transport = TransportBar(self)
         self.transport.speed.slider.valueChanged.connect(self._on_speed_changed)
         self.edit = EditBar(SNAP_CHOICES, self)
         self.mix = MixBar(self)
-        self.addToolBar(self.transport)
-        self.addToolBarBreak()
-        self.addToolBar(self.edit)
-        self.addToolBarBreak()
-        self.addToolBar(self.mix)
+        self.controls = ControlArea((self.transport, self.edit, self.mix))
 
-        for bar in (self.transport, self.edit, self.mix):
-            bar.setMovable(False)
-            bar.setFloatable(False)
+        central = QWidget()
+        column = QVBoxLayout(central)
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        column.addWidget(self.controls)
+        column.addWidget(panel, 1)
+        self.setCentralWidget(central)
 
         self.edit.snap.setCurrentIndex(max(0, self.edit.snap.findData(editor.snap)))
         self.edit.division_beats.setChecked(editor.division == "beats")
@@ -272,14 +206,13 @@ class MainWindow(QMainWindow):
         self.mix.midi_volume.set_value(self.settings.playback.midi_volume)
 
         self.edit.snap.currentIndexChanged.connect(lambda: setattr(self.view, "snap", self.edit.snap.currentData()))
-        self.edit.clear_requested.connect(self.view.clear_notes)
         self.edit.tool_changed.connect(self._on_tool_changed)
         self.edit.mode_changed.connect(self._on_mode_changed)
         self.edit.division_changed.connect(self._on_division_changed)
         self.transport.bpm.valueChanged.connect(self._on_bpm_changed)
         self.transport.detect.clicked.connect(self._start_tempo)
-        self.transport.tempo.applied.connect(self._apply_tempo)
-        self.transport.tempo.dismissed.connect(self.transport.tempo.hide)
+        self.transport.suggestion.applied.connect(self._apply_tempo)
+        self.transport.suggestion.dismissed.connect(self.transport.suggestion.hide)
         self.transport.rewind_requested.connect(lambda: self._seek(0.0))
         self.transport.forward_requested.connect(lambda: self._seek(self._duration()))
         self.transport.play_pause_requested.connect(self._toggle_play)
@@ -293,7 +226,7 @@ class MainWindow(QMainWindow):
         self.view.hover_changed.connect(self._on_hover_changed)
         self.view.note_preview.connect(self._on_note_preview)
         self.keyboard.key_preview.connect(self._on_note_preview)
-        self.mix.settings_button.clicked.connect(self._open_settings)
+        self.transport.settings_button.clicked.connect(self._open_settings)
         self.mix.midi_volume.value_changed.connect(self._on_midi_volume)
         self.mix.midi_volume.slider.setToolTip(f"Volume of the note playback through {self.player_name}")
         self.mix.audio_volume.value_changed.connect(self._on_audio_volume)
@@ -335,6 +268,7 @@ class MainWindow(QMainWindow):
         else:
             self.load_audio(audio)
         self._update_status()
+        self.view.setFocus()  # the roll holds the keyboard, so the bar opens without a focus ring on its first button
 
     def _make_player(self):
         playback = self.settings.playback
@@ -466,13 +400,10 @@ class MainWindow(QMainWindow):
         session = self.settings.session
         if session.geometry:
             self.restoreGeometry(QByteArray.fromBase64(session.geometry.encode()))
-        if session.window_state:
-            self.restoreState(QByteArray.fromBase64(session.window_state.encode()))
 
     def _remember_session(self) -> None:
         session = self.settings.session
         session.geometry = self.saveGeometry().toBase64().data().decode()
-        session.window_state = self.saveState().toBase64().data().decode()
         centre = self.view.mapToScene(self.view.viewport().rect().center())
         session.center_x = round(centre.x(), 1)
         session.center_y = round(centre.y(), 1)
@@ -621,7 +552,7 @@ class MainWindow(QMainWindow):
         self.song.unload()
         self.player.stop()
         self.transport.detect.setEnabled(False)
-        self.transport.tempo.hide()
+        self.transport.suggestion.hide()
         self._show_position()
 
     def closeEvent(self, event) -> None:
@@ -723,7 +654,7 @@ class MainWindow(QMainWindow):
         """Estimate the tempo of the loaded audio in the background, as a suggestion only."""
         if self.audio_path is None:
             return
-        self.transport.tempo.hide()
+        self.transport.suggestion.hide()
         self.transport.detect.setEnabled(False)
         tempo = self.settings.tempo
         self.tempo_loader = TempoLoader(
@@ -742,6 +673,8 @@ class MainWindow(QMainWindow):
         self.transport.detect.setEnabled(True)
         if not result.local:
             return
+        if round(result.bpm) == round(self.transport.bpm.value()):
+            return  # the balloon would read what the field already says
         residual = getattr(result, "residual", None)
         if residual is None:
             source = TEMPOCNN_SOURCE
@@ -749,14 +682,15 @@ class MainWindow(QMainWindow):
         else:
             source = BEAT_SOURCE
             agreement = result.agreement
-        self.transport.tempo.estimate(result.bpm, agreement, len(result.local), source, residual)
+        self.transport.suggestion.estimate(result.bpm, agreement, len(result.local), source, residual)
+        self.transport.suggestion.show_under(self.transport.bpm)
 
     def _on_tempo_failed(self, message: str) -> None:
         self.transport.detect.setEnabled(self.audio_path is not None)
         self.statusBar().showMessage(f"Tempo estimation failed: {message}")
 
     def _apply_tempo(self, bpm: float) -> None:
-        self.transport.tempo.hide()
+        self.transport.suggestion.hide()
         self.transport.bpm.setValue(bpm)
         self.statusBar().showMessage(f"Tempo set to {bpm:.0f} BPM from the audio")
 
@@ -873,7 +807,7 @@ class MainWindow(QMainWindow):
         self.view.refresh()
 
     def _on_bpm_changed(self, value: float) -> None:
-        self.transport.tempo.hide()  # a tempo the user typed wins over the suggestion
+        self.transport.suggestion.hide()  # a tempo the user typed wins over the suggestion
         self.view.bpm = value
 
     def _on_spectrum_parameters(self, _value: float = 0.0) -> None:
@@ -913,9 +847,7 @@ def _patch_agreement(result) -> float:
 def main() -> int:
     args = parse_args()
     app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-    app.setPalette(dark_palette())
-    app.setStyleSheet(STYLE_SHEET)
+    theme.apply(app)
     window = MainWindow(audio=args.audio, overrides={"channels": args.channels, "t_num": args.t_num})
     window.apply_overrides(gain=args.gain, contrast=args.contrast)
     window.show()
