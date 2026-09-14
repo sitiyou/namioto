@@ -5,7 +5,9 @@ from __future__ import annotations
 
 import argparse
 import sys
+from pathlib import Path
 
+from PyQt6.QtCore import QThread, pyqtSignal
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import (
     QApplication,
@@ -15,6 +17,7 @@ from PyQt6.QtWidgets import (
 )
 
 from namioto.spectrum import CHANNEL_MODES, NoteSpectrum
+from namioto.tempo import TempoEstimate, estimate
 from namioto.ui.controls import EditBar, MixBar, TransportBar
 from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler
 from namioto.ui.spectrogram import SpectrumLoader
@@ -78,15 +81,35 @@ def dark_palette() -> QPalette:
     return palette
 
 
+class TempoLoader(QThread):
+    """Estimates the tempo of a file off the GUI thread."""
+
+    loaded = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, path: str | Path, parent=None):
+        super().__init__(parent)
+        self.path = Path(path)
+
+    def run(self) -> None:
+        try:
+            result = estimate(self.path)
+        except Exception as error:  # a broken file must not take the editor down
+            self.failed.emit(f"{type(error).__name__}: {error}")
+            return
+        self.loaded.emit(result)
+
+
 class MainWindow(QMainWindow):
-    def __init__(self, audio: str | None = None, channels: str = "mono", t_num: float = 20.0):
+    def __init__(self, audio: str | None = None, channels: str = "mono", t_num: float = 40.0):
         super().__init__()
         self.setWindowTitle("Namioto")
         self.resize(1200, 720)
+        self.audio_path: str | None = None
         self.loader: SpectrumLoader | None = None
+        self.tempo_loader: TempoLoader | None = None
 
         self.view = PianoRollView()
-        self.view.snap = SNAP_CHOICES[4][1]
         self.ruler = TimelineRuler(self.view)
         self.keyboard = PianoKeyboard(self.view)
 
@@ -121,9 +144,14 @@ class MainWindow(QMainWindow):
             bar.setFloatable(False)
 
         self.edit.snap.currentIndexChanged.connect(lambda: setattr(self.view, "snap", self.edit.snap.currentData()))
+        self.view.snap = self.edit.snap.currentData()
         self.edit.clear_requested.connect(self.view.clear_notes)
         self.edit.tool_changed.connect(self._on_tool_changed)
+        self.edit.division_changed.connect(self._on_division_changed)
         self.transport.bpm.valueChanged.connect(self._on_bpm_changed)
+        self.transport.detect.clicked.connect(self._start_tempo)
+        self.transport.tempo.applied.connect(self._apply_tempo)
+        self.transport.tempo.dismissed.connect(self.transport.tempo.hide)
         self.mix.gain.value_changed.connect(self._on_spectrum_parameters)
         self.mix.contrast.value_changed.connect(self._on_spectrum_parameters)
         self.view.gain = self.mix.gain.value()
@@ -137,13 +165,43 @@ class MainWindow(QMainWindow):
             self.load_audio(audio, channels=channels, t_num=t_num)
         self._update_status()
 
-    def load_audio(self, path: str, channels: str = "mono", t_num: float = 20.0) -> None:
+    def load_audio(self, path: str, channels: str = "mono", t_num: float = 40.0) -> None:
+        self.audio_path = path
         self.loader = SpectrumLoader(path, channels=channels, t_num=t_num, parent=self)
         self.loader.progress.connect(self._on_analysis_progress)
         self.loader.loaded.connect(self._on_spectrum_loaded)
         self.loader.failed.connect(lambda message: self.statusBar().showMessage(f"Spectrum failed: {message}"))
         self.statusBar().showMessage(f"Analysing {path} …")
         self.loader.start()
+        self._start_tempo()
+
+    def _start_tempo(self) -> None:
+        """Estimate the tempo of the loaded audio in the background, as a suggestion only."""
+        if self.audio_path is None:
+            return
+        self.transport.tempo.hide()
+        self.transport.detect.setEnabled(False)
+        self.tempo_loader = TempoLoader(self.audio_path, parent=self)
+        self.tempo_loader.loaded.connect(self._on_tempo_loaded)
+        self.tempo_loader.failed.connect(self._on_tempo_failed)
+        self.tempo_loader.start()
+
+    def _on_tempo_loaded(self, result: TempoEstimate) -> None:
+        self.transport.detect.setEnabled(True)
+        windows = len(result.local)
+        if not windows:
+            return
+        agreement = sum(local.bpm == result.bpm for local in result.local) / windows
+        self.transport.tempo.estimate(result.bpm, agreement, windows)
+
+    def _on_tempo_failed(self, message: str) -> None:
+        self.transport.detect.setEnabled(self.audio_path is not None)
+        self.statusBar().showMessage(f"Tempo estimation failed: {message}")
+
+    def _apply_tempo(self, bpm: float) -> None:
+        self.transport.tempo.hide()
+        self.transport.bpm.setValue(bpm)
+        self.statusBar().showMessage(f"Tempo set to {bpm:.0f} BPM from the audio")
 
     def _show_hint(self) -> None:
         self.statusBar().showMessage(
@@ -154,7 +212,12 @@ class MainWindow(QMainWindow):
     def _on_tool_changed(self, tool: str) -> None:
         self.view.tool = tool
 
+    def _on_division_changed(self, division: str) -> None:
+        self.view.division = division
+        self.view.refresh()
+
     def _on_bpm_changed(self, value: float) -> None:
+        self.transport.tempo.hide()  # a tempo the user typed wins over the suggestion
         self.view.bpm = value
 
     def _on_spectrum_parameters(self, _value: float = 0.0) -> None:
@@ -180,7 +243,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="namioto", description="Namioto piano-roll MIDI editor")
     parser.add_argument("audio", nargs="?", help="audio file to analyse and draw as a spectrum")
     parser.add_argument("--channels", choices=CHANNEL_MODES, default="mono", help="which channels to analyse")
-    parser.add_argument("--t-num", type=float, default=20.0, help="spectrum frames per second")
+    parser.add_argument("--t-num", type=float, default=40.0, help="spectrum frames per second")
     parser.add_argument("--gain", type=float, help="initial spectrum gain")
     parser.add_argument("--contrast", type=float, help="initial spectrum contrast")
     return parser.parse_args(argv)

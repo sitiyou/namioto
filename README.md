@@ -17,7 +17,7 @@ translation of *wave* + *tone*.
 ```bash
 uv run namioto                            # the editor
 uv run namioto song.mp3                   # the editor with the audio analysed into a spectrum
-uv run namioto song.mp3 --channels both --t-num 40 --gain 300   # analysis options
+uv run namioto song.mp3 --channels both --gain 300   # analysis options
 uv run namioto-tempo song.mp3             # estimate the tempo of a file
 uv run namioto-tempo song.mp3 --local     # per-patch estimates, ~12 s resolution
 uv run namioto-tempo song.mp3 --json      # machine readable, includes the tempo map
@@ -34,7 +34,8 @@ TempoCNN model, on first run.
 ## Spectrum
 
 Passing an audio file draws its note-domain spectrum behind the piano roll, the way noteDigger and
-WaveTone show it: one column per 50 ms frame, one row per note band (C1 to B7), coloured from dark
+WaveTone show it: one column per 25 ms frame (40 frames per second), one row per note band (C1 to B7),
+coloured from dark
 blue through green to red as the energy rises, with the octave lines of the pitch axis. The
 **Spectrum** block sets the two display parameters — gain (how much energy reaches full red) and
 contrast (the exponent applied to the energy). The analysis runs in a background thread and reports
@@ -90,12 +91,13 @@ The window has three control bars, each split into captioned blocks of related c
 
 | Bar | Blocks |
 | --- | --- |
-| Transport | **Playback** (rewind, stop, pause, play, forward, position readout), **Speed** (0.25x-2.00x with a `1.0` reset), **Tempo** (BPM), **Latency** (ms) |
-| Edit | **Tools** (pen, select, snap grid, clear), **Division** (note icon = beats of the tempo map, clock icon = seconds) |
+| Transport | **Playback** (rewind, stop, pause, play, forward, position readout), **Speed** (0.25x-2.00x with a `1.0` reset), **Tempo** (BPM, plus the estimated tempo of the audio), **Latency** (ms) |
+| Edit | **Tools** (pen, select, snap grid, clear), **Division** (note icon = the grid follows the beats of the tempo map, clock icon = it follows seconds) |
 | Mix | **Spectrum** (gain, contrast), **Volume** (audio, MIDI) |
 
-The tool buttons, the snap grid and the two spectrum display parameters drive the editor so far;
-the playback and volume controls are placeholders for the playback milestone.
+The tool buttons, the snap grid, the division, the tempo estimate and the two spectrum display
+parameters drive the editor so far; the playback and volume controls are placeholders for the
+playback milestone.
 
 | Action | Input |
 | --- | --- |
@@ -113,5 +115,13 @@ the playback and volume controls are placeholders for the playback milestone.
 | Zoom pitch | Ctrl + Shift + wheel |
 | Scroll | Wheel, Shift + wheel for horizontal |
 
+Loading an audio file also runs the TempoCNN tempo estimator in the background (~1 s for a whole
+song). It never changes the tempo by itself: when it is done, the **Tempo** block shows a suggestion
+such as `≈96 BPM` next to the BPM field, dimmed while few of its windows agree, with a tick to use
+it and a cross to drop it. Typing a tempo, dropping the suggestion or loading another file discards
+it; the round arrow estimates again.
+
 The **Snap** combo sets the quantisation applied when drawing, moving, and resizing notes, and
-**Clear** removes every note.
+**Clear** removes every note. The **Division** buttons change how the time axis is divided — into
+beats and bars of the tempo map, or into a 1-2-5 ladder of seconds — and nothing else: the ruler
+shows the clock above the measure numbers under either of them.

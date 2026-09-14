@@ -20,11 +20,16 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from namioto.ui.roll import format_time
+
 ICON_PX = 32
 ICON_SIZE = 17
 ICON_COLOR = "#cfd6e4"
 BUTTON_HEIGHT = 24
 FIELD_HEIGHT = 24
+SUGGESTION_COLOR = "#cfd6e4"
+WEAK_COLOR = "#7f8b9e"
+WEAK_AGREEMENT = 0.5
 
 
 def _icon(kind: str) -> QIcon:
@@ -72,6 +77,23 @@ def _icon(kind: str) -> QIcon:
         painter.drawEllipse(center, 0.36 * size, 0.36 * size)
         painter.drawLine(center, QPointF(0.5 * size, 0.26 * size))
         painter.drawLine(center, QPointF(0.70 * size, 0.58 * size))
+    elif kind == "check":
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(ICON_COLOR), 0.13 * size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(QPointF(0.18 * size, 0.54 * size), QPointF(0.42 * size, 0.78 * size))
+        painter.drawLine(QPointF(0.42 * size, 0.78 * size), QPointF(0.82 * size, 0.24 * size))
+    elif kind == "cross":
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(ICON_COLOR), 0.12 * size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(QPointF(0.28 * size, 0.28 * size), QPointF(0.72 * size, 0.72 * size))
+        painter.drawLine(QPointF(0.72 * size, 0.28 * size), QPointF(0.28 * size, 0.72 * size))
+    elif kind == "refresh":
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(ICON_COLOR), 0.10 * size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+        painter.drawArc(QRectF(0.20 * size, 0.20 * size, 0.60 * size, 0.60 * size), 100 * 16, 250 * 16)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(ICON_COLOR))
+        shape([(0.38, 0.02), (0.74, 0.16), (0.44, 0.34)])
     painter.end()
     return QIcon(pixmap)
 
@@ -200,6 +222,42 @@ def text_button(caption: str, tooltip: str, checkable: bool = False, width: int 
     return button
 
 
+class TempoSuggestion(QWidget):
+    """A tempo the audio suggests: apply it or drop it, but nothing changes on its own."""
+
+    applied = pyqtSignal(float)
+    dismissed = pyqtSignal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._bpm = 0.0
+        self.label = QLabel()
+        self.apply_button = icon_button("check", "Use this tempo")
+        self.dismiss_button = icon_button("cross", "Dismiss this estimate")
+        self.apply_button.clicked.connect(lambda: self.applied.emit(self._bpm))
+        self.dismiss_button.clicked.connect(self.dismissed)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(2)
+        layout.addWidget(self.label)
+        layout.addWidget(self.apply_button)
+        layout.addWidget(self.dismiss_button)
+        self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self.hide()
+
+    def estimate(self, bpm: float, agreement: float, windows: int) -> None:
+        """Show `bpm` as a candidate, dimmed while few of the analysed windows agree on it."""
+        self._bpm = bpm
+        self.label.setText(f"≈{bpm:.0f} BPM")
+        self.label.setStyleSheet(f"color: {SUGGESTION_COLOR if agreement >= WEAK_AGREEMENT else WEAK_COLOR}")
+        self.setToolTip(
+            f"TempoCNN estimate over {windows} windows of 12 s: {agreement:.0%} of them agree.\n"
+            "Nothing changes until you click the tick."
+        )
+        self.show()
+
+
 class TransportBar(QToolBar):
     """Playback transport, position, playback speed, tempo and latency."""
 
@@ -242,6 +300,10 @@ class TransportBar(QToolBar):
         self.bpm.setFixedHeight(FIELD_HEIGHT)
         self.bpm.setKeyboardTracking(False)
 
+        self.detect = icon_button("refresh", "Estimate the tempo of the loaded audio")
+        self.detect.setEnabled(False)
+        self.tempo = TempoSuggestion()
+
         self.latency = QSpinBox()
         self.latency.setRange(-500, 500)
         self.latency.setValue(0)
@@ -262,6 +324,8 @@ class TransportBar(QToolBar):
 
         tempo = Cluster("Tempo")
         tempo.add(self.bpm, row=0)
+        tempo.add(self.detect, row=0)
+        tempo.add(self.tempo, row=0)
 
         latency = Cluster("Latency")
         latency.add(self.latency, row=0)
@@ -270,8 +334,7 @@ class TransportBar(QToolBar):
             self.addWidget(cluster)
 
     def set_position(self, seconds: float) -> None:
-        minutes, rest = divmod(max(0.0, seconds), 60.0)
-        self.position.setText(f"{int(minutes):02d}:{rest:06.3f}")
+        self.position.setText(format_time(seconds))
 
 
 class EditBar(QToolBar):
@@ -298,7 +361,7 @@ class EditBar(QToolBar):
         self.snap = QComboBox()
         for label, beats in snap_choices:
             self.snap.addItem(label, beats)
-        self.snap.setCurrentIndex(4)
+        self.snap.setCurrentIndex(self.snap.findText("1/8"))
         self.snap.setToolTip("Snap grid for the pen tool")
         self.snap.setFixedWidth(66)
         self.snap.setFixedHeight(FIELD_HEIGHT)

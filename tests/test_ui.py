@@ -14,11 +14,14 @@ from PyQt6.QtGui import QColor, QImage  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum  # noqa: E402
-from namioto.ui.app import STYLE_SHEET, MainWindow, dark_palette  # noqa: E402
-from namioto.ui.controls import Cluster, ValueSlider  # noqa: E402
+from namioto.tempo import LocalTempo, TempoEstimate  # noqa: E402
+from namioto.ui.app import STYLE_SHEET, MainWindow, TempoLoader, dark_palette  # noqa: E402
+from namioto.ui.controls import WEAK_COLOR, Cluster, ValueSlider  # noqa: E402
 from namioto.ui.roll import (  # noqa: E402
     CONTENT_MARGIN,
     GRID_BAR,
+    GRID_BEAT,
+    GRID_LINE,
     LENGTH_BEATS,
     NOTE_EDGE_DARK,
     NOTE_EDGE_LIGHT,
@@ -26,7 +29,12 @@ from namioto.ui.roll import (  # noqa: E402
     NOTE_INSET,
     NOTE_SELECTED,
     NOTE_SELECTED_EDGE,
+    PANEL,
     PITCH_MAX,
+    RULER_HEIGHT,
+    RULER_TIME_ROW,
+    SPECTRUM_BAR,
+    SPECTRUM_BEAT,
     SPECTRUM_OCTAVE,
     SPECTRUM_TOP,
     PianoRollView,
@@ -141,7 +149,7 @@ def test_ruler_marks_line_up_with_the_roll(window) -> None:
     ruler, viewport = window.ruler, window.view.viewport()
     ruler_image, view_image = ruler.grab().toImage(), window.view.grab().toImage()
     row = viewport.mapTo(window.view, QPoint(0, viewport.height() // 2)).y()
-    ruler_marks = [x for x in range(ruler_image.width()) if ruler_image.pixelColor(x, 2) == GRID_BAR]
+    ruler_marks = [x for x in range(ruler_image.width()) if ruler_image.pixelColor(x, RULER_TIME_ROW + 2) == GRID_BAR]
     roll_marks = [x for x in range(view_image.width()) if view_image.pixelColor(x, row) == GRID_BAR]
     offset = ruler.mapToGlobal(QPoint(0, 0)).x() - window.view.mapToGlobal(QPoint(0, 0)).x()
     assert ruler_marks and roll_marks
@@ -169,6 +177,49 @@ def test_division_buttons_are_exclusive(window) -> None:
     assert not window.edit.division_seconds.isChecked()
 
 
+def text_columns(image: QImage, top: int, bottom: int) -> set[int]:
+    """Columns holding label glyphs in a ruler row; the rows are otherwise flat colours."""
+    flat = {PANEL.name(), GRID_LINE.name(), GRID_BEAT.name(), GRID_BAR.name(), "#3a4152"}
+    return {x for x in range(image.width()) for y in range(top, bottom) if QColor(image.pixel(x, y)).name() not in flat}
+
+
+def test_ruler_shows_time_and_measures_whatever_the_division(window) -> None:
+    for division in ("beats", "seconds"):
+        window.view.division = division
+        window.view.refresh()
+        image = window.ruler.grab().toImage()
+        assert text_columns(image, 0, RULER_TIME_ROW), f"no time labels with the {division} division"
+        assert text_columns(image, RULER_TIME_ROW, RULER_HEIGHT), f"no measure numbers with {division}"
+    window.view.division = "beats"
+
+
+def test_ruler_time_row_ignores_the_division(window) -> None:
+    labels = {}
+    for division in ("beats", "seconds"):
+        window.view.division = division
+        window.view.refresh()
+        labels[division] = text_columns(window.ruler.grab().toImage(), 0, RULER_TIME_ROW)
+    window.view.division = "beats"
+    assert labels["beats"] and labels["beats"] == labels["seconds"]
+
+
+def test_spectrum_grid_lines_follow_the_division() -> None:
+    view = PianoRollView()
+    view.resize(900, 500)
+    view.bpm = 120.0
+    view.set_spectrum(make_spectrum(frames=400, value=0.0))  # black cells, so only the lines show
+    view.centerOn(20.0, float(PITCH_MAX - 60) + 0.5)
+    columns = {}
+    for division in ("beats", "seconds"):
+        view.division = division
+        view.refresh()
+        image = view.grab().toImage()
+        y = device_point(view, 0.0, float(PITCH_MAX - 60) + 0.5).y()
+        columns[division] = {x for x in range(image.width()) if image.pixelColor(x, y) in (SPECTRUM_BEAT, SPECTRUM_BAR)}
+    assert columns["beats"] and columns["seconds"]
+    assert columns["beats"] != columns["seconds"]
+
+
 def test_defaults_of_the_control_bars(window) -> None:
     assert window.transport.bpm.value() == 120.0
     assert window.transport.latency.value() == 0
@@ -177,8 +228,63 @@ def test_defaults_of_the_control_bars(window) -> None:
     assert window.mix.gain.value() == 240.0
     assert window.mix.contrast.value() == 1.0
     assert window.mix.audio_volume.value() == 80.0
-    assert window.edit.snap.currentData() == 0.25
+    assert window.edit.snap.currentData() == 0.5 and window.view.snap == 0.5  # 1/8 by default
     assert window.edit.division_beats.isChecked()
+
+
+def test_transport_position_is_a_clock(window) -> None:
+    window.transport.set_position(63.25)
+    assert window.transport.position.text() == "01:03.250"
+    window.transport.set_position(0.0)
+
+
+def fake_estimate(bpm: float = 96.0, windows: int = 10, agree: int = 6) -> TempoEstimate:
+    local = tuple(LocalTempo(i * 6.0, i * 6.0 + 12.0, bpm if i < agree else bpm + 5, 0.4) for i in range(windows))
+    return TempoEstimate(bpm=bpm, local=local)
+
+
+def test_tempo_estimate_is_only_a_suggestion(window) -> None:
+    window.transport.bpm.setValue(120.0)
+    window._on_tempo_loaded(fake_estimate())
+    assert window.transport.tempo.isVisible()
+    assert window.transport.bpm.value() == 120.0  # nothing is applied by itself
+    assert "60% of them agree" in window.transport.tempo.toolTip()
+
+    window.transport.tempo.apply_button.click()
+    assert window.transport.bpm.value() == 96.0
+    assert not window.transport.tempo.isVisible()
+    window.transport.bpm.setValue(120.0)
+
+
+def test_tempo_suggestion_can_be_dismissed_without_applying(window) -> None:
+    window.transport.bpm.setValue(120.0)
+    window._on_tempo_loaded(fake_estimate(bpm=100.0))
+    window.transport.tempo.dismiss_button.click()
+    assert not window.transport.tempo.isVisible()
+    assert window.transport.bpm.value() == 120.0
+
+
+def test_typing_a_tempo_drops_the_suggestion(window) -> None:
+    window._on_tempo_loaded(fake_estimate())
+    window.transport.bpm.setValue(140.0)
+    assert not window.transport.tempo.isVisible()
+    window.transport.bpm.setValue(120.0)
+
+
+def test_a_weak_tempo_estimate_is_dimmed(window) -> None:
+    window._on_tempo_loaded(fake_estimate(windows=10, agree=2))
+    assert WEAK_COLOR in window.transport.tempo.label.styleSheet()
+    window.transport.tempo.hide()
+
+
+def test_tempo_loader_reports_a_bad_file(window, tmp_path) -> None:
+    broken = tmp_path / "broken.wav"
+    broken.write_text("not audio")
+    messages: list[str] = []
+    loader = TempoLoader(broken)
+    loader.failed.connect(messages.append)
+    loader.run()
+    assert len(messages) == 1 and "Error" in messages[0]
 
 
 def make_spectrum(frames: int = 4, value: float = 1.0) -> NoteSpectrum:

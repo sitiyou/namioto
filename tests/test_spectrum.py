@@ -180,17 +180,17 @@ def test_single_tone_lands_in_its_band(frequency, label):
 
 def test_matches_notedigger_frame_by_frame():
     audio = (tone(220.0, 0.6) + tone(660.0, 0.6, 0.3)).astype(np.float32)
-    ours = stft_notes(audio, SAMPLE_RATE).table
-    expected = reference_table(audio)
+    ours = stft_notes(audio, SAMPLE_RATE, t_num=20.0).table
+    expected = reference_table(audio, t_num=20.0)
     assert ours.shape == expected.shape
     assert np.allclose(ours, expected, rtol=1e-4, atol=1e-5)
 
 
 def test_frame_geometry_matches_notedigger():
     spectrum = stft_notes(tone(440.0, 1.0), SAMPLE_RATE)
-    assert spectrum.frames == 20
-    assert spectrum.frame_ms == pytest.approx(50.0)
-    assert spectrum.hop == pytest.approx(SAMPLE_RATE / 20)
+    assert spectrum.frames == 40
+    assert spectrum.frame_ms == pytest.approx(25.0)
+    assert spectrum.hop == round(SAMPLE_RATE / 40)
     assert spectrum.duration == pytest.approx(1.0)
 
 
@@ -237,7 +237,7 @@ def test_analyse_end_to_end(tmp_path):
     path = write_wav(tmp_path / "a440.wav", tone(440.0, 2.0))
     timings: dict = {}
     spectrum = analyse(path, timings=timings)
-    assert spectrum.frames == 40
+    assert spectrum.frames == 80  # 2 s at the default 40 frames per second
     assert note_label(int(spectrum.table.mean(axis=0).argmax())) == "A4"
     assert {"decode", "weights", "fft", "reduce", "normalize"} <= set(timings)
 

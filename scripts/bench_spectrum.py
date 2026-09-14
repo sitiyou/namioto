@@ -81,7 +81,7 @@ def report(cases: list[tuple[str, str, float, int]], runner) -> None:
 
 def main() -> int:
     if len(sys.argv) > 1 and sys.argv[1] != "--child":
-        cases = [(sys.argv[1], "mono", 20.0, 8192), (sys.argv[1], "both", 20.0, 8192)]
+        cases = [(sys.argv[1], "mono", 40.0, 8192), (sys.argv[1], "both", 40.0, 8192)]
         report(cases, run_case)
         return 0
 
@@ -90,9 +90,9 @@ def main() -> int:
         for seconds, stereo in ((30.0, False), (180.0, False), (180.0, True), (600.0, False)):
             path = Path(directory) / f"synthetic_{int(seconds)}s{'_stereo' if stereo else ''}.wav"
             soundfile.write(str(path), synthetic(seconds, stereo), SAMPLE_RATE, subtype="PCM_16")
-            cases.append((str(path), "both" if stereo else "mono", 20.0, 8192))
-        cases.append((cases[-1][0], "mono", 40.0, 8192))
-        cases.append((cases[-1][0], "mono", 20.0, 16384))
+            cases.append((str(path), "both" if stereo else "mono", 40.0, 8192))
+        cases.append((cases[-1][0], "mono", 20.0, 8192))
+        cases.append((cases[-1][0], "mono", 40.0, 16384))
 
         def in_subprocess(path: str, mode: str, t_num: float, fft_points: int) -> dict:
             process = subprocess.run(

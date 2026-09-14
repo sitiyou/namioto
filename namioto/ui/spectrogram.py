@@ -71,7 +71,7 @@ class SpectrumLoader(QThread):
     failed = pyqtSignal(str)
     progress = pyqtSignal(int, int)
 
-    def __init__(self, path: str | Path, channels: str = "mono", t_num: float = 20.0, parent=None):
+    def __init__(self, path: str | Path, channels: str = "mono", t_num: float = 40.0, parent=None):
         super().__init__(parent)
         self.path = Path(path)
         self.channels = channels

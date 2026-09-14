@@ -49,6 +49,12 @@ SPECTRUM_BEAT = QColor("#606060")
 SPECTRUM_BAR = QColor("#c0c0c0")
 SPECTRUM_TOP = PITCH_MAX - (MIDI_OFFSET + NOTE_COUNT - 1)
 MIN_LINE_SPACING = 16.0
+MIN_GRID_SPACING = 9.0
+RULER_TIME_ROW = 24
+RULER_HEIGHT = 46
+TIME_LABEL_SPACING = 84.0
+MEASURE_LABEL_SPACING = 30.0
+TIME_STEPS = (0.01, 0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0)
 
 
 def is_black_key(pitch: int) -> bool:
@@ -62,6 +68,20 @@ def note_name(pitch: int) -> str:
 
 def _is_multiple(value: float, step: float) -> bool:
     return abs(value / step - round(value / step)) < 1e-6
+
+
+def format_time(seconds: float) -> str:
+    """Time as the transport shows it, mm:ss.mmm."""
+    minutes, rest = divmod(max(0.0, seconds), 60.0)
+    return f"{int(minutes):02d}:{rest:06.3f}"
+
+
+def time_step(pixels_per_second: float, minimum: float) -> float:
+    """Smallest 1-2-5 step that keeps the time grid at least `minimum` pixels apart."""
+    for step in TIME_STEPS:
+        if step * pixels_per_second >= minimum:
+            return step
+    return TIME_STEPS[-1]
 
 
 class NoteItem(QGraphicsRectItem):
@@ -133,6 +153,7 @@ class PianoRollView(QGraphicsView):
         self._scene = scene
         self.snap = 0.25
         self.tool = "pen"
+        self.division = "beats"
         self._bpm = 120.0
         self.gain = 240.0
         self.contrast = 1.0
@@ -213,9 +234,46 @@ class PianoRollView(QGraphicsView):
         """Scene width of one spectrum frame, in beats."""
         return self.spectrum.spectrum.frame_ms / 1000.0 * self.bpm / 60.0
 
+    def pixels_per_beat(self) -> float:
+        return self._zoom_x
+
+    def pixels_per_second(self) -> float:
+        return self._zoom_x * self.bpm / 60.0
+
+    def seconds_lines(self, rect: QRectF, minimum: float) -> list[tuple[float, float, bool]]:
+        """(x, seconds, major) of the time grid across `rect`, on the 1-2-5 step that keeps the
+        lines at least `minimum` pixels apart and marks every step above it as a major line."""
+        index = TIME_STEPS.index(time_step(self.pixels_per_second(), minimum))
+        step, major = TIME_STEPS[index], TIME_STEPS[min(index + 1, len(TIME_STEPS) - 1)]
+        beats_per_second = self.bpm / 60.0
+        value = math.floor(rect.left() / (step * beats_per_second)) * step
+        lines = []
+        while value * beats_per_second <= rect.right():
+            lines.append((value * beats_per_second, value, _is_multiple(value, major)))
+            value += step
+        return lines
+
+    def division_lines(self, rect: QRectF, minimum: float, snap: bool = False) -> list[tuple[float, int]]:
+        """Time-axis grid lines across `rect` as (x, level) pairs, 0 minor, 1 beat, 2 prominent.
+
+        The division picks the basis: beats of the tempo map, or seconds. `snap` follows the snap
+        grid on the beats basis, for the canvas that has no spectrum behind it.
+        """
+        if self.division == "seconds":
+            return [(x, 2 if major else 0) for x, _seconds, major in self.seconds_lines(rect, minimum)]
+        step = self.grid_step() if snap else 1.0
+        value = math.floor(rect.left() / step) * step
+        lines = []
+        while value <= rect.right():
+            level = 2 if _is_multiple(value, BAR_BEATS) else 1 if _is_multiple(value, 1.0) else 0
+            if self._zoom_x * (BAR_BEATS if level == 2 else step) >= minimum:
+                lines.append((value, level))
+            value += step
+        return lines
+
     def grid_step(self) -> float:
         for step in (1 / 32, 1 / 16, 1 / 8, 1 / 4, 1 / 2, 1.0, 2.0, BAR_BEATS):
-            if step * self._zoom_x >= 9.0:
+            if step * self._zoom_x >= MIN_GRID_SPACING:
                 return step
         return BAR_BEATS
 
@@ -249,17 +307,9 @@ class PianoRollView(QGraphicsView):
             for row in range(first_row, last_row + 1):
                 y = float(row)
                 painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
-            step = self.grid_step()
-            x = math.floor(rect.left() / step) * step
-            while x <= rect.right():
-                if _is_multiple(x, BAR_BEATS):
-                    painter.setPen(QPen(GRID_BAR, 0))
-                elif _is_multiple(x, 1.0):
-                    painter.setPen(QPen(GRID_BEAT, 0))
-                else:
-                    painter.setPen(QPen(GRID_LINE, 0))
+            for x, level in self.division_lines(rect, MIN_GRID_SPACING, snap=True):
+                painter.setPen(QPen((GRID_LINE, GRID_BEAT, GRID_BAR)[level], 0))
                 painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
-                x += step
             painter.restore()
             return
 
@@ -270,13 +320,9 @@ class PianoRollView(QGraphicsView):
             y = float(PITCH_MAX - pitch + 1)  # the C row's lower edge (B sits below C)
             if first_row <= y <= last_row:
                 painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
-        for beat in range(math.floor(rect.left()), int(rect.right()) + 2):
-            bar = _is_multiple(beat, BAR_BEATS)
-            spacing = self._zoom_x * (BAR_BEATS if bar else 1.0)
-            if spacing < MIN_LINE_SPACING:
-                continue
-            painter.setPen(QPen(SPECTRUM_BAR if bar else SPECTRUM_BEAT, 0))
-            painter.drawLine(QPointF(beat, rect.top()), QPointF(beat, rect.bottom()))
+        for x, level in self.division_lines(rect, MIN_LINE_SPACING):
+            painter.setPen(QPen(SPECTRUM_BAR if level == 2 else SPECTRUM_BEAT, 0))
+            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
         painter.restore()
 
     def _draw_spectrum(self, painter: QPainter, rect: QRectF) -> None:
@@ -485,7 +531,7 @@ class TimelineRuler(QWidget):
         super().__init__()
         self.view = view
         self._last_x: float | None = None
-        self.setFixedHeight(24)
+        self.setFixedHeight(RULER_HEIGHT)
         self.setCursor(Qt.CursorShape.SizeHorCursor)
         view.view_changed.connect(self.update)
 
@@ -503,27 +549,37 @@ class TimelineRuler(QWidget):
         font.setPixelSize(10)
         painter.setFont(font)
 
-        step = self.view.grid_step()
         left = self.view.mapToScene(QPoint(0, 0)).x()
         right = self.view.mapToScene(QPoint(viewport.width(), 0)).x()
-        x = math.floor(left / step) * step
-        while x <= right:
-            px = left_offset + self.view.mapFromScene(QPointF(x, 0.0)).x()
-            if _is_multiple(x, BAR_BEATS):
-                painter.setPen(QPen(GRID_BAR, 1))
-                painter.drawLine(px, 0, px, self.height())
+        visible = QRectF(left, 0.0, right - left, 1.0)
+
+        stride = 1
+        while stride * BAR_BEATS * self.view.pixels_per_beat() < MEASURE_LABEL_SPACING:
+            stride *= 2
+        for bar in range(int(left // BAR_BEATS), int(right // BAR_BEATS) + 1):
+            px = left_offset + self.view.mapFromScene(QPointF(bar * BAR_BEATS, 0.0)).x()
+            painter.setPen(QPen(GRID_BAR, 1))
+            painter.drawLine(px, RULER_TIME_ROW, px, self.height())
+            if bar % stride == 0:
                 painter.setPen(TEXT)
-                painter.drawText(px + 4, 16, str(int(x // BAR_BEATS) + 1))
-            elif _is_multiple(x, 1.0):
-                painter.setPen(QPen(GRID_BEAT, 1))
-                painter.drawLine(px, self.height() - 8, px, self.height())
-            else:
-                painter.setPen(QPen(GRID_LINE, 1))
-                painter.drawLine(px, self.height() - 4, px, self.height())
-            x += step
+                painter.drawText(px + 4, RULER_TIME_ROW + 15, str(bar + 1))
+
+        for x, level in self.view.division_lines(visible, MIN_GRID_SPACING, snap=True):
+            px = left_offset + self.view.mapFromScene(QPointF(x, 0.0)).x()
+            painter.setPen(QPen(GRID_LINE if level == 0 else GRID_BEAT, 1))
+            painter.drawLine(px, self.height() - (4, 8, 10)[level], px, self.height())
+
+        for x, seconds, _major in self.view.seconds_lines(visible, TIME_LABEL_SPACING):
+            px = left_offset + self.view.mapFromScene(QPointF(x, 0.0)).x()
+            painter.setPen(QPen(GRID_BEAT, 1))
+            painter.drawLine(px, RULER_TIME_ROW - 6, px, RULER_TIME_ROW - 1)
+            label = format_time(seconds)
+            painter.setPen(TEXT)
+            painter.drawText(QPointF(px - painter.fontMetrics().horizontalAdvance(label) / 2, 14), label)
 
         painter.setPen(QPen(QColor("#3a4152"), 1))
         right_edge = viewport.width() + int(left_offset)
+        painter.drawLine(int(left_offset), RULER_TIME_ROW - 1, right_edge, RULER_TIME_ROW - 1)
         painter.drawLine(int(left_offset), self.height() - 1, right_edge, self.height() - 1)
 
     def mousePressEvent(self, event) -> None:

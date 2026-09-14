@@ -156,7 +156,7 @@ def stft_notes(
     audio: np.ndarray | list[np.ndarray],
     sample_rate: int,
     *,
-    t_num: float = 20.0,
+    t_num: float = 40.0,
     fft_points: int = 8192,
     a4: float = 440.0,
     block_frames: int = 128,
@@ -251,7 +251,7 @@ def analyse(
     path: str | Path,
     *,
     channels: str = "mono",
-    t_num: float = 20.0,
+    t_num: float = 40.0,
     fft_points: int = 8192,
     a4: float = 440.0,
     progress=None,
@@ -299,7 +299,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Analyse audio into a note-domain spectrum")
     parser.add_argument("audio", help="input audio file")
     parser.add_argument("--channels", choices=CHANNEL_MODES, default="mono", help="which channels to analyse")
-    parser.add_argument("--t-num", type=float, default=20.0, help="analysis frames per second (default: 20)")
+    parser.add_argument("--t-num", type=float, default=40.0, help="analysis frames per second (default: 40)")
     parser.add_argument("--fft-points", type=int, default=8192, help="real FFT size (default: 8192)")
     parser.add_argument("--a4", type=float, default=440.0, help="frequency of A4 (default: 440)")
     parser.add_argument("--threshold", type=float, help="also report auto-filled notes above this value")
