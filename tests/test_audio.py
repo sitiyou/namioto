@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from namioto.playback import render_notes
-from namioto.ui.audio import NOTE_OFF, NOTE_ON, VELOCITY, MidiPortOut, MidiSink
+from namioto.ui.audio import NOTE_OFF, NOTE_ON, VELOCITY, MidiPortOut, MidiSink, open_player
 
 
 class FakePort:
@@ -92,3 +92,15 @@ def test_the_midi_volume_becomes_a_control_change() -> None:
     player.gain = -1.0
     assert port.messages[-1] == [0xB0, 0x07, 0]
     assert player.gain == 0.0
+
+
+def test_the_external_synth_is_preferred_when_one_is_listening() -> None:
+    player, name = open_player()
+    assert isinstance(player, MidiPortOut)  # the machine's own patches beat the built-in synth
+    assert name == "TiMidity:Fake TiMidity port 0 128:0"  # the port the suite is given instead of a real one
+
+
+def test_a_backend_that_was_asked_for_is_honoured() -> None:
+    player, name = open_player(backend="builtin")
+    assert isinstance(player, MidiSink)
+    assert name == "the built-in synth"

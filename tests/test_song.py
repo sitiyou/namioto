@@ -6,15 +6,38 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import soundfile
+from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtMultimedia import QtAudio
 from PyQt6.QtWidgets import QApplication
 
 from namioto.ui.app import STYLE_SHEET, dark_palette
-from namioto.ui.song import (
-    SongPlayer,
-    _SongSource,
-    load_song,
-    stretch_song,
-)
+from namioto.ui.song import SongPlayer, _SongSource, load_song, stretch_song
+
+
+class FakeSink(QObject):
+    """Qt's sound output with no sound card behind it: a test must not play into the room."""
+
+    stateChanged = pyqtSignal(object)
+
+    def __init__(self, *_args) -> None:
+        super().__init__()
+        self._state = QtAudio.State.StoppedState
+
+    def setBufferSize(self, size: int) -> None:
+        pass
+
+    def start(self, source=None) -> None:
+        self._state = QtAudio.State.ActiveState
+
+    def stop(self) -> None:
+        self._state = QtAudio.State.StoppedState
+
+    def state(self):
+        return self._state
+
+    def processedUSecs(self) -> int:
+        """A sink that has processed nothing, so the playhead stays where the song left it."""
+        return 0
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -101,7 +124,8 @@ def test_the_source_serves_the_rerendered_song() -> None:
     assert player.stretch == 2.0
 
 
-def test_a_stretched_song_keeps_the_playhead_in_song_seconds() -> None:
+def test_a_stretched_song_keeps_the_playhead_in_song_seconds(monkeypatch) -> None:
+    monkeypatch.setattr("namioto.ui.song.QAudioSink", FakeSink)
     player = SongPlayer()
     player.load(np.zeros(4000, dtype=np.float32), 1000)  # a four second song
     player.set_stretched(np.zeros(2000, dtype=np.float32), 2.0)  # rerendered at 2x: two seconds long
