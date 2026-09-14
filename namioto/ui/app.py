@@ -228,6 +228,7 @@ class MainWindow(QMainWindow):
         self.keyboard.key_preview.connect(self._on_note_preview)
         self.mix.midi_volume.value_changed.connect(self._on_midi_volume)
         self.mix.midi_volume.slider.setToolTip(f"Volume of the note playback through {self.player_name}")
+        self.mix.audio_volume.value_changed.connect(self._on_audio_volume)
         self.mix.gain.value_changed.connect(self._on_spectrum_parameters)
         self.mix.contrast.value_changed.connect(self._on_spectrum_parameters)
         self.view.gain = self.mix.gain.value()
@@ -262,6 +263,7 @@ class MainWindow(QMainWindow):
 
     def _on_song_loaded(self, samples, sample_rate: int) -> None:
         self.song.load(samples, sample_rate)
+        self.song.gain = self.mix.audio_volume.value() / 100.0
         if abs(self.transport.speed.value() - 1.0) > 1e-3:
             self._start_stretch()
 
@@ -419,6 +421,9 @@ class MainWindow(QMainWindow):
 
     def _on_midi_volume(self, value: float) -> None:
         self.player.gain = value / 100.0
+
+    def _on_audio_volume(self, value: float) -> None:
+        self.song.gain = value / 100.0
 
     def _on_note_preview(self, pitch: int) -> None:
         """Audition a note the user clicked or drew."""

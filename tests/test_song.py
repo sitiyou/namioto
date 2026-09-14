@@ -128,3 +128,13 @@ def test_handing_over_a_stretched_song_carries_on_from_the_playhead(monkeypatch)
     assert started == [pytest.approx(2.5)]  # the song carries on from where it was
     assert player.stretch == 2.0 and player.buffer is not None
     assert np.array_equal(player.buffer, buffer)
+
+
+def test_the_source_scales_with_the_song_volume() -> None:
+    player, source = source_for(np.full(100, 0.5, dtype=np.float32))
+
+    assert read(source, 4) == pytest.approx([0.5] * 4, abs=1e-4)
+    player.gain = 0.5
+    assert read(source, 4) == pytest.approx([0.25] * 4, abs=1e-4)
+    player.gain = 0.0
+    assert read(source, 4) == pytest.approx([0.0] * 4, abs=1e-4)

@@ -35,6 +35,11 @@ def test_a_preview_mixes_over_what_is_already_sounding() -> None:
     assert np.allclose(sink.mix[: len(voice)], voice + render_notes([(67, 0.0, 0.05)]))
 
 
+def note_messages(port) -> list[list[int]]:
+    """Just the note events: the player also opens with a channel volume control change."""
+    return [message for message in port.messages if message[0] in (NOTE_ON, NOTE_OFF)]
+
+
 def test_clicking_the_same_note_again_restarts_it() -> None:
     port = FakePort()
     player = MidiPortOut(port)
@@ -43,7 +48,7 @@ def test_clicking_the_same_note_again_restarts_it() -> None:
     player.preview(60, 0.15)  # the second click releases the note and starts it over
     time.sleep(0.3)
 
-    assert port.messages == [
+    assert note_messages(port) == [
         [NOTE_ON, 60, VELOCITY],
         [NOTE_OFF, 60, 0],  # a synth that still holds the note would only layer a second one
         [NOTE_ON, 60, VELOCITY],
@@ -58,8 +63,7 @@ def test_stopping_silences_a_preview() -> None:
     player.preview(60, 30.0)
     player.stop()
 
-    assert [NOTE_OFF, 60, 0] in port.messages
-    assert port.messages[-1] == [NOTE_OFF, 60, 0]
+    assert note_messages(port)[-1] == [NOTE_OFF, 60, 0]
 
 
 def test_clicking_the_same_note_again_restarts_the_built_in_voice() -> None:
@@ -74,3 +78,17 @@ def test_clicking_the_same_note_again_restarts_the_built_in_voice() -> None:
     sink.preview(60, 0.05)  # the note is released and started again, not stacked on itself
     released = int(0.05 * sink.sample_rate)
     assert np.allclose(sink.mix[released : len(voice)], voice[released:])
+
+
+def test_the_midi_volume_becomes_a_control_change() -> None:
+    port = FakePort()
+    player = MidiPortOut(port)
+
+    assert port.messages[0] == [0xB0, 0x07, 127]  # the base class starts it at full volume
+    player.gain = 0.5
+    assert port.messages[-1] == [0xB0, 0x07, round(0.5 * 127)]
+    player.gain = 2.0  # a synth clamps at its own top
+    assert port.messages[-1] == [0xB0, 0x07, 127]
+    player.gain = -1.0
+    assert port.messages[-1] == [0xB0, 0x07, 0]
+    assert player.gain == 0.0

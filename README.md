@@ -98,11 +98,11 @@ The window has three control bars, each split into captioned blocks of related c
 | --- | --- |
 | Transport | **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout), **Speed** (0.10x-2.00x in 5% steps with a `1.0` reset, pitch unchanged), **Tempo** (BPM, plus the estimated tempo of the audio), **Latency** (ms) |
 | Edit | **Tools** (edit mode, pen, select, snap grid, clear), **Division** (note icon = the grid follows the beats of the tempo map, clock icon = it follows seconds) |
-| Mix | **Spectrum** (gain, contrast), **Volume** (audio, MIDI) |
+| Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes) |
 
-The tool buttons, the snap grid, the division, the tempo estimate, the transport and the two
-spectrum display parameters drive the editor so far; the **Audio** volume slider is still a
-placeholder — the analysed audio itself cannot be played yet.
+**Volume** has a slider for each layer: the audio file is streamed at the level of the first one, and
+the second is the note playback - a scale factor for the built-in synth, and control change 7 (channel
+volume) for an external one, which does its own mixing.
 
 | Action | Input |
 | --- | --- |

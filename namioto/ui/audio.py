@@ -18,6 +18,7 @@ INT16_PEAK = 32767.0
 PREVIEW_SECONDS = 0.6
 NOTE_ON, NOTE_OFF, VELOCITY = 0x90, 0x80, 100
 PROGRAM_CHANGE = (0xC0, 0x00)  # acoustic grand piano on channel 0
+CHANNEL_VOLUME = (0xB0, 0x07)  # control change 7: the volume of channel 0, 0 to 127
 SYNTH_NAMES = ("timidity", "fluidsynth", "qsynth", "wavetable")
 
 
@@ -223,8 +224,8 @@ class MidiPortOut(NotePlayer):
     """An external MIDI synth such as TiMidity: the notes are scheduled onto its port."""
 
     def __init__(self, port, parent=None):
+        self.port = port  # before the base class, whose gain setter sends a control change
         super().__init__(parent)
-        self.port = port
         self._notes: tuple[tuple[int, float, float], ...] = ()
         self._speed = 1.0
         self._start = 0.0
@@ -233,6 +234,16 @@ class MidiPortOut(NotePlayer):
         self._sounding: set[int] = set()
         self._previews: dict[int, threading.Timer] = {}
         self._thread: threading.Thread | None = None
+
+    @property
+    def gain(self) -> float:
+        return self._gain
+
+    @gain.setter
+    def gain(self, value: float) -> None:
+        """A synth does its own mixing, so its volume is a control change rather than a scale factor."""
+        self._gain = max(0.0, min(1.0, value))
+        self.port.send_message([*CHANNEL_VOLUME, round(self._gain * 127)])
 
     def set_program(self, notes, speed) -> None:
         self.stop()

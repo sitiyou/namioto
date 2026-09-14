@@ -665,6 +665,18 @@ def test_the_roll_waits_for_a_pause_before_it_seeks(window, monkeypatch) -> None
     window.view.clear_notes()
 
 
+def test_the_volume_sliders_reach_their_layers(window, monkeypatch) -> None:
+    song, notes = FakeSong(), FakeOutput()
+    monkeypatch.setattr(window, "song", song)
+    monkeypatch.setattr(window, "player", notes)
+
+    window.mix.audio_volume.set_value(30)
+    window.mix.midi_volume.set_value(20)
+
+    assert song.gain == pytest.approx(0.3)  # what the audio file is streamed at
+    assert notes.gain == pytest.approx(0.2)  # what the notes sound at
+
+
 def test_transport_buttons_drive_the_player(window, monkeypatch) -> None:
     fake = FakeOutput()
     monkeypatch.setattr(window, "player", fake)
@@ -1296,7 +1308,8 @@ def test_the_port_player_schedules_notes_and_silences_them_on_stop() -> None:
     port = FakePort()
     player = MidiPortOut(port)
     player.set_program([(69, 0.0, 1.0), (76, 0.5, 1.0)], 1.0)
-    assert port.messages[0] == [0xC0, 0x00]  # the synth is asked for its piano first
+    assert [0xC0, 0x00] in port.messages  # the synth is asked for its piano first
+    assert [0xB0, 0x07, 127] in port.messages  # and told how loud to be
     assert player.duration == pytest.approx(1.5)
 
     player.play()
@@ -1333,7 +1346,7 @@ def test_a_preview_plays_the_note_and_releases_it() -> None:
     port = FakePort()
     player = MidiPortOut(port)
     player.preview(72, seconds=0.05)
-    assert port.messages == [[0x90, 72, 100]]
+    assert [0x90, 72, 100] in port.messages
     time.sleep(0.15)
     assert [0x80, 72, 0] in port.messages
 
