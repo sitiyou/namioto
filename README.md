@@ -1,10 +1,10 @@
 # Namioto
 
-A FL Studio style MIDI note editor built with PyQt6: time on the horizontal axis, pitch on the
-vertical axis, and notes you can draw, move, resize, and delete.
-
-The name is a pun on *WaveTone*: 波音 (*namioto*, "sound of waves") is a literal Japanese
-translation of *wave* + *tone*.
+An open-source editor that follows [WaveTone](https://ackiesound.ifdef.jp/)'s feature set: analyse an
+audio file into a note-domain spectrum, draw that behind a piano roll, then transcribe what you see
+into notes - time on the horizontal axis, pitch on the vertical axis, with notes you can draw, move,
+resize and delete. Notes play back through a MIDI synth or the built-in one, and the file plays along
+with them.
 
 ![namioto](docs/screenshot.png)
 
