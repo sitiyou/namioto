@@ -11,9 +11,10 @@ usage() {
 Usage: ./build.sh <target>
 
   wheel            sdist + wheel via uv build          -> dist/*.whl, dist/*.tar.gz
-  cli [tempo|spectrum]
+  cli [tempo|tempocnn|spectrum]
                    frozen CLI via PyInstaller (default: tempo)
                                                         -> dist/namioto-tempo/
+                                                           dist/namioto-tempocnn/
                                                            dist/namioto-spectrum/
   app              frozen GUI via PyInstaller           -> dist/namioto/
   all              wheel + both CLIs + app
@@ -36,10 +37,11 @@ build_wheel() {
 
 build_cli() {
     case "${1:-tempo}" in
-        tempo) freeze_cli namioto/tempo.py namioto-tempo ;;
+        tempo) freeze_cli namioto/beats.py namioto-tempo ;;
+        tempocnn) freeze_cli namioto/tempo.py namioto-tempocnn ;;
         spectrum) freeze_cli namioto/spectrum.py namioto-spectrum ;;
         *)
-            echo "Unknown CLI: ${1}. Expected tempo or spectrum." >&2
+            echo "Unknown CLI: ${1}. Expected tempo, tempocnn or spectrum." >&2
             exit 1
             ;;
     esac

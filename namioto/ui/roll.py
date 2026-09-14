@@ -49,6 +49,10 @@ SPECTRUM_BEAT = QColor("#606060")
 SPECTRUM_BAR = QColor("#c0c0c0")
 SPECTRUM_TOP = PITCH_MAX - (MIDI_OFFSET + NOTE_COUNT - 1)
 MIN_LINE_SPACING = 16.0
+OVERTONES = (2, 3)  # the partials WaveTone marks over the row under the mouse
+HOVER_BAND = QColor(255, 255, 255, 85)
+HOVER_KEY = QColor("#ff4040")
+PLAYHEAD = QColor("#e6ecf5")
 MIN_GRID_SPACING = 9.0
 RULER_TIME_ROW = 24
 RULER_HEIGHT = 46
@@ -139,8 +143,12 @@ class NoteItem(QGraphicsRectItem):
 
 
 class PianoRollView(QGraphicsView):
+    """The roll: the note grid, the interaction with it and the drawn extras (spectrum, cursor)."""
+
     view_changed = pyqtSignal()
     notes_changed = pyqtSignal()
+    hover_changed = pyqtSignal(object)
+    note_preview = pyqtSignal(int)
 
     GRAB_PX = 7
     MIN_ZOOM_X, MAX_ZOOM_X = 12.0, 900.0
@@ -153,7 +161,10 @@ class PianoRollView(QGraphicsView):
         self._scene = scene
         self.snap = 0.25
         self.tool = "pen"
+        self.edit_mode = False
         self.division = "beats"
+        self.hover_pitch: int | None = None
+        self.playhead: float | None = None
         self._bpm = 120.0
         self.gain = 240.0
         self.contrast = 1.0
@@ -163,10 +174,12 @@ class PianoRollView(QGraphicsView):
         self._mode: str | None = None
         self._anchor = QPointF()
         self._press_pos = QPoint()
+        self._trim_edge = ""
         self._grab_note: NoteItem | None = None
         self._snapshot: dict[NoteItem, tuple[float, int, float]] = {}
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        self.viewport().setMouseTracking(True)  # the row under the mouse is highlighted
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
@@ -185,7 +198,18 @@ class PianoRollView(QGraphicsView):
 
     @bpm.setter
     def bpm(self, value: float) -> None:
-        self._bpm = max(1.0, float(value))
+        """Tempo of the beat grid. Notes hold their place in the audio, so a new tempo only
+        re-divides the grid they sit on: their beat coordinates and the horizontal zoom are
+        rescaled together, which leaves the audio and the notes where they are on screen."""
+        tempo = max(1.0, float(value))
+        scale = tempo / self._bpm  # seconds = beats * 60 / bpm, so the beats scale with the tempo
+        if scale != 1.0:
+            self._zoom_x = min(self.MAX_ZOOM_X, max(self.MIN_ZOOM_X, self._zoom_x / scale))
+            self.setTransform(QTransform.fromScale(self._zoom_x, self._zoom_y))
+            for note in self.notes():
+                note.set_range(note.start * scale, note.pitch)
+                note.set_duration(note.duration * scale)
+        self._bpm = tempo
         self._update_scene()
         self.refresh()
 
@@ -233,6 +257,28 @@ class PianoRollView(QGraphicsView):
     def frame_width(self) -> float:
         """Scene width of one spectrum frame, in beats."""
         return self.spectrum.spectrum.frame_ms / 1000.0 * self.bpm / 60.0
+
+    def highlight_pitches(self) -> list[int]:
+        """The row under the mouse and the rows of its overtones; only while editing."""
+        if self.hover_pitch is None or not self.edit_mode:
+            return []
+        pitches = [self.hover_pitch]
+        for harmonic in OVERTONES:
+            pitch = self.hover_pitch + round(12 * math.log2(harmonic))
+            if PITCH_MIN <= pitch <= PITCH_MAX and pitch not in pitches:
+                pitches.append(pitch)
+        return pitches
+
+    def set_hover_pitch(self, pitch: int | None) -> None:
+        if pitch != self.hover_pitch:
+            self.hover_pitch = pitch
+            self.hover_changed.emit(pitch)
+            self.refresh()
+
+    def set_playhead(self, seconds: float | None) -> None:
+        if seconds != self.playhead:
+            self.playhead = seconds
+            self.viewport().update()
 
     def pixels_per_beat(self) -> float:
         return self._zoom_x
@@ -310,6 +356,7 @@ class PianoRollView(QGraphicsView):
             for x, level in self.division_lines(rect, MIN_GRID_SPACING, snap=True):
                 painter.setPen(QPen((GRID_LINE, GRID_BEAT, GRID_BAR)[level], 0))
                 painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+            self._draw_cursor(painter, rect)
             painter.restore()
             return
 
@@ -323,6 +370,28 @@ class PianoRollView(QGraphicsView):
         for x, level in self.division_lines(rect, MIN_LINE_SPACING):
             painter.setPen(QPen(SPECTRUM_BAR if level == 2 else SPECTRUM_BEAT, 0))
             painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+        self._draw_cursor(painter, rect)
+        painter.restore()
+
+    def _draw_cursor(self, painter: QPainter, rect: QRectF) -> None:
+        """The rows highlighted under the mouse; the playback position goes over the notes."""
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(HOVER_BAND)
+        for pitch in self.highlight_pitches():
+            painter.drawRect(QRectF(rect.left(), float(PITCH_MAX - pitch), rect.width(), 1.0))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+
+    def drawForeground(self, painter: QPainter, rect: QRectF) -> None:
+        """The playback position, over the notes so that they never hide it."""
+        if self.playhead is None:
+            return
+        x = self.playhead * self.bpm / 60.0
+        if not rect.left() <= x <= rect.right():
+            return
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setPen(QPen(PLAYHEAD, 0))
+        painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
         painter.restore()
 
     def _draw_spectrum(self, painter: QPainter, rect: QRectF) -> None:
@@ -350,8 +419,18 @@ class PianoRollView(QGraphicsView):
         row = min(PITCH_COUNT - 1, max(0, int(math.floor(y))))
         return PITCH_MAX - row
 
+    def _cell_beats(self) -> float:
+        """One snap cell, but never shorter than a note can be."""
+        return max(self.snap, MIN_DURATION)
+
     def _snap_beats(self, x: float) -> float:
         return round(x / self.snap) * self.snap
+
+    def _snap_floor_beats(self, x: float) -> float:
+        return math.floor(x / self.snap) * self.snap
+
+    def _snap_ceil_beats(self, x: float) -> float:
+        return math.ceil(x / self.snap) * self.snap
 
     def _clear_selection(self) -> None:
         for note in self.notes():
@@ -365,6 +444,9 @@ class PianoRollView(QGraphicsView):
             self._mode = "pan"
             self._press_pos = pos
             self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
+            return
+
+        if not self.edit_mode:
             return
 
         if event.button() == Qt.MouseButton.RightButton:
@@ -393,23 +475,38 @@ class PianoRollView(QGraphicsView):
                 self._rubber.setGeometry(QRect(pos, pos))
                 self._rubber.show()
                 return
-            start = max(0.0, self._snap_beats(scene_pos.x()))
-            note = self.add_note(self._pitch_at(scene_pos.y()), start, max(self.snap, MIN_DURATION))
+            pitch = self._pitch_at(scene_pos.y())
+            start = max(0.0, self._snap_floor_beats(scene_pos.x()))
+            note = self.add_note(pitch, start, self._cell_beats())
+            self.note_preview.emit(pitch)
             self._clear_selection()
             note.setSelected(True)
             self._grab_note = note
-            self._mode = "resize"
+            self._mode = "draw"
             self._snapshot = {note: (note.start, note.pitch, note.duration)}
             self.view_changed.emit()
             return
 
-        if shift or ctrl:
+        if shift:
+            # Shift splits a note into two halves: the left one moves its start, the right one its end.
+            # Ctrl-click is what adds to the selection now.
+            self._clear_selection()
+            note.setSelected(True)
+            self.note_preview.emit(note.pitch)
+            self._grab_note = note
+            self._mode = "trim"
+            self._trim_edge = "start" if scene_pos.x() < note.start + note.duration / 2 else "end"
+            self._snapshot = {note: (note.start, note.pitch, note.duration)}
+            return
+
+        if ctrl:
             note.setSelected(not note.isSelected())
         elif not note.isSelected():
             self._clear_selection()
             note.setSelected(True)
         if not note.isSelected():
             return
+        self.note_preview.emit(note.pitch)
 
         self._grab_note = note
         edge = self.GRAB_PX / self._zoom_x
@@ -419,10 +516,12 @@ class PianoRollView(QGraphicsView):
     def mouseMoveEvent(self, event) -> None:
         pos = event.position().toPoint()
         scene_pos = self.mapToScene(pos)
+        self.set_hover_pitch(self._pitch_at(scene_pos.y()))
 
         if self._mode is None:
-            note = self._note_at(scene_pos)
-            if note is not None and scene_pos.x() >= note.end - self.GRAB_PX / self._zoom_x:
+            note = self._note_at(scene_pos) if self.edit_mode else None
+            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            if note is not None and (shift or scene_pos.x() >= note.end - self.GRAB_PX / self._zoom_x):
                 self.viewport().setCursor(Qt.CursorShape.SizeHorCursor)
             elif note is not None:
                 self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
@@ -449,6 +548,25 @@ class PianoRollView(QGraphicsView):
         if self._grab_note is None or self._grab_note not in self._snapshot:
             return
 
+        if self._mode == "trim":
+            start, pitch, duration = self._snapshot[self._grab_note]
+            if self._trim_edge == "start":
+                new_start = min(max(0.0, self._snap_beats(scene_pos.x())), start + duration - MIN_DURATION)
+                self._grab_note.set_range(new_start, pitch)
+                self._grab_note.set_duration(start + duration - new_start)
+            else:
+                self._grab_note.set_duration(self._snap_beats(scene_pos.x()) - start)
+            self.view_changed.emit()
+            return
+
+        if self._mode == "draw":
+            anchor = self._anchor.x()
+            left = max(0.0, self._snap_floor_beats(min(anchor, scene_pos.x())))
+            right = max(left + self._cell_beats(), self._snap_ceil_beats(max(anchor, scene_pos.x())))
+            self._grab_note.set_range(left, self._snapshot[self._grab_note][1])
+            self._grab_note.set_duration(right - left)
+            return
+
         if self._mode == "resize":
             start = self._snapshot[self._grab_note][0]
             end = self._snap_beats(scene_pos.x())
@@ -467,9 +585,15 @@ class PianoRollView(QGraphicsView):
             self._rubber.hide()
         self._mode = None
         self._grab_note = None
+        self._trim_edge = ""
         self._snapshot = {}
         self.viewport().unsetCursor()
+        self._update_scene()
         self.view_changed.emit()
+
+    def leaveEvent(self, event) -> None:
+        self.set_hover_pitch(None)
+        super().leaveEvent(event)
 
     def wheelEvent(self, event) -> None:
         delta = event.angleDelta().y()
@@ -481,11 +605,11 @@ class PianoRollView(QGraphicsView):
         elif modifier & Qt.KeyboardModifier.ControlModifier:
             self._zoom(factor, 1.0, anchor)
         elif modifier & Qt.KeyboardModifier.ShiftModifier:
-            hbar = self.horizontalScrollBar()
-            hbar.setValue(hbar.value() - delta)
-        else:
             vbar = self.verticalScrollBar()
             vbar.setValue(vbar.value() - delta)
+        else:
+            hbar = self.horizontalScrollBar()
+            hbar.setValue(hbar.value() - delta)
         event.accept()
 
     def _zoom(self, factor_x: float, factor_y: float, anchor: QPoint) -> None:
@@ -502,6 +626,12 @@ class PianoRollView(QGraphicsView):
 
     def keyPressEvent(self, event) -> None:
         key = event.key()
+        if not self.edit_mode and key in (
+            Qt.Key.Key_Delete,
+            Qt.Key.Key_Backspace,
+            Qt.Key.Key_A,
+        ):
+            return
         if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             selection = self.selected_notes()
             for note in selection:
@@ -602,6 +732,10 @@ class TimelineRuler(QWidget):
 
 
 class PianoKeyboard(QWidget):
+    """The keys at the left of the roll; clicking one auditions that note."""
+
+    key_preview = pyqtSignal(int)
+
     def __init__(self, view: PianoRollView):
         super().__init__()
         self.view = view
@@ -623,6 +757,7 @@ class PianoKeyboard(QWidget):
         painter.setFont(font)
         white = QColor("#d8dde6")
         black = QColor("#15181e")
+        highlighted = set(self.view.highlight_pitches())
 
         for pitch in range(PITCH_MIN, PITCH_MAX + 1):
             row = PITCH_MAX - pitch
@@ -635,6 +770,8 @@ class PianoKeyboard(QWidget):
                 painter.fillRect(QRect(0, top, width, bottom - top), black)
             else:
                 painter.fillRect(QRect(0, top, self.width(), bottom - top), white)
+            if pitch in highlighted:
+                painter.fillRect(QRect(0, top, self.width(), bottom - top), HOVER_KEY)
             if pitch % 12 == 0:
                 painter.setPen(QColor("#454c5a"))
                 painter.drawText(4, (top + bottom) // 2 + 3, note_name(pitch))
@@ -643,6 +780,14 @@ class PianoKeyboard(QWidget):
         for pitch in range(PITCH_MIN, PITCH_MAX + 2):
             y = top_offset + self.view.mapFromScene(QPointF(0.0, float(PITCH_MAX - pitch))).y()
             painter.drawLine(0, y, self.width(), y)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.key_preview.emit(self._pitch_at(event.position().y()))
+
+    def _pitch_at(self, y: float) -> int:
+        scene_y = self.view.mapToScene(QPoint(0, int(y) - self.origin().y())).y()
+        return self.view._pitch_at(scene_y)
 
     def wheelEvent(self, event) -> None:
         vbar = self.view.verticalScrollBar()

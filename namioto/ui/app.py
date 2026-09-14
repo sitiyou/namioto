@@ -7,20 +7,25 @@ import argparse
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QPalette
 from PyQt6.QtWidgets import (
     QApplication,
     QGridLayout,
+    QLabel,
     QMainWindow,
     QWidget,
 )
 
+from namioto.beats import BeatTempo, estimate
+from namioto.playback import note_frequency
 from namioto.spectrum import CHANNEL_MODES, NoteSpectrum
-from namioto.tempo import TempoEstimate, estimate
+from namioto.ui.audio import open_player
 from namioto.ui.controls import EditBar, MixBar, TransportBar
-from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler
+from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler, note_name
 from namioto.ui.spectrogram import SpectrumLoader
+
+POSITION_INTERVAL_MS = 40
 
 STYLE_SHEET = """
 QMainWindow, QToolBar, QStatusBar { background: #191c23; }
@@ -49,6 +54,7 @@ QComboBox, QSpinBox, QDoubleSpinBox { background: #1c2129; color: #cfd6e4;
 QComboBox QAbstractItemView { background: #262b34; color: #cfd6e4;
                               selection-background-color: #1f3a5c; }
 QStatusBar::item { border: 0; }
+QLabel#cursorNote { color: #cfd6e4; }
 QScrollBar:horizontal, QScrollBar:vertical { background: #191c23; border: 0; }
 QScrollBar:horizontal { height: 11px; }
 QScrollBar:vertical { width: 11px; }
@@ -112,6 +118,11 @@ class MainWindow(QMainWindow):
         self.view = PianoRollView()
         self.ruler = TimelineRuler(self.view)
         self.keyboard = PianoKeyboard(self.view)
+        self.player, self.player_name = open_player(self)
+        self.player.gain = 0.8
+        self.position_timer = QTimer(self)
+        self.position_timer.setInterval(POSITION_INTERVAL_MS)
+        self.position_timer.timeout.connect(self._show_position)
 
         corner = QWidget()
         corner.setFixedSize(self.keyboard.width(), self.ruler.height())
@@ -132,6 +143,7 @@ class MainWindow(QMainWindow):
 
         self.transport = TransportBar(self)
         self.edit = EditBar(SNAP_CHOICES, self)
+        self.view.edit_mode = self.edit.mode.isChecked()
         self.mix = MixBar(self)
         self.addToolBar(self.transport)
         self.addToolBarBreak()
@@ -147,11 +159,23 @@ class MainWindow(QMainWindow):
         self.view.snap = self.edit.snap.currentData()
         self.edit.clear_requested.connect(self.view.clear_notes)
         self.edit.tool_changed.connect(self._on_tool_changed)
+        self.edit.mode_changed.connect(self._on_mode_changed)
         self.edit.division_changed.connect(self._on_division_changed)
         self.transport.bpm.valueChanged.connect(self._on_bpm_changed)
         self.transport.detect.clicked.connect(self._start_tempo)
         self.transport.tempo.applied.connect(self._apply_tempo)
         self.transport.tempo.dismissed.connect(self.transport.tempo.hide)
+        self.transport.rewind_requested.connect(lambda: self._seek(0.0))
+        self.transport.forward_requested.connect(lambda: self._seek(self.player.duration))
+        self.transport.play_requested.connect(self._play)
+        self.transport.pause_requested.connect(self._pause)
+        self.transport.stop_requested.connect(self._stop)
+        self.player.finished.connect(self._on_playback_finished)
+        self.view.hover_changed.connect(self._on_hover_changed)
+        self.view.note_preview.connect(self._on_note_preview)
+        self.keyboard.key_preview.connect(self._on_note_preview)
+        self.mix.midi_volume.value_changed.connect(self._on_midi_volume)
+        self.mix.midi_volume.slider.setToolTip(f"Volume of the note playback through {self.player_name}")
         self.mix.gain.value_changed.connect(self._on_spectrum_parameters)
         self.mix.contrast.value_changed.connect(self._on_spectrum_parameters)
         self.view.gain = self.mix.gain.value()
@@ -159,6 +183,9 @@ class MainWindow(QMainWindow):
         self.view.bpm = self.transport.bpm.value()
 
         self.view.notes_changed.connect(self._update_status)
+        self.cursor_note = QLabel()
+        self.cursor_note.setObjectName("cursorNote")
+        self.statusBar().addPermanentWidget(self.cursor_note)
         if audio is None:
             self._show_hint()
         else:
@@ -186,13 +213,11 @@ class MainWindow(QMainWindow):
         self.tempo_loader.failed.connect(self._on_tempo_failed)
         self.tempo_loader.start()
 
-    def _on_tempo_loaded(self, result: TempoEstimate) -> None:
+    def _on_tempo_loaded(self, result: BeatTempo) -> None:
         self.transport.detect.setEnabled(True)
-        windows = len(result.local)
-        if not windows:
+        if not result.local:
             return
-        agreement = sum(local.bpm == result.bpm for local in result.local) / windows
-        self.transport.tempo.estimate(result.bpm, agreement, windows)
+        self.transport.tempo.estimate(result.bpm, result.agreement, len(result.local), result.residual)
 
     def _on_tempo_failed(self, message: str) -> None:
         self.transport.detect.setEnabled(self.audio_path is not None)
@@ -203,14 +228,71 @@ class MainWindow(QMainWindow):
         self.transport.bpm.setValue(bpm)
         self.statusBar().showMessage(f"Tempo set to {bpm:.0f} BPM from the audio")
 
+    def _play(self) -> None:
+        """Hand the notes to the player, then play from where the cursor sits."""
+        if not self.view.notes():
+            self.statusBar().showMessage("Nothing to play: draw some notes first")
+            return
+        beats = 60.0 / self.view.bpm  # scene units are beats, the player works in seconds
+        notes = tuple((note.pitch, note.start * beats, note.duration * beats) for note in self.view.notes())
+        self.player.set_program(notes, self.transport.speed.value())
+        position = self.player.position
+        self.player.play(0.0 if position >= self.player.duration - 1e-3 else position)
+        self._show_position()
+        if self.player.is_playing:
+            self.position_timer.start()
+        else:
+            self.statusBar().showMessage(f"{self.player_name} did not accept the notes")
+
+    def _pause(self) -> None:
+        self.position_timer.stop()
+        self.player.pause()
+        self._show_position()
+
+    def _stop(self) -> None:
+        self.position_timer.stop()
+        self.player.stop()
+        self._show_position()
+
+    def _seek(self, seconds: float) -> None:
+        self.player.seek(seconds)
+        self._show_position()
+
+    def _show_position(self) -> None:
+        seconds = self.player.position + self.transport.latency.value() / 1000.0
+        self.transport.set_position(seconds)
+        self.view.set_playhead(seconds)
+
+    def _on_playback_finished(self) -> None:
+        self.position_timer.stop()
+        self._show_position()
+
+    def _on_midi_volume(self, value: float) -> None:
+        self.player.gain = value / 100.0
+
+    def _on_note_preview(self, pitch: int) -> None:
+        """Audition a note the user clicked or drew."""
+        self.player.preview(pitch)
+
+    def _on_hover_changed(self, pitch: int | None) -> None:
+        if pitch is None:
+            self.cursor_note.clear()
+            return
+        self.cursor_note.setText(f"{note_name(pitch)}   {note_frequency(pitch):.2f} Hz")
+
     def _show_hint(self) -> None:
         self.statusBar().showMessage(
             "pen: drag an empty row to draw  |  select: drag a box, ctrl-click to add  |  "
-            "right click: delete  |  middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y"
+            "shift drag a note: trim its start (left half) or end (right half)  |  right click: delete  |  "
+            "middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y"
         )
 
     def _on_tool_changed(self, tool: str) -> None:
-        self.view.tool = tool
+        self.view.tool = tool or None
+
+    def _on_mode_changed(self, editing: bool) -> None:
+        self.view.edit_mode = editing
+        self.view.refresh()
 
     def _on_division_changed(self, division: str) -> None:
         self.view.division = division

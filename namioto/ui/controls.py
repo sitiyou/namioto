@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QIcon, QPainter, QPen, QPixmap, QPolygonF
+from PyQt6.QtGui import QAction, QColor, QFont, QIcon, QPainter, QPen, QPixmap, QPolygonF
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QSizePolicy,
     QSlider,
     QSpinBox,
@@ -63,6 +64,16 @@ def _icon(kind: str) -> QIcon:
     elif kind == "pen":
         shape([(0.82, 0.31), (0.69, 0.18), (0.22, 0.65), (0.35, 0.78)])
         shape([(0.35, 0.78), (0.22, 0.65), (0.14, 0.86)])
+    elif kind == "edit":
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.setPen(QPen(QColor(ICON_COLOR), 0.09 * size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+        painter.drawRect(QRectF(0.13 * size, 0.13 * size, 0.74 * size, 0.74 * size))
+        painter.drawLine(QPointF(0.50 * size, 0.13 * size), QPointF(0.50 * size, 0.87 * size))
+        painter.drawLine(QPointF(0.13 * size, 0.50 * size), QPointF(0.87 * size, 0.50 * size))
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(QColor(ICON_COLOR))
+        box(0.52, 0.38, 0.30, 0.10)  # two notes on the grid
+        box(0.18, 0.54, 0.30, 0.10)
     elif kind == "select":
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(QPen(QColor(ICON_COLOR), 0.10 * size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
@@ -246,16 +257,76 @@ class TempoSuggestion(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.hide()
 
-    def estimate(self, bpm: float, agreement: float, windows: int) -> None:
+    def estimate(self, bpm: float, agreement: float, windows: int, residual: float) -> None:
         """Show `bpm` as a candidate, dimmed while few of the analysed windows agree on it."""
         self._bpm = bpm
         self.label.setText(f"≈{bpm:.0f} BPM")
         self.label.setStyleSheet(f"color: {SUGGESTION_COLOR if agreement >= WEAK_AGREEMENT else WEAK_COLOR}")
         self.setToolTip(
-            f"TempoCNN estimate over {windows} windows of 12 s: {agreement:.0%} of them agree.\n"
+            f"Beat tracking + least-squares fit over {windows} windows of 12 s: "
+            f"{agreement:.0%} of them agree.\nBeat fit residual {1000 * residual:.0f} ms.\n"
             "Nothing changes until you click the tick."
         )
         self.show()
+
+
+class _SelectAll:
+    """A spin box that selects its text when it is picked up, so typing replaces it."""
+
+    def focusInEvent(self, event) -> None:
+        super().focusInEvent(event)
+        self.selectAll()
+
+    def mousePressEvent(self, event) -> None:
+        super().mousePressEvent(event)
+        self.selectAll()
+
+
+class TempoBox(_SelectAll, QDoubleSpinBox):
+    """BPM, with a decimal only when the tempo has one.
+
+    Doubling and halving live in the context menu and on `*` and `/` rather than on two more
+    buttons, which would crowd the transport bar.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.double_action = QAction("Double tempo  (*)", self)
+        self.half_action = QAction("Halve tempo  (/)", self)
+        self.double_action.triggered.connect(lambda: self.scale(2.0))
+        self.half_action.triggered.connect(lambda: self.scale(0.5))
+        self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_menu)
+
+    def textFromValue(self, value: float) -> str:
+        return f"{value:.1f}".rstrip("0").rstrip(".")
+
+    def scale(self, factor: float) -> None:
+        self.setValue(self.value() * factor)
+
+    def context_menu(self) -> QMenu:
+        menu = QMenu(self)
+        menu.addAction(self.double_action)
+        menu.addAction(self.half_action)
+        self.double_action.setEnabled(self.value() * 2.0 <= self.maximum())
+        self.half_action.setEnabled(self.value() / 2.0 >= self.minimum())
+        return menu
+
+    def keyPressEvent(self, event) -> None:
+        if event.key() in (Qt.Key.Key_Asterisk, Qt.Key.Key_multiply):
+            self.scale(2.0)
+            return
+        if event.key() == Qt.Key.Key_Slash:
+            self.scale(0.5)
+            return
+        super().keyPressEvent(event)
+
+    def _show_menu(self, position) -> None:
+        self.context_menu().exec(self.mapToGlobal(position))
+
+
+class LatencyBox(_SelectAll, QSpinBox):
+    """Milliseconds; the unit is a label beside the field, the way WaveTone shows it."""
 
 
 class TransportBar(QToolBar):
@@ -291,11 +362,13 @@ class TransportBar(QToolBar):
         self.speed_reset = text_button("1.0", "Reset the playback speed to 1.00x", width=40)
         self.speed_reset.clicked.connect(lambda: self.speed.set_value(1.0))
 
-        self.bpm = QDoubleSpinBox()
+        self.bpm = TempoBox()
         self.bpm.setRange(20.0, 300.0)
         self.bpm.setDecimals(1)
         self.bpm.setValue(120.0)
-        self.bpm.setToolTip("Tempo of the beat grid in BPM, until a tempo map is analysed")
+        self.bpm.setToolTip(
+            "Tempo of the beat grid in BPM, until a tempo map is analysed\nRight-click to double or halve it"
+        )
         self.bpm.setFixedWidth(78)
         self.bpm.setFixedHeight(FIELD_HEIGHT)
         self.bpm.setKeyboardTracking(False)
@@ -304,10 +377,9 @@ class TransportBar(QToolBar):
         self.detect.setEnabled(False)
         self.tempo = TempoSuggestion()
 
-        self.latency = QSpinBox()
+        self.latency = LatencyBox()
         self.latency.setRange(-500, 500)
         self.latency.setValue(0)
-        self.latency.setSuffix(" ms")
         self.latency.setToolTip("Global offset between audio playback and the displayed waveform")
         self.latency.setFixedWidth(74)
         self.latency.setFixedHeight(FIELD_HEIGHT)
@@ -329,6 +401,7 @@ class TransportBar(QToolBar):
 
         latency = Cluster("Latency")
         latency.add(self.latency, row=0)
+        latency.add(field_label("ms"), row=0)
 
         for cluster in (playback, speed, tempo, latency):
             self.addWidget(cluster)
@@ -341,11 +414,17 @@ class EditBar(QToolBar):
     """Tools, time-axis division, snapping, and note cleanup."""
 
     tool_changed = pyqtSignal(str)
+    mode_changed = pyqtSignal(bool)
     division_changed = pyqtSignal(str)
     clear_requested = pyqtSignal()
 
     def __init__(self, snap_choices, parent=None):
         super().__init__("Edit", parent)
+        self.mode = icon_button(
+            "edit", "Edit mode: draw, move and select notes (picking a tool turns it on)", checkable=True
+        )
+        self.mode.setChecked(True)
+        self.mode.clicked.connect(self._mode_clicked)
         self.pen = icon_button("pen", "Pen: click or drag an empty row to draw a note", checkable=True)
         self.select = icon_button(
             "select", "Select: drag a box, ctrl-click a note to add, drag a note to move", checkable=True
@@ -355,8 +434,8 @@ class EditBar(QToolBar):
         self.tools.setExclusive(True)
         self.tools.addButton(self.pen)
         self.tools.addButton(self.select)
-        self.pen.clicked.connect(lambda: self.tool_changed.emit("pen"))
-        self.select.clicked.connect(lambda: self.tool_changed.emit("select"))
+        self.pen.clicked.connect(lambda: self._tool_clicked("pen"))
+        self.select.clicked.connect(lambda: self._tool_clicked("select"))
 
         self.snap = QComboBox()
         for label, beats in snap_choices:
@@ -370,6 +449,7 @@ class EditBar(QToolBar):
         self.clear.clicked.connect(self.clear_requested)
 
         tools = Cluster("Tools")
+        tools.add(self.mode, row=0)
         tools.add(self.pen, row=0)
         tools.add(self.select, row=0)
         tools.add(field_label("Snap"), row=0)
@@ -392,6 +472,30 @@ class EditBar(QToolBar):
 
         self.addWidget(tools)
         self.addWidget(division)
+
+    def _mode_clicked(self) -> None:
+        editing = self.mode.isChecked()
+        self._set_mode(editing)
+        if editing:
+            self.pen.setChecked(True)  # entering the mode starts on the pen
+            self.tool_changed.emit("pen")
+        else:
+            self.tools.setExclusive(False)
+            for button in self.tools.buttons():
+                button.setChecked(False)
+            self.tools.setExclusive(True)
+            self.tool_changed.emit("")
+
+    def _tool_clicked(self, tool: str) -> None:
+        if not self.mode.isChecked():
+            self._set_mode(True)
+        self.tool_changed.emit(tool)
+
+    def _set_mode(self, editing: bool) -> None:
+        self.mode.setChecked(editing)
+        self.snap.setEnabled(editing)
+        self.clear.setEnabled(editing)
+        self.mode_changed.emit(editing)
 
 
 class MixBar(QToolBar):

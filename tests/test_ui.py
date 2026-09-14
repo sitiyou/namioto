@@ -4,25 +4,29 @@
 from __future__ import annotations
 
 import os
+import time
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np  # noqa: E402
 import pytest  # noqa: E402
-from PyQt6.QtCore import QPoint, QPointF  # noqa: E402
-from PyQt6.QtGui import QColor, QImage  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
+from PyQt6.QtGui import QColor, QFocusEvent, QImage, QKeyEvent, QMouseEvent, QWheelEvent  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
 
+from namioto.beats import BeatTempo, LocalWindow  # noqa: E402
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum  # noqa: E402
-from namioto.tempo import LocalTempo, TempoEstimate  # noqa: E402
 from namioto.ui.app import STYLE_SHEET, MainWindow, TempoLoader, dark_palette  # noqa: E402
+from namioto.ui.audio import MidiPortOut, MidiSink, find_synth_port  # noqa: E402
 from namioto.ui.controls import WEAK_COLOR, Cluster, ValueSlider  # noqa: E402
 from namioto.ui.roll import (  # noqa: E402
     CONTENT_MARGIN,
     GRID_BAR,
     GRID_BEAT,
     GRID_LINE,
+    HOVER_KEY,
     LENGTH_BEATS,
+    MIN_DURATION,
     NOTE_EDGE_DARK,
     NOTE_EDGE_LIGHT,
     NOTE_FILL,
@@ -31,6 +35,7 @@ from namioto.ui.roll import (  # noqa: E402
     NOTE_SELECTED_EDGE,
     PANEL,
     PITCH_MAX,
+    PLAYHEAD,
     RULER_HEIGHT,
     RULER_TIME_ROW,
     SPECTRUM_BAR,
@@ -77,6 +82,33 @@ def window(qt_app):
     window.close()
 
 
+def roll_mouse(window, kind, scene_pos: QPointF, modifiers=Qt.KeyboardModifier.NoModifier) -> None:
+    """Send a mouse event to the roll at a scene position, as a real click would arrive."""
+    position = window.view.mapFromScene(scene_pos)
+    event = QMouseEvent(
+        kind,
+        QPointF(position),
+        window.view.viewport().mapToGlobal(QPointF(position)),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        modifiers,
+    )
+    if kind == QEvent.Type.MouseButtonPress:
+        window.view.mousePressEvent(event)
+    elif kind == QEvent.Type.MouseMove:
+        window.view.mouseMoveEvent(event)
+    else:
+        window.view.mouseReleaseEvent(event)
+
+
+def draw_note(window, press: QPointF, release: QPointF | None = None) -> None:
+    window.view.centerOn(QPointF((press.x() + (release or press).x()) / 2, press.y()))
+    roll_mouse(window, QEvent.Type.MouseButtonPress, press)
+    if release is not None:
+        roll_mouse(window, QEvent.Type.MouseMove, release)
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, release or press)
+
+
 def clusters(window) -> list[tuple[str, Cluster, int]]:
     found = []
     for bar in (window.transport, window.edit, window.mix):
@@ -120,6 +152,7 @@ def test_tool_buttons_switch_the_roll_mode(window) -> None:
 
 def test_mode_buttons_are_icons_not_text(window) -> None:
     buttons = (
+        window.edit.mode,
         window.edit.pen,
         window.edit.select,
         window.edit.division_beats,
@@ -238,9 +271,71 @@ def test_transport_position_is_a_clock(window) -> None:
     window.transport.set_position(0.0)
 
 
-def fake_estimate(bpm: float = 96.0, windows: int = 10, agree: int = 6) -> TempoEstimate:
-    local = tuple(LocalTempo(i * 6.0, i * 6.0 + 12.0, bpm if i < agree else bpm + 5, 0.4) for i in range(windows))
-    return TempoEstimate(bpm=bpm, local=local)
+def test_the_tempo_hides_a_zero_decimal(window) -> None:
+    for value, text in ((120.0, "120"), (96.4, "96.4"), (100.0, "100"), (97.5, "97.5")):
+        window.transport.bpm.setValue(value)
+        assert window.transport.bpm.text() == text
+    window.transport.bpm.lineEdit().setText("96.4")  # typing still goes in as a value
+    window.transport.bpm.interpretText()
+    assert window.transport.bpm.value() == 96.4
+    window.transport.bpm.setValue(120.0)
+
+
+def test_the_tempo_and_latency_fields_select_their_text(window) -> None:
+    for field in (window.transport.bpm, window.transport.latency):
+        field.focusInEvent(QFocusEvent(QEvent.Type.FocusIn))
+        assert field.lineEdit().selectedText() == field.cleanText() != ""
+        field.lineEdit().deselect()
+        field.mousePressEvent(
+            QMouseEvent(
+                QEvent.Type.MouseButtonPress,
+                QPointF(6.0, 6.0),
+                QPointF(field.mapToGlobal(QPoint(6, 6))),
+                Qt.MouseButton.LeftButton,
+                Qt.MouseButton.LeftButton,
+                Qt.KeyboardModifier.NoModifier,
+            )
+        )
+        assert field.lineEdit().selectedText() == field.cleanText()
+
+
+def test_the_latency_field_shows_its_unit_beside_it(window) -> None:
+    field = window.transport.latency
+    assert field.suffix() == ""
+    unit = next(label for label in window.transport.findChildren(QLabel) if label.text() == "ms")
+    assert unit.x() >= field.x() + field.width()  # the unit is a label behind the field
+    image = field.grab().toImage()
+    lit = [
+        x for x in range(image.width()) if any(image.pixelColor(x, y).lightness() > 120 for y in range(image.height()))
+    ]
+    assert lit and min(lit) < image.width() * 0.25  # the number stays at the left of the field
+
+
+def test_the_tempo_can_be_doubled_and_halved(window) -> None:
+    box = window.transport.bpm
+    box.setValue(120.0)
+    box.double_action.trigger()
+    assert box.value() == 240.0
+    box.half_action.trigger()
+    assert box.value() == 120.0
+    box.setValue(300.0)
+    assert not box.context_menu().actions()[0].isEnabled()  # the range stops the doubling
+    assert box.context_menu().actions()[1].isEnabled()
+    box.setValue(120.0)
+
+    menu = box.context_menu()
+    assert [action.text() for action in menu.actions()] == ["Double tempo  (*)", "Halve tempo  (/)"]
+    assert all(action.isEnabled() for action in menu.actions())
+
+    box.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Asterisk, Qt.KeyboardModifier.NoModifier))
+    assert box.value() == 240.0
+    box.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Slash, Qt.KeyboardModifier.NoModifier))
+    assert box.value() == 120.0
+
+
+def fake_estimate(bpm: float = 96.0, windows: int = 10, agree: int = 6) -> BeatTempo:
+    local = tuple(LocalWindow(i * 6.0, i * 6.0 + 12.0, bpm if i < agree else bpm * 1.2) for i in range(windows))
+    return BeatTempo(bpm=bpm, beats=(0.0, 60.0 / bpm), local=local, residual=0.02)
 
 
 def test_tempo_estimate_is_only_a_suggestion(window) -> None:
@@ -285,6 +380,423 @@ def test_tempo_loader_reports_a_bad_file(window, tmp_path) -> None:
     loader.failed.connect(messages.append)
     loader.run()
     assert len(messages) == 1 and "Error" in messages[0]
+
+
+def test_hover_marks_the_row_and_its_overtones(window) -> None:
+    window.view.clear_notes()
+    window.view.centerOn(QPointF(8.0, float(PITCH_MAX - 65)))  # both G3 and its twelfth in view
+    window.view.set_hover_pitch(55)  # G3
+    assert window.view.highlight_pitches() == [55, 67, 74]  # its octave and its twelfth
+    assert window.cursor_note.text() == "G3   196.00 Hz"
+
+    def row_brightness(pitch: int) -> int:
+        return pixel_at(window.view, window.view.grab().toImage(), 8.0, PITCH_MAX - pitch + 0.5).lightness()
+
+    rows = (54, 55, 67, 74)
+    marked = {pitch: row_brightness(pitch) for pitch in rows}
+    window.view.set_hover_pitch(None)
+    plain = {pitch: row_brightness(pitch) for pitch in rows}
+    assert all(marked[pitch] > plain[pitch] for pitch in (55, 67, 74))
+    assert marked[54] == plain[54]  # the row above stays as it was
+    assert window.cursor_note.text() == ""
+
+
+def test_hover_turns_the_keys_red(window) -> None:
+    window.view.centerOn(QPointF(8.0, float(PITCH_MAX - 65)))
+    window.view.set_hover_pitch(55)
+    marked = window.keyboard.grab().toImage()
+    red = {y for y in range(marked.height()) if marked.pixelColor(2, y) == HOVER_KEY}
+    window.view.set_hover_pitch(None)
+    plain = window.keyboard.grab().toImage()
+    assert red
+    assert not {y for y in range(plain.height()) if plain.pixelColor(2, y) == HOVER_KEY}
+
+
+def test_playhead_is_drawn_at_the_play_position(window) -> None:
+    window.view.set_playhead(2.0)  # 2 s at 120 BPM = 4 beats
+    image = window.view.grab().toImage()
+    row = window.view.viewport().mapTo(window.view, QPoint(0, window.view.viewport().height() // 2)).y()
+    marks = [x for x in range(image.width()) if image.pixelColor(x, row) == PLAYHEAD]
+    window.view.set_playhead(None)
+    assert marks
+    assert min(abs(x - device_point(window.view, 4.0, 0.0).x()) for x in marks) <= 1
+
+
+class FakeOutput:
+    """Stands in for a playback backend, so the transport can be tested without sound."""
+
+    def __init__(self) -> None:
+        self.gain = 1.0
+        self.duration = 0.0
+        self.position = 0.0
+        self.is_playing = False
+        self.calls: list[str] = []
+        self.programs: list[tuple] = []
+        self.previews: list[int] = []
+
+    def set_program(self, notes, speed) -> None:
+        self.programs.append((tuple(notes), speed))
+        self.duration = max((start + duration for _pitch, start, duration in notes), default=0.0) + 0.5
+        self.calls.append("set_program")
+
+    def preview(self, pitch: int, seconds: float = 0.6) -> None:
+        self.previews.append(pitch)
+
+    def play(self, seconds: float = 0.0) -> None:
+        self.position = seconds
+        self.is_playing = True
+        self.calls.append("play")
+
+    def pause(self) -> None:
+        self.is_playing = False
+        self.calls.append("pause")
+
+    def stop(self) -> None:
+        self.is_playing = False
+        self.position = 0.0
+        self.calls.append("stop")
+
+    def seek(self, seconds: float) -> None:
+        self.position = seconds
+        self.calls.append("seek")
+
+
+def test_transport_buttons_drive_the_player(window, monkeypatch) -> None:
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    window.view.clear_notes()
+    window.view.add_note(69, 0.0, 1.0)
+
+    window.transport.play.click()
+    assert fake.calls == ["set_program", "play"] and fake.is_playing
+    assert fake.programs == [(((69, 0.0, 0.5),), 1.0)]  # one beat at 120 BPM, handed over in seconds
+    assert window.view.playhead is not None
+
+    window.transport.pause.click()
+    assert not fake.is_playing
+    window.transport.forward.click()
+    assert fake.position == pytest.approx(fake.duration)
+    window.transport.rewind.click()
+    assert fake.position == 0.0
+    window.transport.stop.click()
+    assert not fake.is_playing and fake.position == 0.0
+
+    window.view.set_playhead(None)
+    window.view.clear_notes()
+
+
+def test_clicking_a_key_previews_the_pitch_under_it(window, monkeypatch) -> None:
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    keyboard = window.keyboard
+    for y in (keyboard.height() // 4, keyboard.height() // 2, keyboard.height() * 3 // 4):
+        event = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(20.0, float(y)),
+            keyboard.mapToGlobal(QPointF(20.0, float(y))),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        window.keyboard.mousePressEvent(event)
+    assert len(fake.previews) == 3
+    assert fake.previews == sorted(fake.previews, reverse=True)  # lower on screen is a lower note
+
+
+def test_clicking_a_note_previews_it(window, monkeypatch) -> None:
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    window.view.clear_notes()
+    window.view.add_note(69, 2.0, 1.0)
+    window.view.centerOn(QPointF(2.5, float(PITCH_MAX - 69) + 0.5))
+    position = window.view.mapFromScene(QPointF(2.5, float(PITCH_MAX - 69) + 0.5))
+    event = QMouseEvent(
+        QEvent.Type.MouseButtonPress,
+        QPointF(position),
+        window.view.viewport().mapToGlobal(QPointF(position)),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    window.view.mousePressEvent(event)
+    assert fake.previews == [69]
+    window.view.mouseReleaseEvent(event)
+    window.view.clear_notes()
+
+
+def test_drawing_a_note_covers_the_cells_it_passed_through(window, monkeypatch) -> None:
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    window.view.clear_notes()
+    row = float(PITCH_MAX - 69) + 0.5
+    press = QPointF(8.3, row)  # a third of the way into the cell that starts at 8.0
+    draw_note(window, press, QPointF(9.6, row))
+    notes = window.view.notes()
+    assert len(notes) == 1
+    note = notes[0]
+    assert (note.pitch, note.start, note.end) == (69, 8.0, 10.0)
+    assert note.start <= press.x() <= note.end  # the note is where the click was
+    assert fake.previews == [69]
+    window.view.clear_notes()
+
+
+def test_dragging_left_draws_the_note_to_the_left(window) -> None:
+    window.view.clear_notes()
+    row = float(PITCH_MAX - 69) + 0.5
+    draw_note(window, QPointF(9.4, row), QPointF(7.6, row))
+    note = window.view.notes()[0]
+    assert (note.start, note.end) == (7.5, 9.5)
+    window.view.clear_notes()
+
+
+def test_a_click_without_a_drag_draws_one_snap_cell(window) -> None:
+    row = float(PITCH_MAX - 69) + 0.5
+    for with_move in (False, True):  # Qt hands out move events even when the mouse barely moved
+        window.view.clear_notes()
+        press = QPointF(8.3, row)
+        draw_note(window, press, press if with_move else None)
+        note = window.view.notes()[0]
+        assert (note.start, note.end) == (8.0, 8.5)
+    window.view.clear_notes()
+
+
+def test_shift_dragging_a_note_moves_the_edge_that_was_grabbed(window) -> None:
+    window.view.clear_notes()
+    note = window.view.add_note(69, 2.0, 2.0)  # spans 2.0 to 4.0, so it is split at 3.0
+    row = float(PITCH_MAX - 69) + 0.5
+    start = Qt.KeyboardModifier.ShiftModifier
+
+    window.view.centerOn(QPointF(3.0, row))
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(2.5, row), start)  # left half
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(1.6, row), start)
+    assert (note.start, note.end) == (1.5, 4.0)  # the start moved, the end stayed
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(1.6, row), start)
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(3.5, row), start)  # right half
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(4.9, row), start)
+    assert (note.start, note.end) == (1.5, 5.0)  # the end moved, the start stayed
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(4.9, row), start)
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(2.9, row), start)
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(9.0, row), start)  # drag the start past the end
+    assert note.duration == pytest.approx(MIN_DURATION)
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(9.0, row), start)
+    window.view.clear_notes()
+
+
+def test_ctrl_click_is_what_adds_to_the_selection(window) -> None:
+    window.view.clear_notes()
+    first = window.view.add_note(69, 2.0, 1.0)
+    second = window.view.add_note(72, 4.0, 1.0)
+    first_row = float(PITCH_MAX - 69) + 0.5
+    second_row = float(PITCH_MAX - 72) + 0.5
+    window.view.centerOn(QPointF(4.0, first_row))
+    for scene_pos, modifiers in (
+        (QPointF(2.5, first_row), Qt.KeyboardModifier.NoModifier),
+        (QPointF(4.5, second_row), Qt.KeyboardModifier.ControlModifier),
+    ):
+        roll_mouse(window, QEvent.Type.MouseButtonPress, scene_pos, modifiers)
+        roll_mouse(window, QEvent.Type.MouseButtonRelease, scene_pos, modifiers)
+    assert first.isSelected() and second.isSelected()
+    window.view.clear_notes()
+
+
+def roll_wheel(window, delta: int, modifiers=Qt.KeyboardModifier.NoModifier) -> None:
+    view = window.view
+    position = QPointF(view.viewport().rect().center())
+    event = QWheelEvent(
+        position,
+        QPointF(view.viewport().mapToGlobal(QPointF(position).toPoint())),
+        QPoint(0, 0),
+        QPoint(0, delta),
+        Qt.MouseButton.NoButton,
+        modifiers,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    view.wheelEvent(event)
+
+
+def test_the_wheel_scrolls_the_timeline_and_shift_the_pitches(window) -> None:
+    window.view.horizontalScrollBar().setValue(200)
+    window.view.verticalScrollBar().setValue(200)
+    horizontal = window.view.horizontalScrollBar().value()
+    vertical = window.view.verticalScrollBar().value()
+
+    roll_wheel(window, -120)
+    assert window.view.horizontalScrollBar().value() == horizontal + 120
+    assert window.view.verticalScrollBar().value() == vertical
+
+    roll_wheel(window, -120, Qt.KeyboardModifier.ShiftModifier)
+    assert window.view.horizontalScrollBar().value() == horizontal + 120
+    assert window.view.verticalScrollBar().value() == vertical + 120
+
+
+def test_the_roll_only_edits_in_edit_mode(window) -> None:
+    row = float(PITCH_MAX - 69) + 0.5
+    window.view.clear_notes()
+    note = window.view.add_note(69, 8.0, 1.0)
+    note.setSelected(True)
+
+    window.edit.mode.click()  # leaving edit mode
+    assert not window.view.edit_mode
+    assert window.view.tool is None
+    assert not window.edit.snap.isEnabled() and not window.edit.clear.isEnabled()
+
+    draw_note(window, QPointF(8.3, row), QPointF(9.6, row))
+    assert [n.pitch for n in window.view.notes()] == [69]  # the pen drew nothing
+    window.view.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier))
+    assert len(window.view.notes()) == 1  # and delete did nothing either
+    window.view.set_hover_pitch(69)
+    assert window.view.highlight_pitches() == []  # no row highlight outside edit mode
+    window.view.set_hover_pitch(None)
+
+    window.edit.mode.click()  # back in
+    assert window.view.edit_mode and window.view.tool == "pen"
+    assert window.edit.snap.isEnabled() and window.edit.clear.isEnabled()
+    draw_note(window, QPointF(12.3, row), QPointF(13.6, row))  # elsewhere: the first row is taken
+    assert len(window.view.notes()) == 2
+    window.view.clear_notes()
+
+
+def test_picking_a_tool_turns_on_edit_mode(window) -> None:
+    window.edit.mode.click()
+    assert not window.view.edit_mode
+    window.edit.select.click()
+    assert window.view.edit_mode and window.edit.mode.isChecked() and window.view.tool == "select"
+    window.edit.mode.click()
+    window.edit.mode.click()  # entering the mode always lands on the pen
+    assert window.view.tool == "pen" and window.edit.pen.isChecked()
+
+
+def test_playing_an_empty_roll_says_so(window) -> None:
+    window.view.clear_notes()
+    window.transport.play.click()
+    assert not window.player.is_playing
+    assert "Nothing to play" in window.statusBar().currentMessage()
+
+
+def test_changing_the_tempo_keeps_the_audio_at_the_same_size_on_screen(window) -> None:
+    window.view.clear_notes()
+    note = window.view.add_note(69, 4.0, 2.0)
+    window.view.centerOn(QPointF(20.0, 0.5))
+    before = window.view.mapFromScene(QPointF(note.start, 0.0)).x()
+    per_second = window.view.pixels_per_second()
+    window.view.bpm = 93.0
+    assert window.view.mapFromScene(QPointF(note.start, 0.0)).x() == before  # nothing moves
+    assert window.view.pixels_per_second() == pytest.approx(per_second)
+    window.view.bpm = 120.0
+    window.view.clear_notes()
+
+
+def test_changing_the_tempo_keeps_the_notes_where_they_are_in_time(window) -> None:
+    window.view.clear_notes()
+    note = window.view.add_note(69, 4.0, 2.0)  # at 120 BPM: 2 s in, 1 s long
+    window.view.bpm = 60.0  # the grid halves, the note does not move in the audio
+    assert (note.start, note.duration) == pytest.approx((2.0, 1.0))
+    window.view.bpm = 93.0  # and it survives a tempo that does not divide the old one
+    assert note.start * 60.0 / 93.0 == pytest.approx(2.0)
+    assert note.duration * 60.0 / 93.0 == pytest.approx(1.0)
+    window.view.bpm = 120.0
+    assert (note.start, note.duration) == pytest.approx((4.0, 2.0))
+    window.view.clear_notes()
+
+
+def test_note_times_follow_the_tempo(window, monkeypatch) -> None:
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    window.view.clear_notes()
+    window.view.add_note(69, 0.0, 2.0)  # two beats, one second at 120 BPM
+    window.view.bpm = 60.0  # one beat per second now, so it is one beat and still one second
+    window.transport.play.click()
+    assert fake.duration == pytest.approx(1.5)  # one second plus the release tail
+    window.transport.stop.click()
+    window.view.bpm = 120.0
+    window.view.clear_notes()
+
+
+def test_midi_volume_scales_the_output(window) -> None:
+    window.mix.midi_volume.set_value(40.0)
+    assert window.player.gain == pytest.approx(0.4)
+    window.mix.midi_volume.set_value(80.0)
+
+
+def test_midi_sink_keeps_the_position_without_playing() -> None:
+    sink = MidiSink()
+    sink.set_program([(69, 0.0, 1.0)], 1.0)
+    assert sink.duration == pytest.approx(1.5)  # the note plus its release tail
+    assert sink.position == 0.0 and not sink.is_playing
+    sink.seek(0.75)
+    assert sink.position == pytest.approx(0.75)
+    sink.stop()
+    assert sink.position == 0.0
+    sink.set_program([(69, 0.0, 1.0)], 2.0)  # at double speed the mix is half as long
+    assert len(sink.mix) == round(0.75 * 44100)
+    assert sink.duration == pytest.approx(1.5)  # the timeline itself does not change
+
+
+def test_a_synth_port_is_preferred_over_the_loopback() -> None:
+    loopback = "Midi Through:Midi Through Port-0 14:0"
+    assert find_synth_port([]) is None
+    assert find_synth_port([loopback]) is None
+    assert find_synth_port([loopback, "TiMidity:TiMidity port 0 129:0"]) == 1
+    assert find_synth_port(["Midi Through:Midi Through Port-0 14:0", "FLUID Synth (qsynth)"]) == 1
+
+
+class FakePort:
+    def __init__(self) -> None:
+        self.messages: list[list[int]] = []
+        self.times: list[float] = []
+
+    def send_message(self, message) -> None:
+        self.messages.append(list(message))
+        self.times.append(time.monotonic())
+
+
+def test_the_port_player_schedules_notes_and_silences_them_on_stop() -> None:
+    port = FakePort()
+    player = MidiPortOut(port)
+    player.set_program([(69, 0.0, 1.0), (76, 0.5, 1.0)], 1.0)
+    assert port.messages[0] == [0xC0, 0x00]  # the synth is asked for its piano first
+    assert player.duration == pytest.approx(1.5)
+
+    player.play()
+    assert player.is_playing
+    time.sleep(0.15)
+    assert [0x90, 69, 100] in port.messages  # the first note is on
+    assert [0x80, 69, 0] not in port.messages  # and not yet off
+
+    player.stop()
+    assert not player.is_playing
+    assert [0x80, 69, 0] in port.messages  # stopping silences what was sounding
+
+
+def test_the_port_player_reports_when_the_notes_are_done() -> None:
+    def app_events() -> None:
+        QApplication.instance().processEvents()
+
+    player = MidiPortOut(FakePort())
+    player.set_program([(69, 0.0, 0.1)], 1.0)
+    done: list[bool] = []
+    player.finished.connect(lambda: done.append(True))
+    player.play()
+    for _ in range(100):
+        if done:
+            break
+        app_events()
+        time.sleep(0.02)
+    assert done
+    assert not player.is_playing
+    assert player.position == pytest.approx(player.duration)
+
+
+def test_a_preview_plays_the_note_and_releases_it() -> None:
+    port = FakePort()
+    player = MidiPortOut(port)
+    player.preview(72, seconds=0.05)
+    assert port.messages == [[0x90, 72, 100]]
+    time.sleep(0.15)
+    assert [0x80, 72, 0] in port.messages
 
 
 def make_spectrum(frames: int = 4, value: float = 1.0) -> NoteSpectrum:
