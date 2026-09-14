@@ -10,7 +10,7 @@ import pytest
 from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
 from PyQt6.QtGui import QColor, QFocusEvent, QImage, QKeyEvent, QMouseEvent, QWheelEvent
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QLabel
+from PyQt6.QtWidgets import QApplication, QLabel, QSlider
 
 from namioto.beats import BeatTempo, LocalWindow
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
@@ -553,15 +553,17 @@ class FakeSong:
 
     def __init__(self, duration: float = 30.0) -> None:
         self.gain = 1.0
-        self.speed = 1.0
+        self.samples = np.zeros(0, dtype=np.float32)  # nothing to rerender, so no stretch thread starts
+        self.stretch = 1.0
         self.is_loaded = True
         self.duration = duration
         self.position = 0.0
         self.is_playing = False
         self.calls: list[str] = []
 
-    def set_speed(self, speed: float) -> None:
-        self.speed = speed
+    def set_stretched(self, buffer, stretch: float) -> None:
+        self.stretch = stretch
+        self.calls.append("set_stretched")
 
     def play(self, seconds: float = 0.0) -> None:
         self.position = seconds
@@ -580,6 +582,55 @@ class FakeSong:
     def seek(self, seconds: float) -> None:
         self.position = seconds
         self.calls.append("seek")
+
+
+def test_a_speed_change_reaches_the_notes_while_they_play(window, monkeypatch) -> None:
+    song, notes = FakeSong(), FakeOutput()
+    monkeypatch.setattr(window, "song", song)
+    monkeypatch.setattr(window, "player", notes)
+    window.view.clear_notes()
+    window.view.add_note(69, 0.0, 2.0)
+    window.transport.speed.set_value(1.0)
+    song.stretch = 1.0
+    window.transport.play_pause.click()
+    assert notes.is_playing and notes.programs[-1][1] == 1.0
+    song.position = 1.0  # the song is the master clock, and it is a second in
+
+    window.transport.speed.set_value(1.5)
+    window._apply_speed()  # what the settle timer does
+    assert notes.programs[-1][1] == 1.5  # the notes are handed over at the new speed
+    assert notes.is_playing and notes.position == pytest.approx(1.0)  # and carry on from there
+
+    song.position = 1.4
+    window.transport.speed.set_value(0.8)
+    window._apply_speed()
+    assert notes.programs[-1][1] == 0.8 and notes.position == pytest.approx(1.4)
+    assert notes.calls.count("set_program") == 3
+
+    window.transport.speed.set_value(1.0)
+    window._stop()
+    window.view.clear_notes()
+
+
+def test_a_speed_the_song_has_not_been_rendered_at_defers_the_play(window, monkeypatch) -> None:
+    song, notes = FakeSong(), FakeOutput()
+    monkeypatch.setattr(window, "song", song)
+    monkeypatch.setattr(window, "player", notes)
+    rendered: list[bool] = []
+    monkeypatch.setattr(window, "_start_stretch", lambda: rendered.append(True))
+
+    window.transport.speed.set_value(1.5)
+    window.transport.play_pause.click()
+
+    assert rendered == [True] and window.pending_play  # the rerender was asked for
+    assert song.calls == [] and notes.calls == []  # and nothing plays before it lands
+
+    window._on_stretch_loaded(np.zeros(10, dtype=np.float32), 1.5)
+    assert song.calls == ["set_stretched", "play"] and not window.pending_play
+    assert notes.calls == ["set_program", "play"]
+
+    window.transport.speed.set_value(1.0)  # put the slider back for the tests that follow
+    window._stop()
 
 
 def test_the_roll_waits_for_a_pause_before_it_seeks(window, monkeypatch) -> None:
@@ -692,13 +743,13 @@ def test_the_audio_file_plays_alongside_the_notes(window, monkeypatch) -> None:
     window.view.clear_notes()
     window.view.add_note(69, 0.0, 1.0)
     window.transport.speed.set_value(0.5)
+    song.stretch = 0.5  # the song has already been rerendered for this speed
     song.position = 4.0  # the playhead already sits inside the file
 
     window.transport.play_pause.click()
     assert song.calls == ["play"] and song.position == pytest.approx(4.0) and song.is_playing
-    assert song.speed == 0.5  # the speed control steps the audio as well
     assert notes.calls == ["set_program", "play"] and notes.position == pytest.approx(4.0)
-    assert notes.programs[0][1] == 0.5
+    assert notes.programs[0][1] == 0.5  # the note layer takes the same speed
 
     song.position = 6.5
     window._show_position()
@@ -1030,6 +1081,75 @@ def roll_wheel(window, delta: int, modifiers=Qt.KeyboardModifier.NoModifier) -> 
         False,
     )
     view.wheelEvent(event)
+
+
+def slider_wheel(slider, delta: int) -> None:
+    position = QPointF(slider.width() / 2, slider.height() / 2)
+    event = QWheelEvent(
+        position,
+        QPointF(slider.mapToGlobal(position.toPoint())),
+        QPoint(0, 0),
+        QPoint(0, delta),
+        Qt.MouseButton.NoButton,
+        Qt.KeyboardModifier.NoModifier,
+        Qt.ScrollPhase.NoScrollPhase,
+        False,
+    )
+    slider.wheelEvent(event)
+
+
+def test_a_click_on_a_slider_track_lands_where_it_was_aimed(window) -> None:
+    speed = window.transport.speed
+    slider = speed.slider
+
+    speed.set_value(1.0)
+    QTest.mouseClick(slider, Qt.MouseButton.LeftButton, pos=QPoint(slider.width() * 3 // 4, slider.height() // 2))
+    assert speed.value() > 1.5  # near the right end, not one page step (0.20) from where it was
+
+    QTest.mouseClick(slider, Qt.MouseButton.LeftButton, pos=QPoint(slider.width() // 10, slider.height() // 2))
+    assert speed.value() < 0.3  # and near the left end
+    speed.set_value(1.0)
+
+
+def test_the_slider_wheel_walks_the_other_way(window) -> None:
+    speed = window.transport.speed
+    speed.set_value(1.0)
+
+    slider_wheel(speed.slider, 120)  # wheel up
+    assert speed.value() == pytest.approx(0.95)  # turns the value down by one step (5%)
+    slider_wheel(speed.slider, 120)
+    slider_wheel(speed.slider, -120)  # wheel down
+    assert speed.value() == pytest.approx(0.95)
+    slider_wheel(speed.slider, -120)
+    assert speed.value() == pytest.approx(1.0)
+    speed.set_value(1.0)
+
+
+def test_the_speed_slider_lands_on_five_percent_steps(window) -> None:
+    speed = window.transport.speed
+    seen: list[float] = []
+    speed.value_changed.connect(seen.append)
+
+    speed.slider.setValue(153)  # what a drag would hand over
+    assert speed.value() == pytest.approx(1.55) and speed.value_label.text() == "1.55x"
+
+    speed.slider.setValue(41)
+    assert speed.value() == pytest.approx(0.40)
+    speed.slider.triggerAction(QSlider.SliderAction.SliderSingleStepAdd)
+    assert speed.value() == pytest.approx(0.45)
+
+    speed.slider.setValue(0)
+    assert speed.value() == pytest.approx(0.10)  # the slowest it goes
+    speed.set_value(1.0)  # the reset button, on the grid as well
+    assert speed.value() == pytest.approx(1.0)
+    assert seen == [
+        pytest.approx(1.55),
+        pytest.approx(0.40),
+        pytest.approx(0.45),
+        pytest.approx(0.10),
+        pytest.approx(1.0),
+    ]
+    assert all(abs(value * 20 - round(value * 20)) < 1e-9 for value in seen)  # every value is a step
 
 
 def test_the_wheel_scrolls_the_timeline_and_shift_the_pitches(window) -> None:

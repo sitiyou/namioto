@@ -23,10 +23,11 @@ from namioto.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.ui.audio import open_player
 from namioto.ui.controls import EditBar, MixBar, TransportBar
 from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler, note_name
-from namioto.ui.song import SongPlayer, load_song
+from namioto.ui.song import SongPlayer, load_song, stretch_song
 from namioto.ui.spectrogram import SpectrumLoader
 
 POSITION_INTERVAL_MS = 40
+SPEED_SETTLE_MS = 400
 
 STYLE_SHEET = """
 QMainWindow, QToolBar, QStatusBar { background: #191c23; }
@@ -126,6 +127,26 @@ class SongLoader(QThread):
         self.loaded.emit(samples, sample_rate)
 
 
+class StretchLoader(QThread):
+    """Rerenders the song for a playback speed, off the GUI thread: it takes seconds of work."""
+
+    loaded = pyqtSignal(object, float)
+    failed = pyqtSignal(str)
+
+    def __init__(self, samples, speed: float, parent=None):
+        super().__init__(parent)
+        self.samples = samples
+        self.speed = speed
+
+    def run(self) -> None:
+        try:
+            buffer = stretch_song(self.samples, self.speed)
+        except Exception as error:  # a broken stretch must not take the editor down
+            self.failed.emit(f"{type(error).__name__}: {error}")
+            return
+        self.loaded.emit(buffer, self.speed)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, audio: str | None = None, channels: str = "mono", t_num: float = 40.0):
         super().__init__()
@@ -135,6 +156,8 @@ class MainWindow(QMainWindow):
         self.loader: SpectrumLoader | None = None
         self.tempo_loader: TempoLoader | None = None
         self.song_loader: SongLoader | None = None
+        self.stretch_loader: StretchLoader | None = None
+        self.pending_play = False
 
         self.view = PianoRollView()
         self.ruler = TimelineRuler(self.view)
@@ -145,6 +168,10 @@ class MainWindow(QMainWindow):
         self.position_timer = QTimer(self)
         self.position_timer.setInterval(POSITION_INTERVAL_MS)
         self.position_timer.timeout.connect(self._show_position)
+        self.speed_timer = QTimer(self)
+        self.speed_timer.setSingleShot(True)
+        self.speed_timer.setInterval(SPEED_SETTLE_MS)
+        self.speed_timer.timeout.connect(self._apply_speed)
 
         corner = QWidget()
         corner.setFixedSize(self.keyboard.width(), self.ruler.height())
@@ -164,6 +191,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(panel)
 
         self.transport = TransportBar(self)
+        self.transport.speed.slider.valueChanged.connect(self._on_speed_changed)
         self.edit = EditBar(SNAP_CHOICES, self)
         self.view.edit_mode = self.edit.mode.isChecked()
         self.mix = MixBar(self)
@@ -234,7 +262,57 @@ class MainWindow(QMainWindow):
 
     def _on_song_loaded(self, samples, sample_rate: int) -> None:
         self.song.load(samples, sample_rate)
-        self.song.set_speed(self.transport.speed.value())
+        if abs(self.transport.speed.value() - 1.0) > 1e-3:
+            self._start_stretch()
+
+    def _on_speed_changed(self, _value: int = 0) -> None:
+        self.speed_timer.start()  # the slider travels: only the speed it settles on is worth rendering
+
+    def _apply_speed(self) -> None:
+        """Take the settled speed: the notes follow at once, the song once it has been rerendered."""
+        speed = self.transport.speed.value()
+        self._set_note_speed(speed)
+        if self.song.is_loaded and self.song.samples.size:
+            self._start_stretch()
+
+    def _set_note_speed(self, speed: float) -> None:
+        """Hand the notes over at `speed`, carrying on from where they are playing."""
+        beats = 60.0 / self.view.bpm  # scene units are beats, the players work in seconds
+        notes = tuple((note.pitch, note.start * beats, note.duration * beats) for note in self.view.notes())
+        if not notes:
+            return
+        playing = self.player.is_playing
+        position = self._position()
+        self.player.set_program(notes, speed)
+        if playing:
+            self.player.play(position)
+
+    def _start_stretch(self) -> None:
+        if not self.song.is_loaded or self.song.samples.size == 0 or self.stretch_loader is not None:
+            return
+        speed = self.transport.speed.value()
+        if abs(speed - self.song.stretch) < 1e-3:
+            return
+        self.statusBar().showMessage(f"Rerendering the song for {speed:.2f}x playback …")
+        self.stretch_loader = StretchLoader(self.song.samples, speed, parent=self)
+        self.stretch_loader.loaded.connect(self._on_stretch_loaded)
+        self.stretch_loader.failed.connect(
+            lambda message: self.statusBar().showMessage(f"Speed change failed: {message}")
+        )
+        self.stretch_loader.start()
+
+    def _on_stretch_loaded(self, buffer, speed: float) -> None:
+        self.stretch_loader = None
+        if abs(speed - self.transport.speed.value()) > 1e-3:
+            self._start_stretch()  # the slider moved again while this one was rendering
+            return
+        self.song.set_stretched(buffer, speed)
+        self.statusBar().showMessage(f"Playing at {speed:.2f}x, pitch unchanged")
+        if self.pending_play:
+            self.pending_play = False
+            self._play()
+            return
+        self._set_note_speed(speed)  # the notes may still be running at the speed this replaced
 
     def _start_tempo(self) -> None:
         """Estimate the tempo of the loaded audio in the background, as a suggestion only."""
@@ -274,7 +352,10 @@ class MainWindow(QMainWindow):
             seconds = 0.0
         speed = self.transport.speed.value()
         if self.song.is_loaded:
-            self.song.set_speed(speed)
+            if abs(speed - self.song.stretch) > 1e-3:
+                self.pending_play = True  # play once the song has been rerendered for this speed
+                self._start_stretch()
+                return
             self.song.play(seconds)
         self.player.set_program(notes, speed)
         self.player.play(seconds)

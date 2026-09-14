@@ -13,6 +13,7 @@ from namioto.ui.song import (
     SongPlayer,
     _SongSource,
     load_song,
+    stretch_song,
 )
 
 
@@ -25,10 +26,9 @@ def qt_app():
     return app
 
 
-def source_for(samples: np.ndarray, speed: float = 1.0) -> tuple[SongPlayer, _SongSource]:
+def source_for(samples: np.ndarray) -> tuple[SongPlayer, _SongSource]:
     player = SongPlayer()
     player.load(samples, 1000)  # a kilohertz keeps the frame numbers readable
-    player.set_speed(speed)
     return player, _SongSource(player)
 
 
@@ -71,37 +71,60 @@ def test_the_source_serves_the_song_in_order() -> None:
     assert source.cursor == 12.0
 
 
-def test_the_source_steps_faster_than_one_frame_at_a_time() -> None:
-    player, source = source_for(np.arange(1000, dtype=np.float32) / 1000.0, speed=2.0)
+def test_stretching_keeps_the_pitch_where_it_was() -> None:
+    rate = 44100
+    time = np.arange(rate) / rate
+    tone = (0.5 * np.sin(2 * np.pi * 440 * time)).astype(np.float32)
 
-    assert read(source, 4) == pytest.approx([0.0, 0.002, 0.004, 0.006], abs=1e-4)
-    assert source.cursor == 8.0
-    assert source.bytesAvailable() == 992  # 496 output frames left, two bytes each
-    assert player.duration == pytest.approx(1.0)  # the song is still one second long
+    def peak(samples: np.ndarray) -> float:
+        spectrum = np.abs(np.fft.rfft(samples * np.hanning(len(samples))))
+        return float(np.fft.rfftfreq(len(samples), 1 / rate)[spectrum.argmax()])
 
+    for speed in (0.8, 1.25, 2.0):
+        stretched = stretch_song(tone, speed)
+        assert len(stretched) / rate == pytest.approx(1.0 / speed, rel=0.01)  # the tempo moved
+        assert peak(stretched) == pytest.approx(440, abs=1)  # the pitch did not
 
-def test_the_source_interpolates_between_frames_when_slower() -> None:
-    _player, source = source_for(np.array([0.0, 1.0, 0.0, 0.0], dtype=np.float32), speed=0.5)
-
-    assert read(source, 4) == pytest.approx([0.0, 0.5, 1.0, 0.5], abs=1e-4)
-
-
-def test_the_source_runs_out_at_the_end_of_the_song() -> None:
-    _player, source = source_for(np.zeros(10, dtype=np.float32))
-
-    assert len(source.readData(40)) == 20  # ten frames, then nothing
-    assert source.readData(20) == b""
-    assert source.bytesAvailable() == 0
+    assert np.array_equal(stretch_song(tone, 1.0), tone)  # 1x is handed back untouched
 
 
-def test_speed_changes_restart_the_stream_from_the_playhead(monkeypatch) -> None:
+def test_the_source_serves_the_rerendered_song() -> None:
+    buffer = np.arange(1000, dtype=np.float32) / 1000.0
     player = SongPlayer()
-    player.load(np.zeros(1000, dtype=np.float32), 1000)
+    player.load(np.zeros(500, dtype=np.float32), 1000)  # a half second song
+    player.set_stretched(buffer, 2.0)  # rerendered at twice the speed, so it is half as long again
+    _source = _SongSource(player)
+
+    assert read(_source, 8) == pytest.approx([0.0, 0.001, 0.002, 0.003, 0.004, 0.005, 0.006, 0.007], abs=1e-4)
+    assert _source.cursor == 8
+    assert player.duration == pytest.approx(0.5)  # the song's own length, not the buffer's
+    assert player.stretch == 2.0
+
+
+def test_a_stretched_song_keeps_the_playhead_in_song_seconds() -> None:
+    player = SongPlayer()
+    player.load(np.zeros(4000, dtype=np.float32), 1000)  # a four second song
+    player.set_stretched(np.zeros(2000, dtype=np.float32), 2.0)  # rerendered at 2x: two seconds long
+
+    player.play(3.0)  # three seconds into the song is one and a half into the buffer
+    assert player._source.cursor == 1500  # noqa: SLF001 - the cursor is what reaches the sink
+    player.pause()
+    assert player.position == pytest.approx(3.0)
+    player.seek(1.0)
+    assert player.position == pytest.approx(1.0)
+    player.stop()
+
+
+def test_handing_over_a_stretched_song_carries_on_from_the_playhead(monkeypatch) -> None:
+    player = SongPlayer()
+    player.load(np.zeros(4000, dtype=np.float32), 1000)
     started: list[float] = []
     monkeypatch.setattr(SongPlayer, "is_playing", property(lambda self: True))
-    monkeypatch.setattr(SongPlayer, "position", property(lambda self: 0.25))
+    monkeypatch.setattr(SongPlayer, "position", property(lambda self: 2.5))
     monkeypatch.setattr(SongPlayer, "play", lambda self, seconds=0.0: started.append(seconds))
 
-    player.set_speed(2.0)
-    player.set_speed(2.0)  # the same step does not touch the stream
-    assert started == [pytest.approx(0.25)] and player.speed == 2.0
+    buffer = np.ones(2000, dtype=np.float32)
+    player.set_stretched(buffer, 2.0)
+    assert started == [pytest.approx(2.5)]  # the song carries on from where it was
+    assert player.stretch == 2.0 and player.buffer is not None
+    assert np.array_equal(player.buffer, buffer)

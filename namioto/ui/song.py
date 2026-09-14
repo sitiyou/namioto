@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Song playback: the decoded audio file streamed to Qt's audio sink.
 
-The buffer stays mono float32 at the file's own sample rate, so seeking is a cursor move and the
-speed control is a fractional step over it: one output frame consumes `speed` frames of the song.
-That keeps the audio and the notes on the same timeline - the sink plays one second of wall clock
-per second, and the song advances `speed` seconds of its own with it.
+The buffer stays mono float32 at the file's own sample rate. Playing it at another speed means
+rerendering it with a phase vocoder (`stretch_song`), because a fractional step over the frames would
+take the pitch up and down with the tempo; the rerendered song is streamed one frame at a time, so a
+second of it is `stretch` seconds of the song and the playhead stays in song seconds.
 """
 
 from __future__ import annotations
@@ -18,6 +18,8 @@ from PyQt6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices, QtAudio
 
 BUFFER_MS = 80
 INT16_PEAK = 32767.0
+STRETCH_N_FFT = 2048
+STRETCH_HOP = 512
 
 
 def load_song(path: str | Path) -> tuple[np.ndarray, int]:
@@ -26,13 +28,29 @@ def load_song(path: str | Path) -> tuple[np.ndarray, int]:
     return np.ascontiguousarray(samples, dtype=np.float32), int(sample_rate)
 
 
+def stretch_song(samples: np.ndarray, speed: float) -> np.ndarray:
+    """Rerender the song for a playback speed with its pitch left where it is.
+
+    The phase vocoder reads the spectrum in frames that advance by `speed` while it writes them out
+    one hop at a time, so the rhythm moves and the frequencies do not. That is a few seconds of work
+    for a whole song, which is why callers run it off the GUI thread.
+    """
+    speed = max(0.01, speed)
+    if abs(speed - 1.0) < 1e-3:
+        return np.ascontiguousarray(samples, dtype=np.float32)
+    spectrum = librosa.stft(np.asarray(samples, dtype=np.float32), n_fft=STRETCH_N_FFT, hop_length=STRETCH_HOP)
+    stretched = librosa.phase_vocoder(spectrum, rate=speed)
+    length = round(len(samples) / speed)
+    return np.ascontiguousarray(librosa.istft(stretched, hop_length=STRETCH_HOP, length=length), dtype=np.float32)
+
+
 class _SongSource(QIODevice):
-    """Serves the song in int16 chunks, taking `speed` song frames per output frame."""
+    """Serves the buffer in int16 chunks."""
 
     def __init__(self, player: SongPlayer):
         super().__init__()
         self._player = player
-        self.cursor = 0.0
+        self.cursor = 0
         self.open(QIODevice.OpenModeFlag.ReadOnly)
 
     def isSequential(self) -> bool:
@@ -42,26 +60,16 @@ class _SongSource(QIODevice):
         return self._frames_left() * 2 + super().bytesAvailable()
 
     def readData(self, maxlen: int) -> bytes:
-        samples = self._player.samples
-        step = self._player.speed
         count = min(maxlen // 2, self._frames_left())
         if count <= 0:
             return b""
-        positions = self.cursor + np.arange(count) * step
-        whole = positions.astype(np.int64)
-        if step == 1.0:
-            chunk = samples[whole]
-        else:
-            fraction = (positions - whole).astype(np.float32)
-            following = samples[np.minimum(whole + 1, len(samples) - 1)]
-            chunk = samples[whole] * (1.0 - fraction) + following * fraction
-        self.cursor = float(positions[-1]) + step
+        chunk = self._player.buffer[self.cursor : self.cursor + count]
+        self.cursor += count
         chunk = np.clip(chunk * self._player.gain, -1.0, 1.0)
         return (chunk * INT16_PEAK).astype(np.int16).tobytes()
 
     def _frames_left(self) -> int:
-        remaining = (len(self._player.samples) - self.cursor) / self._player.speed
-        return max(0, int(remaining))
+        return max(0, len(self._player.buffer) - self.cursor)
 
 
 class SongPlayer(QObject):
@@ -72,8 +80,9 @@ class SongPlayer(QObject):
     def __init__(self, parent=None, buffer_ms: int = BUFFER_MS):
         super().__init__(parent)
         self.gain = 1.0
-        self.speed = 1.0
-        self.samples = np.zeros(0, dtype=np.float32)
+        self.samples = np.zeros(0, dtype=np.float32)  # the song as it was decoded
+        self.buffer = self.samples  # what is streamed: the same song, rerendered for `stretch`
+        self.stretch = 1.0  # how many seconds of song one second of the buffer holds
         self.sample_rate = 0
         self._start = 0.0
         self._sink: QAudioSink | None = None
@@ -83,7 +92,20 @@ class SongPlayer(QObject):
     def load(self, samples: np.ndarray, sample_rate: int) -> None:
         self.stop()
         self.samples = np.ascontiguousarray(samples, dtype=np.float32)
+        self.buffer = self.samples
+        self.stretch = 1.0
         self.sample_rate = int(sample_rate)
+
+    def set_stretched(self, buffer: np.ndarray, stretch: float) -> None:
+        """Take the song rerendered for a speed, carrying on from where the playhead sits."""
+        position = self.position
+        playing = self.is_playing
+        self._close()
+        self.buffer = np.ascontiguousarray(buffer, dtype=np.float32)
+        self.stretch = max(0.01, stretch)
+        self._start = position
+        if playing:
+            self.play(position)
 
     @property
     def is_loaded(self) -> bool:
@@ -91,26 +113,18 @@ class SongPlayer(QObject):
 
     @property
     def duration(self) -> float:
+        """The song's own length, whatever the buffer it is played from holds."""
         return len(self.samples) / self.sample_rate if self.is_loaded else 0.0
 
     @property
     def position(self) -> float:
         if self._sink is None:
             return self._start
-        return min(self.duration, self._start + self._sink.processedUSecs() / 1e6 * self.speed)
+        return min(self.duration, self._start + self._sink.processedUSecs() / 1e6 * self.stretch)
 
     @property
     def is_playing(self) -> bool:
         return self._sink is not None and self._sink.state() == QtAudio.State.ActiveState
-
-    def set_speed(self, speed: float) -> None:
-        """Change the step, carrying on from where the playhead sits."""
-        speed = max(0.01, speed)
-        if speed == self.speed:
-            return
-        self.speed = speed
-        if self.is_playing:
-            self.play(self.position)
 
     def play(self, seconds: float = 0.0) -> None:
         self._close()
@@ -118,7 +132,7 @@ class SongPlayer(QObject):
             return
         self._start = max(0.0, min(seconds, self.duration))
         self._source = _SongSource(self)
-        self._source.cursor = self._start * self.sample_rate
+        self._source.cursor = int(self._start / self.stretch * self.sample_rate)
         self._sink = QAudioSink(QMediaDevices.defaultAudioOutput(), self._format(), self)
         self._sink.setBufferSize(int(self.sample_rate * 2 * self._buffer_ms / 1000))
         self._sink.stateChanged.connect(self._on_state_changed)

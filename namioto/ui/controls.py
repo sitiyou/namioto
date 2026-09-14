@@ -16,6 +16,8 @@ from PyQt6.QtWidgets import (
     QSizePolicy,
     QSlider,
     QSpinBox,
+    QStyle,
+    QStyleOptionSlider,
     QToolBar,
     QToolButton,
     QWidget,
@@ -149,6 +151,52 @@ class Cluster(QWidget):
         return widget
 
 
+class AbsoluteSlider(QSlider):
+    """A slider that jumps to the spot the track was clicked, and turns its wheel the other way up.
+
+    Two deliberate deviations from Qt: a click lands where it was aimed instead of moving a page step,
+    and the wheel walks the value down as it turns up, one notch to the step, which is the direction
+    these controls read in.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Orientation.Horizontal, parent)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self.setSliderDown(True)  # so the rest of the drag behaves like a handle drag
+        self._jump_to(event.position().x())
+
+    def mouseMoveEvent(self, event) -> None:
+        if not self.isSliderDown():
+            super().mouseMoveEvent(event)
+            return
+        self._jump_to(event.position().x())
+
+    def mouseReleaseEvent(self, event) -> None:
+        self.setSliderDown(False)
+        super().mouseReleaseEvent(event)
+
+    def wheelEvent(self, event) -> None:
+        notches = -round(event.angleDelta().y() / 120)
+        if notches:
+            self.setValue(self.value() + notches * self.singleStep())
+        event.accept()
+
+    def _jump_to(self, x: float) -> None:
+        """The value under an x in the widget, the way a handle drag would land on it."""
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        style = self.style()
+        groove = style.subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderGroove, self)
+        handle = style.subControlRect(QStyle.ComplexControl.CC_Slider, option, QStyle.SubControl.SC_SliderHandle, self)
+        span = groove.width() - handle.width()
+        position = round(x - groove.x() - handle.width() / 2)
+        self.setValue(QStyle.sliderValueFromPosition(self.minimum(), self.maximum(), position, span))
+
+
 class ValueSlider(QWidget):
     """A caption, a horizontal slider and the current value."""
 
@@ -162,14 +210,17 @@ class ValueSlider(QWidget):
         value: float,
         suffix: str = "",
         scale: int = 1,
+        step: float = 0.0,
         slider_width: int = 92,
     ):
         super().__init__()
         self._suffix = suffix
         self._scale = scale
+        self._step = max(1, round(step * scale)) if step else 1
         self._decimals = max(0, len(str(scale)) - 1)
-        self.slider = QSlider(Qt.Orientation.Horizontal)
+        self.slider = AbsoluteSlider()
         self.slider.setRange(round(minimum * scale), round(maximum * scale))
+        self.slider.setSingleStep(self._step)
         self.slider.setValue(round(value * scale))
         self.slider.setFixedWidth(slider_width)
         self.slider.setFixedHeight(24)
@@ -201,7 +252,11 @@ class ValueSlider(QWidget):
     def _refresh(self) -> None:
         self.value_label.setText(f"{self.value():.{self._decimals}f}{self._suffix}")
 
-    def _on_value_changed(self, _value: int) -> None:
+    def _on_value_changed(self, value: int) -> None:
+        snapped = round(value / self._step) * self._step
+        if snapped != value:
+            self.slider.setValue(snapped)  # dragging lands where it likes: come back onto the step
+            return
         self._refresh()
         self.value_changed.emit(self.value())
 
@@ -360,8 +415,10 @@ class TransportBar(QToolBar):
         self.position.setFixedWidth(76)
         self.position.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.speed = ValueSlider("", 0.25, 2.0, 1.0, suffix="x", scale=100)
-        self.speed.slider.setToolTip("Playback speed, 0.25x to 2.00x")
+        self.speed = ValueSlider("", 0.1, 2.0, 1.0, suffix="x", scale=100, step=0.05)
+        self.speed.slider.setToolTip(
+            "Playback speed in 5% steps, 0.10x to 2.00x: the song is rerendered, so the pitch stays"
+        )
         self.speed_reset = text_button("1.0", "Reset the playback speed to 1.00x", width=40)
         self.speed_reset.clicked.connect(lambda: self.speed.set_value(1.0))
 

@@ -96,7 +96,7 @@ The window has three control bars, each split into captioned blocks of related c
 
 | Bar | Blocks |
 | --- | --- |
-| Transport | **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout), **Speed** (0.25x-2.00x with a `1.0` reset), **Tempo** (BPM, plus the estimated tempo of the audio), **Latency** (ms) |
+| Transport | **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout), **Speed** (0.10x-2.00x in 5% steps with a `1.0` reset, pitch unchanged), **Tempo** (BPM, plus the estimated tempo of the audio), **Latency** (ms) |
 | Edit | **Tools** (edit mode, pen, select, snap grid, clear), **Division** (note icon = the grid follows the beats of the tempo map, clock icon = it follows seconds) |
 | Mix | **Spectrum** (gain, contrast), **Volume** (audio, MIDI) |
 
@@ -124,6 +124,9 @@ placeholder — the analysed audio itself cannot be played yet.
 | Zoom pitch | Ctrl + Shift + wheel |
 | Scroll | Wheel along the timeline, Shift + wheel up and down the pitches |
 
+The value sliders - **Speed**, **Gain**, **Contrast**, **MIDI** - land on the spot the track is clicked
+and step with the wheel, one notch to a step, turning the value down as the wheel turns up.
+
 Loading an audio file also estimates its tempo in the background (beat tracking plus a
 least-squares fit over the beats, ~1 s for a whole song). It never changes the tempo by itself:
 when it is done, the **Tempo** block shows a suggestion such as `≈93 BPM` next to the BPM field,
@@ -144,10 +147,12 @@ up and down the keyboard. While the file is playing that
 press only edits: the cursor is left alone, and the timeline ruler is what seeks, from where the
 sound carries on. `Space` starts and pauses; the playhead, the readout and the timeline grid all
 follow the file. The audio is streamed to Qt's audio output one buffer at a time, mono at the sample
-rate of the file, so seeking is a cursor move and **Speed** becomes a fractional step over it: twice
-the speed consumes two seconds of the song per second of wall clock,
-which keeps the notes and the audio on the same timeline (the tape-style pitch shift that comes with
-it is what a speed control on a recording does; the note layer stays in tune).
+rate of the file, so seeking is a cursor move. **Speed** rerenders the song with a phase vocoder
+before it plays: the rhythm moves and the pitch does not, the way WaveTone's speed and pitch sliders
+are separate. That rerender takes a couple of seconds for a whole song and runs in the background, so
+the window stays live while the status bar says it is working. It also applies while the transport
+runs: the notes are handed over at the new speed at once and the song picks it up when the rerender
+lands, carrying on from where it had got to.
 
 The notes go to a **software MIDI synth** when one is listening on the
 MIDI bus - TiMidity and FluidSynth are recognised by name, and the tooltip of the **MIDI** slider
