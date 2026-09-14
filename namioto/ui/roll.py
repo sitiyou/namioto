@@ -6,7 +6,7 @@ from __future__ import annotations
 import math
 
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPen, QTransform
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QTransform
 from PyQt6.QtWidgets import (
     QGraphicsItem,
     QGraphicsRectItem,
@@ -16,10 +16,14 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
+from namioto.ui.spectrogram import SpectrumImage
+
 PITCH_MIN = 21
 PITCH_MAX = 108
 PITCH_COUNT = PITCH_MAX - PITCH_MIN + 1
 LENGTH_BEATS = 64
+CONTENT_MARGIN = 4.0
 NOTE_INSET = 0.06
 MIN_DURATION = 0.0625
 BAR_BEATS = 4.0
@@ -32,10 +36,19 @@ ROW_BLACK = QColor("#20242c")
 GRID_LINE = QColor("#2f3541")
 GRID_BEAT = QColor("#434c5c")
 GRID_BAR = QColor("#6d7a92")
-NOTE_FILL = QColor("#3b9dff")
-NOTE_SELECTED = QColor("#ffb03a")
+NOTE_FILL = QColor("#ff2f2f")
+NOTE_EDGE_LIGHT = QColor("#ffb9b9")
+NOTE_EDGE_DARK = QColor("#550f0f")
+NOTE_SELECTED = QColor("#fecfcf")
+NOTE_SELECTED_EDGE = QColor("#fe7474")
 TEXT = QColor("#94a0b5")
 PANEL = QColor("#20242c")
+SPECTRUM_BG = QColor("#000000")
+SPECTRUM_OCTAVE = QColor("#c0c0c0")
+SPECTRUM_BEAT = QColor("#606060")
+SPECTRUM_BAR = QColor("#c0c0c0")
+SPECTRUM_TOP = PITCH_MAX - (MIDI_OFFSET + NOTE_COUNT - 1)
+MIN_LINE_SPACING = 16.0
 
 
 def is_black_key(pitch: int) -> bool:
@@ -81,15 +94,28 @@ class NoteItem(QGraphicsRectItem):
         self._sync()
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
-        base = NOTE_SELECTED if self.isSelected() else NOTE_FILL
+        selected = self.isSelected()
+        body = NOTE_SELECTED if selected else NOTE_FILL
+        light = NOTE_SELECTED_EDGE if selected else NOTE_EDGE_LIGHT
+        dark = NOTE_SELECTED_EDGE if selected else NOTE_EDGE_DARK
         rect = self.rect()
-        gradient = QLinearGradient(rect.topLeft(), rect.bottomLeft())
-        gradient.setColorAt(0.0, base.lighter(130))
-        gradient.setColorAt(1.0, base.darker(115))
-        radius = min(0.18, rect.width() / 3, rect.height() / 2)
-        painter.setPen(QPen(QColor(0, 0, 0, 150), 0))
-        painter.setBrush(gradient)
-        painter.drawRoundedRect(rect, radius, radius)
+        transform = painter.transform()
+        px, py = 1.0 / transform.m11(), 1.0 / transform.m22()  # one device pixel in scene units
+        left, top = rect.left() + px / 2, rect.top() + py / 2
+        right, bottom = rect.right() - px / 2, rect.bottom() - py / 2
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setBrush(body)
+        painter.drawRect(rect)
+        painter.setPen(QPen(light, 0))
+        painter.drawLine(QPointF(left, top), QPointF(right + px / 2, top))
+        painter.drawLine(QPointF(left, top), QPointF(left, bottom + py / 2))
+        painter.setPen(QPen(dark, 0))
+        painter.drawLine(QPointF(left - px / 2, bottom), QPointF(right + px / 2, bottom))
+        painter.drawLine(QPointF(right, top - py / 2), QPointF(right, bottom + py / 2))
+        painter.restore()
 
 
 class PianoRollView(QGraphicsView):
@@ -107,6 +133,10 @@ class PianoRollView(QGraphicsView):
         self._scene = scene
         self.snap = 0.25
         self.tool = "pen"
+        self._bpm = 120.0
+        self.gain = 240.0
+        self.contrast = 1.0
+        self.spectrum: SpectrumImage | None = None
         self._zoom_x = 48.0
         self._zoom_y = 16.0
         self._mode: str | None = None
@@ -116,8 +146,6 @@ class PianoRollView(QGraphicsView):
         self._snapshot: dict[NoteItem, tuple[float, int, float]] = {}
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
-        self.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.setTransformationAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.setResizeAnchor(QGraphicsView.ViewportAnchor.NoAnchor)
         self.setViewportUpdateMode(QGraphicsView.ViewportUpdateMode.FullViewportUpdate)
@@ -130,15 +158,39 @@ class PianoRollView(QGraphicsView):
         self._rubber_origin = QPoint()
         self._initialized = False
 
+    @property
+    def bpm(self) -> float:
+        return self._bpm
+
+    @bpm.setter
+    def bpm(self, value: float) -> None:
+        self._bpm = max(1.0, float(value))
+        self._update_scene()
+        self.refresh()
+
+    def content_beats(self) -> float:
+        """Scrollable length: the default canvas, the spectrum or the notes, whichever is longest."""
+        end = float(LENGTH_BEATS)
+        if self.spectrum is not None:
+            end = max(end, self.spectrum.spectrum.frames * self.frame_width())
+        for note in self.notes():
+            end = max(end, note.end)
+        return end + CONTENT_MARGIN
+
+    def _update_scene(self) -> None:
+        self._scene.setSceneRect(QRectF(0.0, 0.0, self.content_beats(), PITCH_COUNT))
+
     def add_note(self, pitch: int, start: float, duration: float) -> NoteItem:
         note = NoteItem(pitch, start, duration)
         self._scene.addItem(note)
+        self._update_scene()
         self.notes_changed.emit()
         return note
 
     def clear_notes(self) -> None:
         for note in self.notes():
             self._scene.removeItem(note)
+        self._update_scene()
         self.notes_changed.emit()
         self.view_changed.emit()
 
@@ -147,6 +199,19 @@ class PianoRollView(QGraphicsView):
 
     def selected_notes(self) -> list[NoteItem]:
         return [note for note in self.notes() if note.isSelected()]
+
+    def set_spectrum(self, spectrum: NoteSpectrum | None) -> None:
+        self.spectrum = SpectrumImage(spectrum) if spectrum is not None else None
+        self._update_scene()
+        self.refresh()
+
+    def refresh(self) -> None:
+        self.viewport().update()
+        self.view_changed.emit()
+
+    def frame_width(self) -> float:
+        """Scene width of one spectrum frame, in beats."""
+        return self.spectrum.spectrum.frame_ms / 1000.0 * self.bpm / 60.0
 
     def grid_step(self) -> float:
         for step in (1 / 32, 1 / 16, 1 / 8, 1 / 4, 1 / 2, 1.0, 2.0, BAR_BEATS):
@@ -169,30 +234,65 @@ class PianoRollView(QGraphicsView):
         self.view_changed.emit()
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
-        painter.fillRect(rect, BG)
-
         first_row = max(0, int(math.floor(rect.top())))
         last_row = min(PITCH_COUNT, int(math.ceil(rect.bottom())) + 1)
-        for row in range(first_row, last_row):
-            color = ROW_BLACK if is_black_key(PITCH_MAX - row) else ROW_WHITE
-            painter.fillRect(QRectF(rect.left(), float(row), rect.width(), 1.0), color)
 
-        painter.setPen(QPen(GRID_LINE, 0))
-        for row in range(first_row, last_row + 1):
-            y = float(row)
-            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)  # keeps 1px grid lines on one pixel
 
-        step = self.grid_step()
-        x = math.floor(rect.left() / step) * step
-        while x <= rect.right():
-            if _is_multiple(x, BAR_BEATS):
-                painter.setPen(QPen(GRID_BAR, 0))
-            elif _is_multiple(x, 1.0):
-                painter.setPen(QPen(GRID_BEAT, 0))
-            else:
-                painter.setPen(QPen(GRID_LINE, 0))
-            painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
-            x += step
+        if self.spectrum is None:
+            painter.fillRect(rect, BG)
+            for row in range(first_row, last_row):
+                color = ROW_BLACK if is_black_key(PITCH_MAX - row) else ROW_WHITE
+                painter.fillRect(QRectF(rect.left(), float(row), rect.width(), 1.0), color)
+            painter.setPen(QPen(GRID_LINE, 0))
+            for row in range(first_row, last_row + 1):
+                y = float(row)
+                painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+            step = self.grid_step()
+            x = math.floor(rect.left() / step) * step
+            while x <= rect.right():
+                if _is_multiple(x, BAR_BEATS):
+                    painter.setPen(QPen(GRID_BAR, 0))
+                elif _is_multiple(x, 1.0):
+                    painter.setPen(QPen(GRID_BEAT, 0))
+                else:
+                    painter.setPen(QPen(GRID_LINE, 0))
+                painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
+                x += step
+            painter.restore()
+            return
+
+        painter.fillRect(rect, SPECTRUM_BG)
+        self._draw_spectrum(painter, rect)
+        painter.setPen(QPen(SPECTRUM_OCTAVE, 0))
+        for pitch in range(MIDI_OFFSET, MIDI_OFFSET + NOTE_COUNT + 1, 12):
+            y = float(PITCH_MAX - pitch + 1)  # the C row's lower edge (B sits below C)
+            if first_row <= y <= last_row:
+                painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+        for beat in range(math.floor(rect.left()), int(rect.right()) + 2):
+            bar = _is_multiple(beat, BAR_BEATS)
+            spacing = self._zoom_x * (BAR_BEATS if bar else 1.0)
+            if spacing < MIN_LINE_SPACING:
+                continue
+            painter.setPen(QPen(SPECTRUM_BAR if bar else SPECTRUM_BEAT, 0))
+            painter.drawLine(QPointF(beat, rect.top()), QPointF(beat, rect.bottom()))
+        painter.restore()
+
+    def _draw_spectrum(self, painter: QPainter, rect: QRectF) -> None:
+        image = self.spectrum.image(self.gain, self.contrast)
+        width = self.frame_width()
+        first = max(0, int(math.floor(rect.left() / width)))
+        last = min(self.spectrum.spectrum.frames, int(math.ceil(rect.right() / width)) + 1)
+        if last <= first:
+            return
+        target = QRectF(first * width, SPECTRUM_TOP, (last - first) * width, float(image.height()))
+        source = QRectF(first, 0.0, last - first, float(image.height()))
+        painter.setRenderHint(
+            QPainter.RenderHint.SmoothPixmapTransform, width * self._zoom_x < 1.0 or self._zoom_y < 1.0
+        )
+        painter.drawImage(target, image, source)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
 
     # --- interaction -----------------------------------------------------
 
@@ -389,19 +489,26 @@ class TimelineRuler(QWidget):
         self.setCursor(Qt.CursorShape.SizeHorCursor)
         view.view_changed.connect(self.update)
 
+    def origin(self) -> QPoint:
+        """The viewport's top left corner in this widget's coordinates."""
+        return self.mapFromGlobal(self.view.viewport().mapToGlobal(QPoint(0, 0)))
+
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.fillRect(self.rect(), PANEL)
+        viewport = self.view.viewport()
+        left_offset = self.origin().x()
+        painter.setClipRect(QRect(int(left_offset), 0, viewport.width(), self.height()))
         font = QFont()
         font.setPixelSize(10)
         painter.setFont(font)
 
         step = self.view.grid_step()
         left = self.view.mapToScene(QPoint(0, 0)).x()
-        right = self.view.mapToScene(QPoint(self.width(), 0)).x()
+        right = self.view.mapToScene(QPoint(viewport.width(), 0)).x()
         x = math.floor(left / step) * step
         while x <= right:
-            px = self.view.mapFromScene(QPointF(x, 0.0)).x()
+            px = left_offset + self.view.mapFromScene(QPointF(x, 0.0)).x()
             if _is_multiple(x, BAR_BEATS):
                 painter.setPen(QPen(GRID_BAR, 1))
                 painter.drawLine(px, 0, px, self.height())
@@ -416,7 +523,8 @@ class TimelineRuler(QWidget):
             x += step
 
         painter.setPen(QPen(QColor("#3a4152"), 1))
-        painter.drawLine(0, self.height() - 1, self.width(), self.height() - 1)
+        right_edge = viewport.width() + int(left_offset)
+        painter.drawLine(int(left_offset), self.height() - 1, right_edge, self.height() - 1)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -444,9 +552,16 @@ class PianoKeyboard(QWidget):
         self.setFixedWidth(66)
         view.view_changed.connect(self.update)
 
+    def origin(self) -> QPoint:
+        """The viewport's top left corner in this widget's coordinates."""
+        return self.mapFromGlobal(self.view.viewport().mapToGlobal(QPoint(0, 0)))
+
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         painter.fillRect(self.rect(), PANEL)
+        viewport = self.view.viewport()
+        top_offset = self.origin().y()
+        painter.setClipRect(QRect(0, int(top_offset), self.width(), viewport.height()))
         font = QFont()
         font.setPixelSize(9)
         painter.setFont(font)
@@ -455,9 +570,9 @@ class PianoKeyboard(QWidget):
 
         for pitch in range(PITCH_MIN, PITCH_MAX + 1):
             row = PITCH_MAX - pitch
-            top = self.view.mapFromScene(QPointF(0.0, float(row))).y()
-            bottom = self.view.mapFromScene(QPointF(0.0, float(row) + 1.0)).y()
-            if bottom < 0 or top > self.height():
+            top = top_offset + self.view.mapFromScene(QPointF(0.0, float(row))).y()
+            bottom = top_offset + self.view.mapFromScene(QPointF(0.0, float(row) + 1.0)).y()
+            if bottom < top_offset or top > viewport.height() + top_offset:
                 continue
             if is_black_key(pitch):
                 width = int(self.width() * 0.62)
@@ -470,7 +585,7 @@ class PianoKeyboard(QWidget):
 
         painter.setPen(QPen(QColor("#101318"), 1))
         for pitch in range(PITCH_MIN, PITCH_MAX + 2):
-            y = self.view.mapFromScene(QPointF(0.0, float(PITCH_MAX - pitch))).y()
+            y = top_offset + self.view.mapFromScene(QPointF(0.0, float(PITCH_MAX - pitch))).y()
             painter.drawLine(0, y, self.width(), y)
 
     def wheelEvent(self, event) -> None:

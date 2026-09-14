@@ -121,22 +121,23 @@ class ValueSlider(QWidget):
     def __init__(
         self,
         caption: str,
-        minimum: int,
-        maximum: int,
-        value: int,
+        minimum: float,
+        maximum: float,
+        value: float,
         suffix: str = "",
-        decimals: int = 0,
+        scale: int = 1,
         slider_width: int = 92,
     ):
         super().__init__()
         self._suffix = suffix
-        self._decimals = decimals
+        self._scale = scale
+        self._decimals = max(0, len(str(scale)) - 1)
         self.slider = QSlider(Qt.Orientation.Horizontal)
-        self.slider.setRange(minimum, maximum)
-        self.slider.setValue(value)
+        self.slider.setRange(round(minimum * scale), round(maximum * scale))
+        self.slider.setValue(round(value * scale))
         self.slider.setFixedWidth(slider_width)
         self.slider.setFixedHeight(24)
-        self.slider.setPageStep(max(1, (maximum - minimum) // 10))
+        self.slider.setPageStep(max(1, round((maximum - minimum) * scale / 10)))
         self.caption = QLabel(caption)
         self.caption.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         self.value_label = QLabel()
@@ -156,10 +157,10 @@ class ValueSlider(QWidget):
         self._refresh()
 
     def value(self) -> float:
-        return self.slider.value() / 10**self._decimals
+        return self.slider.value() / self._scale
 
     def set_value(self, value: float) -> None:
-        self.slider.setValue(round(value * 10**self._decimals))
+        self.slider.setValue(round(value * self._scale))
 
     def _refresh(self) -> None:
         self.value_label.setText(f"{self.value():.{self._decimals}f}{self._suffix}")
@@ -227,7 +228,7 @@ class TransportBar(QToolBar):
         self.position.setFixedWidth(76)
         self.position.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.speed = ValueSlider("", 25, 200, 100, suffix="x", decimals=2)
+        self.speed = ValueSlider("", 0.25, 2.0, 1.0, suffix="x", scale=100)
         self.speed.slider.setToolTip("Playback speed, 0.25x to 2.00x")
         self.speed_reset = text_button("1.0", "Reset the playback speed to 1.00x", width=40)
         self.speed_reset.clicked.connect(lambda: self.speed.set_value(1.0))
@@ -335,17 +336,17 @@ class MixBar(QToolBar):
 
     def __init__(self, parent=None):
         super().__init__("Mix", parent)
-        self.brightness = ValueSlider("Brightness", 0, 100, 50)
-        self.brightness.slider.setToolTip("Spectrum brightness")
-        self.contrast = ValueSlider("Contrast", 0, 100, 50)
-        self.contrast.slider.setToolTip("Spectrum contrast")
+        self.gain = ValueSlider("Gain", 10, 600, 240)
+        self.gain.slider.setToolTip("Spectrum gain: how much energy it takes to reach full red")
+        self.contrast = ValueSlider("Contrast", 0.2, 4.0, 1.0, scale=10)
+        self.contrast.slider.setToolTip("Spectrum contrast: exponent applied to the energy")
         self.audio_volume = ValueSlider("Audio", 0, 100, 80, suffix="%")
         self.audio_volume.slider.setToolTip("Volume of the analysed audio track")
         self.midi_volume = ValueSlider("MIDI", 0, 100, 80, suffix="%")
         self.midi_volume.slider.setToolTip("Volume of the note playback")
 
         spectrum = Cluster("Spectrum", spacing=12)
-        spectrum.add(self.brightness, row=0)
+        spectrum.add(self.gain, row=0)
         spectrum.add(self.contrast, row=0)
 
         volume = Cluster("Volume", spacing=12)

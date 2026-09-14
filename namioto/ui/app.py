@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import argparse
 import sys
 
 from PyQt6.QtGui import QColor, QPalette
@@ -13,22 +14,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from namioto.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.ui.controls import EditBar, MixBar, TransportBar
 from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler
-
-DEMO_NOTES = (
-    (60, 0.0, 1.0),
-    (64, 1.0, 1.0),
-    (67, 2.0, 1.0),
-    (72, 3.0, 1.0),
-    (67, 4.0, 0.5),
-    (69, 4.5, 0.5),
-    (71, 5.0, 1.5),
-    (64, 6.5, 0.5),
-    (67, 7.0, 1.0),
-    (55, 0.0, 8.0),
-    (62, 0.0, 8.0),
-)
+from namioto.ui.spectrogram import SpectrumLoader
 
 STYLE_SHEET = """
 QMainWindow, QToolBar, QStatusBar { background: #191c23; }
@@ -57,6 +46,15 @@ QComboBox, QSpinBox, QDoubleSpinBox { background: #1c2129; color: #cfd6e4;
 QComboBox QAbstractItemView { background: #262b34; color: #cfd6e4;
                               selection-background-color: #1f3a5c; }
 QStatusBar::item { border: 0; }
+QScrollBar:horizontal, QScrollBar:vertical { background: #191c23; border: 0; }
+QScrollBar:horizontal { height: 11px; }
+QScrollBar:vertical { width: 11px; }
+QScrollBar::handle:horizontal, QScrollBar::handle:vertical { background: #3a4152; border-radius: 5px; }
+QScrollBar::handle:horizontal { min-width: 24px; }
+QScrollBar::handle:vertical { min-height: 24px; }
+QScrollBar::handle:hover { background: #4a5468; }
+QScrollBar::add-line, QScrollBar::sub-line { width: 0; height: 0; }
+QScrollBar::add-page, QScrollBar::sub-page { background: transparent; }
 """
 
 
@@ -81,26 +79,27 @@ def dark_palette() -> QPalette:
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, audio: str | None = None, channels: str = "mono", t_num: float = 20.0):
         super().__init__()
         self.setWindowTitle("Namioto")
         self.resize(1200, 720)
+        self.loader: SpectrumLoader | None = None
 
         self.view = PianoRollView()
         self.view.snap = SNAP_CHOICES[4][1]
-        ruler = TimelineRuler(self.view)
-        keyboard = PianoKeyboard(self.view)
+        self.ruler = TimelineRuler(self.view)
+        self.keyboard = PianoKeyboard(self.view)
 
         corner = QWidget()
-        corner.setFixedSize(keyboard.width(), ruler.height())
+        corner.setFixedSize(self.keyboard.width(), self.ruler.height())
         corner.setStyleSheet("background: #20242c;")
 
         layout = QGridLayout()
         layout.setSpacing(0)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(corner, 0, 0)
-        layout.addWidget(ruler, 0, 1)
-        layout.addWidget(keyboard, 1, 0)
+        layout.addWidget(self.ruler, 0, 1)
+        layout.addWidget(self.keyboard, 1, 0)
         layout.addWidget(self.view, 1, 1)
         layout.setColumnStretch(1, 1)
         layout.setRowStretch(1, 1)
@@ -124,12 +123,29 @@ class MainWindow(QMainWindow):
         self.edit.snap.currentIndexChanged.connect(lambda: setattr(self.view, "snap", self.edit.snap.currentData()))
         self.edit.clear_requested.connect(self.view.clear_notes)
         self.edit.tool_changed.connect(self._on_tool_changed)
+        self.transport.bpm.valueChanged.connect(self._on_bpm_changed)
+        self.mix.gain.value_changed.connect(self._on_spectrum_parameters)
+        self.mix.contrast.value_changed.connect(self._on_spectrum_parameters)
+        self.view.gain = self.mix.gain.value()
+        self.view.contrast = self.mix.contrast.value()
+        self.view.bpm = self.transport.bpm.value()
 
         self.view.notes_changed.connect(self._update_status)
-        for pitch, start, duration in DEMO_NOTES:
-            self.view.add_note(pitch, start, duration)
+        if audio is None:
+            self._show_hint()
+        else:
+            self.load_audio(audio, channels=channels, t_num=t_num)
         self._update_status()
 
+    def load_audio(self, path: str, channels: str = "mono", t_num: float = 20.0) -> None:
+        self.loader = SpectrumLoader(path, channels=channels, t_num=t_num, parent=self)
+        self.loader.progress.connect(self._on_analysis_progress)
+        self.loader.loaded.connect(self._on_spectrum_loaded)
+        self.loader.failed.connect(lambda message: self.statusBar().showMessage(f"Spectrum failed: {message}"))
+        self.statusBar().showMessage(f"Analysing {path} …")
+        self.loader.start()
+
+    def _show_hint(self) -> None:
         self.statusBar().showMessage(
             "pen: drag an empty row to draw  |  select: drag a box, ctrl-click to add  |  "
             "right click: delete  |  middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y"
@@ -138,16 +154,49 @@ class MainWindow(QMainWindow):
     def _on_tool_changed(self, tool: str) -> None:
         self.view.tool = tool
 
+    def _on_bpm_changed(self, value: float) -> None:
+        self.view.bpm = value
+
+    def _on_spectrum_parameters(self, _value: float = 0.0) -> None:
+        self.view.gain = self.mix.gain.value()
+        self.view.contrast = self.mix.contrast.value()
+        self.view.refresh()
+
+    def _on_analysis_progress(self, done: int, total: int) -> None:
+        self.statusBar().showMessage(f"Analysing … {done * 100 // max(1, total)}%")
+
+    def _on_spectrum_loaded(self, spectrum: NoteSpectrum) -> None:
+        self.view.set_spectrum(spectrum)
+        self.statusBar().showMessage(
+            f"{spectrum.frames} frames x {spectrum.table.shape[1]} bands, "
+            f"{spectrum.frame_ms:g} ms/frame, {spectrum.duration:.1f} s"
+        )
+
     def _update_status(self) -> None:
         self.setWindowTitle(f"Namioto — {len(self.view.notes())} notes")
 
 
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(prog="namioto", description="Namioto piano-roll MIDI editor")
+    parser.add_argument("audio", nargs="?", help="audio file to analyse and draw as a spectrum")
+    parser.add_argument("--channels", choices=CHANNEL_MODES, default="mono", help="which channels to analyse")
+    parser.add_argument("--t-num", type=float, default=20.0, help="spectrum frames per second")
+    parser.add_argument("--gain", type=float, help="initial spectrum gain")
+    parser.add_argument("--contrast", type=float, help="initial spectrum contrast")
+    return parser.parse_args(argv)
+
+
 def main() -> int:
+    args = parse_args()
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     app.setPalette(dark_palette())
     app.setStyleSheet(STYLE_SHEET)
-    window = MainWindow()
+    window = MainWindow(audio=args.audio, channels=args.channels, t_num=args.t_num)
+    if args.gain is not None:
+        window.mix.gain.set_value(args.gain)
+    if args.contrast is not None:
+        window.mix.contrast.set_value(args.contrast)
     window.show()
     return app.exec()
 

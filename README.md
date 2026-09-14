@@ -16,6 +16,8 @@ translation of *wave* + *tone*.
 
 ```bash
 uv run namioto                            # the editor
+uv run namioto song.mp3                   # the editor with the audio analysed into a spectrum
+uv run namioto song.mp3 --channels both --t-num 40 --gain 300   # analysis options
 uv run namioto-tempo song.mp3             # estimate the tempo of a file
 uv run namioto-tempo song.mp3 --local     # per-patch estimates, ~12 s resolution
 uv run namioto-tempo song.mp3 --json      # machine readable, includes the tempo map
@@ -28,6 +30,18 @@ uv run scripts/bench_spectrum.py          # spectrum benchmark
 
 `uv` creates the virtual environment and installs the dependencies, including the bundled
 TempoCNN model, on first run.
+
+## Spectrum
+
+Passing an audio file draws its note-domain spectrum behind the piano roll, the way noteDigger and
+WaveTone show it: one column per 50 ms frame, one row per note band (C1 to B7), coloured from dark
+blue through green to red as the energy rises, with the octave lines of the pitch axis. The
+**Spectrum** block sets the two display parameters — gain (how much energy reaches full red) and
+contrast (the exponent applied to the energy). The analysis runs in a background thread and reports
+progress in the status bar; `--channels` picks the channels to analyse (mono, left, right, sum,
+side, both), `--t-num` the frames per second.
+
+![spectrum](docs/spectrum.png)
 
 ## Build
 
@@ -50,7 +64,8 @@ own license — see [namioto/models/README.md](namioto/models/README.md).
 namioto/tempo.py      TempoCNN tempo estimation (ONNX Runtime) + tempo map helpers, no Qt
 namioto/spectrum.py   note-domain spectrum analysis (STFT → 84 note bands), no Qt
 namioto/models/       bundled ONNX models
-namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars, roll.py: widgets)
+namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars, roll.py: widgets,
+                      spectrogram.py: spectrum colour map, image cache and loader)
 tests/                pytest
 scripts/              developer tools (spectrum benchmark)
 build.sh              packaging script
@@ -77,10 +92,10 @@ The window has three control bars, each split into captioned blocks of related c
 | --- | --- |
 | Transport | **Playback** (rewind, stop, pause, play, forward, position readout), **Speed** (0.25x-2.00x with a `1.0` reset), **Tempo** (BPM), **Latency** (ms) |
 | Edit | **Tools** (pen, select, snap grid, clear), **Division** (note icon = beats of the tempo map, clock icon = seconds) |
-| Mix | **Spectrum** (brightness, contrast), **Volume** (audio, MIDI) |
+| Mix | **Spectrum** (gain, contrast), **Volume** (audio, MIDI) |
 
-Only the tool buttons and the snap grid drive the editor so far; the playback, spectrum and
-volume controls are placeholders for the playback and spectrum milestones.
+The tool buttons, the snap grid and the two spectrum display parameters drive the editor so far;
+the playback and volume controls are placeholders for the playback milestone.
 
 | Action | Input |
 | --- | --- |
@@ -93,7 +108,7 @@ volume controls are placeholders for the playback and spectrum milestones.
 | Select all | Ctrl + A |
 | Delete | Right click a note, or Delete / Backspace for the selection |
 | Cancel a drag | Escape |
-| Pan | Middle drag, or drag in the timeline ruler to scroll horizontally |
+| Pan | Middle drag, a scrollbar, or drag in the timeline ruler to scroll horizontally |
 | Zoom time | Ctrl + wheel |
 | Zoom pitch | Ctrl + Shift + wheel |
 | Scroll | Wheel, Shift + wheel for horizontal |
