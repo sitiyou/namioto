@@ -413,10 +413,16 @@ class TransportBar(QToolBar):
     play_pause_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     forward_requested = pyqtSignal()
+    open_requested = pyqtSignal()
+    save_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__("Transport", parent)
         self.setObjectName("transportBar")  # saveState needs one to remember the toolbar
+        self.open = text_button("Open", "Open a project (.nto) — Ctrl+O")
+        self.save = text_button("Save", "Save the project — Ctrl+S, with Shift for Save As")
+        self.open.clicked.connect(self.open_requested)
+        self.save.clicked.connect(self.save_requested)
         self.rewind = icon_button("rewind", "Rewind to the beginning")
         self.stop = icon_button("stop", "Stop")
         self.play_from_start = icon_button("playstart", "Play from the beginning")
@@ -464,6 +470,10 @@ class TransportBar(QToolBar):
         self.latency.setFixedHeight(FIELD_HEIGHT)
         self.latency.setKeyboardTracking(False)
 
+        project = Cluster("Project")
+        project.add(self.open, row=0)
+        project.add(self.save, row=0)
+
         playback = Cluster("Playback")
         for button in (self.rewind, self.stop, self.play_from_start, self.play_pause, self.forward):
             playback.add(button, row=0)
@@ -482,7 +492,7 @@ class TransportBar(QToolBar):
         latency.add(self.latency, row=0)
         latency.add(field_label("ms"), row=0)
 
-        for cluster in (playback, speed, tempo, latency):
+        for cluster in (project, playback, speed, tempo, latency):
             self.addWidget(cluster)
 
     def set_playing(self, playing: bool) -> None:

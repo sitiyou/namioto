@@ -17,6 +17,7 @@ with them.
 ```bash
 uv run namioto                            # the editor
 uv run namioto song.mp3                   # the editor with the audio analysed into a spectrum
+uv run namioto song.nto                   # open a project
 uv run namioto song.mp3 --channels both --gain 300   # analysis options
 uv run namioto-tempo song.mp3             # estimate the tempo of a file (beat tracking + fit)
 uv run namioto-tempo song.mp3 --local     # per-window estimates, 12 s wide, 6 s apart
@@ -46,11 +47,32 @@ side, both), `--t-num` the frames per second.
 
 ![spectrum](docs/spectrum.png)
 
+## Projects
+
+The **Project** block of the transport row holds `Open` and `Save` (`Ctrl+O`, `Ctrl+S`, `Ctrl+Shift+S`
+for Save As). A `.nto` project is a plain JSON file that keeps the notes together with what they were
+drawn over and the values that belong to that piece of work: the audio file, the tempo, the analysis
+parameters, the spectrum display, the snap grid and the view. It is a few kilobytes, so it is
+diffable, searchable and editable by hand.
+
+Notes are kept in seconds, so a different tempo moves the grid and never the notes, and the file
+lists them in time order. The audio is recorded as a path - relative to the project when it sits
+beside it - and never copied into the project. A project whose audio is missing still opens, since
+the notes are worth having, and says so in the status bar.
+
+The window title shows the project name, with a `*` while there are unsaved changes; closing, or
+opening another project, asks before they are lost. Moving the view, or turning a volume down, is
+written when you save but does not count as a change, so looking around never nags. A roll that has
+not been saved under a name yet is treated as a sketch and closes without asking.
+
+Settings and projects stay apart: what the settings window holds is the default for the next file,
+while the values inside a project belong to that project and never overwrite those defaults.
+
 ## Settings
 
 The gear at the right end of the Mix row opens the settings window. It holds the advanced options,
 one page per group: the spectrum analysis parameters (channels, frames per second, FFT size, A4), the
-spectrum's starting display, the playback backend and buffer, the editor defaults, the tempo
+spectrum's starting display, the playback backend, instrument and buffer, the editor defaults, the tempo
 estimator, the GAME extraction parameters, and the directory the file chooser starts in. Each page
 puts its advanced rows under an `ADVANCED` heading; `Restore defaults` puts everything back, and
 `Apply` lets the change go live without closing the window. Analysis parameters reach the spectrum
@@ -119,7 +141,7 @@ The window has three control bars, each split into captioned blocks of related c
 
 | Bar | Blocks |
 | --- | --- |
-| Transport | **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout), **Speed** (0.10x-2.00x in 5% steps with a `1.0` reset, pitch unchanged), **Tempo** (BPM, plus the estimated tempo of the audio), **Latency** (ms) |
+| Transport | **Project** (open, save), **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout), **Speed** (0.10x-2.00x in 5% steps with a `1.0` reset, pitch unchanged), **Tempo** (BPM, plus the estimated tempo of the audio), **Latency** (ms) |
 | Edit | **Tools** (edit mode, pen, select, snap grid, clear), **Division** (note icon = the grid follows the beats of the tempo map, clock icon = it follows seconds) |
 | Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window |
 
@@ -140,6 +162,8 @@ volume) for an external one, which does its own mixing.
 | Delete | Right click a note, or Delete / Backspace for the selection |
 | Cancel a drag | Escape |
 | Play or pause | `Space` or the play/pause button |
+| Open a project | `Ctrl+O`, or `Open` in the Project block |
+| Save a project | `Ctrl+S` (Save As on the first save, or `Ctrl+Shift+S`), or `Save` in the Project block |
 | Move the playhead | A press anywhere in the roll - over the grid or over a note, in either mode - or a click in the timeline ruler (any mode, and it works while the file plays), or the rewind / forward buttons for the ends. A press on a note moves, resizes or selects it *and* moves the playhead. Dragging carries the playhead along with the pointer, and sounding every row it crosses like a glissando. While the audio plays the roll keeps its cursor so editing does not jump the sound; seeking then is what the ruler is for, and the file carries on from there |
 | Double / halve the tempo | Right-click the Tempo field, or press `*` / `/` while it has the focus |
 | Pan | Middle drag, a scrollbar, or drag in the timeline ruler to scroll horizontally |

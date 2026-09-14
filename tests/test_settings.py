@@ -178,12 +178,44 @@ def test_a_clone_can_be_edited_without_touching_the_original() -> None:
     assert store.get_value(original, "analysis", "channels") == "mono"
 
 
+def test_the_program_field_lists_the_general_midi_presets() -> None:
+    spec = store.FIELD_SPECS[("playback", "program")]
+    assert spec.kind == "choice"
+    assert len(store.GM_PROGRAMS) == 128
+    assert len(set(store.GM_PROGRAMS)) == 128  # one name per program, or the list cannot be picked from
+    assert spec.choices == tuple(range(128))
+    assert spec.labels == store.PROGRAM_LABELS
+    assert store.GM_PROGRAMS[0] == "Acoustic Grand Piano"
+    assert store.GM_PROGRAMS[40] == "Violin"
+    assert store.GM_PROGRAMS[-1] == "Gunshot"
+    assert store.PROGRAM_LABELS[0] == "0: Acoustic Grand Piano"
+    assert store.PROGRAM_LABELS[40] == "40: Violin"
+    assert store.PROGRAM_LABELS[-1] == "127: Gunshot"
+    assert [label.split(":")[0] for label in store.PROGRAM_LABELS] == [str(index) for index in range(128)]
+
+
+def test_a_program_that_is_not_a_number_falls_back(settings_file) -> None:
+    settings_file.write_text(json.dumps({"playback": {"program": True}}))
+    assert store.get_value(store.load(), "playback", "program") == 0
+    settings_file.write_text(json.dumps({"playback": {"program": 200}}))
+    assert store.get_value(store.load(), "playback", "program") == 0
+    settings_file.write_text(json.dumps({"playback": {"program": 40}}))
+    assert store.get_value(store.load(), "playback", "program") == 40
+
+
+def test_a_caption_that_names_its_unit_does_not_repeat_it_in_the_field() -> None:
+    for spec in store.FIELD_SPECS.values():
+        unit = spec.suffix.strip()
+        assert not unit or unit not in spec.caption, f"{spec.name} says its unit twice"
+
+
 def test_every_spec_field_is_a_field_of_its_section() -> None:
     defaults = store.Settings()
     for section in store.SECTIONS:
         for item in section.fields:
             assert store.get_value(defaults, section.name, item.name) == item.default
             assert item.caption
+            assert len(item.labels) in (0, len(item.choices)), item.name
             if item.kind in ("int", "float"):
                 assert item.high > item.low, item.name  # a range nobody can be inside of
                 assert item.low <= item.default <= item.high, item.name

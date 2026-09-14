@@ -5,20 +5,22 @@ from __future__ import annotations
 
 import json
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
 from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
 from PyQt6.QtGui import QColor, QFocusEvent, QImage, QKeyEvent, QMouseEvent, QWheelEvent
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QLabel, QSlider
+from PyQt6.QtWidgets import QApplication, QComboBox, QFileDialog, QLabel, QMessageBox, QSlider, QSpinBox
 
+from namioto import project
 from namioto import settings as store
 from namioto.beats import BeatTempo, LocalWindow
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.ui.app import STYLE_SHEET, MainWindow, TempoLoader, dark_palette
 from namioto.ui.audio import MidiPortOut, MidiSink, find_port, find_synth_port
-from namioto.ui.controls import WEAK_COLOR, Cluster, ValueSlider
+from namioto.ui.controls import WEAK_COLOR, Cluster, TransportBar, ValueSlider
 from namioto.ui.roll import (
     CONTENT_MARGIN,
     GRID_BAR,
@@ -1563,6 +1565,7 @@ def own_window(tmp_path, monkeypatch):
     opened = MainWindow()
     opened.resize(1200, 720)
     yield opened
+    opened.project_dirty = False  # a test may leave unsaved notes: closing must not ask about them
     opened.close()
 
 
@@ -1611,6 +1614,29 @@ def test_applying_the_settings_window_reaches_the_window_and_the_file(own_window
     saved = json.loads(store.default_path().read_text())
     assert saved["spectrum"]["gain"] == 300.0
     assert saved["editor"]["overtone_highlight"] is False
+    dialog.close()
+
+
+def test_the_program_row_offers_the_general_midi_presets(own_window) -> None:
+    dialog = SettingsDialog(own_window.settings, parent=own_window)
+    combos = [combo for combo in dialog.findChildren(QComboBox) if combo.count() == len(store.GM_PROGRAMS)]
+    assert len(combos) == 1
+    program = combos[0]
+    assert program.currentData() == 0
+    assert program.itemText(0) == "0: Acoustic Grand Piano"
+    assert program.itemText(40) == "40: Violin"
+    assert program.itemData(40) == 40
+
+    program.setCurrentIndex(40)
+    assert store.get_value(dialog.values(), "playback", "program") == 40
+    dialog.close()
+
+
+def test_the_latency_field_does_not_say_ms_twice(own_window) -> None:
+    dialog = SettingsDialog(own_window.settings, parent=own_window)
+    boxes = [box for box in dialog.findChildren(QSpinBox) if (box.minimum(), box.maximum()) == (-500, 500)]
+    assert len(boxes) == 1
+    assert boxes[0].suffix() == ""  # the caption already says (ms)
     dialog.close()
 
 
@@ -1769,3 +1795,188 @@ def test_a_midi_port_is_matched_by_name() -> None:
     assert find_port(ports, "TiMidity") == 1  # the client number changes between sessions
     assert find_port(ports, "Nonesuch") == 1  # nothing matches, so the first synth is used
     assert find_port(("Midi Through:0",), "") is None
+
+
+def test_the_transport_carries_the_project_buttons() -> None:
+    bar = TransportBar()
+    seen: list[str] = []
+    bar.open_requested.connect(lambda: seen.append("open"))
+    bar.save_requested.connect(lambda: seen.append("save"))
+    bar.open.click()
+    bar.save.click()
+    assert seen == ["open", "save"]
+
+
+def test_saving_a_project_takes_the_notes_and_the_values_with_it(own_window, tmp_path) -> None:
+    own_window.transport.bpm.setValue(120.0)
+    own_window.view.set_notes([(64, 2.0, 1.0), (67, 3.0, 0.5)])  # beats, as the roll holds them
+    own_window.mix.gain.set_value(300.0)
+    path = tmp_path / "song.nto"
+    assert own_window.save_project(path) is True
+    assert own_window.project_path == path
+    assert own_window.project_dirty is False
+    assert own_window._document_name() == "song"
+    saved = project.load(path)  # beat 2 at 120 BPM is one second in, and it is seconds that are kept
+    assert saved.notes == (project.Note(1.0, 0.5, 64), project.Note(1.5, 0.25, 67))
+    assert saved.values["tempo"]["bpm"] == 120.0
+    assert saved.values["spectrum"]["gain"] == 300.0
+    assert saved.values["editor"]["snap"] == own_window.view.snap
+    assert "Saved song.nto" in own_window.statusBar().currentMessage()
+
+
+def test_loading_a_project_brings_the_notes_and_the_values_back(own_window, tmp_path, monkeypatch) -> None:
+    other = store.Settings()
+    other.tempo.bpm = 120.0  # not 60: at 120 BPM a beat and a second differ, so the conversion shows
+    other.analysis.a4 = 432.0
+    other.spectrum.gain = 300.0
+    other.editor.snap = 0.25
+    path = tmp_path / "song.nto"
+    opened = project.Project(
+        values=store.project_values(other),
+        audio="vocal.wav",
+        notes=(project.Note(2.0, 0.5, 64), project.Note(3.5, 0.5, 67)),
+    )
+    (tmp_path / "vocal.wav").write_bytes(b"")
+    project.save(opened, path)
+    played: list[str] = []  # the analysis and the audio device are not what this checks
+    monkeypatch.setattr(type(own_window), "load_audio", lambda _self, path: played.append(path))
+
+    assert own_window.load_project(path) is True
+    assert sorted(note.pitch for note in own_window.view.notes()) == [64, 67]
+    beats = sorted((note.start, note.duration) for note in own_window.view.notes())
+    assert beats[0] == pytest.approx((4.0, 1.0))  # 2 s at 120 BPM is beat 4, and half a second is a beat
+    assert beats[1] == pytest.approx((7.0, 1.0))
+    assert own_window.view.bpm == 120.0
+    assert own_window.settings.analysis.a4 == 432.0
+    assert own_window.view.gain == 300.0
+    assert own_window.view.snap == 0.25
+    assert played == [str(tmp_path / "vocal.wav")]
+    assert own_window.project_dirty is False
+    assert own_window.project_path == path
+    assert own_window._document_name() == "song"
+    assert "Opened song.nto — 2 notes" in own_window.statusBar().currentMessage()
+
+    own_window.view.set_notes([(60, 0.0, 1.0)])
+    assert own_window._document_name() == "song*"
+
+
+def test_a_project_without_its_audio_still_opens(own_window, tmp_path) -> None:
+    path = tmp_path / "song.nto"
+    project.save(
+        project.Project(
+            values=store.project_values(store.Settings()),
+            audio="gone.wav",
+            notes=(project.Note(1.0, 0.5, 60),),
+        ),
+        path,
+    )
+    assert own_window.load_project(path) is True
+    assert [note.pitch for note in own_window.view.notes()] == [60]
+    assert own_window.audio_path is None
+    assert own_window.song.is_loaded is False
+    assert "audio not found" in own_window.statusBar().currentMessage()
+
+
+def test_a_file_that_is_not_a_project_says_so(own_window, tmp_path) -> None:
+    path = tmp_path / "not.nto"
+    path.write_text("{}")
+    assert own_window.load_project(path) is False
+    assert "could not be opened" in own_window.statusBar().currentMessage()
+    assert own_window.project_path is None
+
+
+def test_opening_a_project_does_not_rewrite_the_app_defaults(own_window, tmp_path) -> None:
+    other = store.Settings()
+    other.spectrum.gain = 300.0
+    other.analysis.a4 = 432.0
+    path = tmp_path / "song.nto"
+    project.save(project.Project(values=store.project_values(other)), path)
+
+    assert own_window.load_project(path) is True
+    assert own_window.settings.spectrum.gain == 300.0
+    assert own_window.mix.gain.value() == 300.0
+    assert not (tmp_path / "settings.json").exists()  # opening is not saving
+
+    own_window.settings_store.flush()
+    written = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert written["spectrum"]["gain"] == store.Settings().spectrum.gain
+    assert written["analysis"]["a4"] == store.Settings().analysis.a4
+    assert written["playback"]["backend"] == store.Settings().playback.backend
+
+
+def test_a_change_made_with_a_project_open_still_leaves_the_default_alone(own_window, tmp_path) -> None:
+    other = store.Settings()
+    other.spectrum.gain = 300.0
+    path = tmp_path / "song.nto"
+    project.save(project.Project(values=store.project_values(other)), path)
+    assert own_window.load_project(path) is True
+
+    own_window.mix.gain.set_value(340.0)  # the document's gain, not the app's
+    own_window._on_panel_changed()
+    own_window.settings_store.flush()
+    written = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert own_window.settings.spectrum.gain == 340.0
+    assert written["spectrum"]["gain"] == store.Settings().spectrum.gain
+
+
+def test_drawing_marks_the_document_that_has_a_name(own_window) -> None:
+    assert own_window.project_dirty is False
+    own_window.transport.bpm.setValue(90.0)
+    assert own_window.project_dirty is True
+    assert own_window._document_name() == "Untitled*"  # nothing to ask about until it has a file
+
+
+def test_unsaved_notes_are_asked_about_once(own_window, monkeypatch) -> None:
+    asked: list[tuple] = []
+
+    def warning(*args, **_kwargs):
+        asked.append(args)
+        return QMessageBox.StandardButton.Discard
+
+    monkeypatch.setattr(QMessageBox, "warning", warning)
+    assert own_window._confirm_discard() is True  # a sketch is not worth interrupting anyone over
+    assert asked == []
+
+    own_window.view.set_notes([(64, 0.0, 1.0)])
+    own_window.project_path = Path("song.nto")
+    assert own_window._confirm_discard() is True
+    assert len(asked) == 1
+    assert "song.nto" in asked[0][2]
+
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.StandardButton.Cancel)
+    assert own_window._confirm_discard() is False
+    own_window.project_dirty = False
+
+
+def test_the_open_dialog_is_left_alone_when_the_notes_are_kept(own_window, monkeypatch) -> None:
+    own_window.view.set_notes([(64, 0.0, 1.0)])
+    own_window.project_path = Path("song.nto")
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.StandardButton.Cancel)
+    asked: list[str] = []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: asked.append("opened"))
+    own_window._on_open()
+    assert asked == []
+    own_window.project_dirty = False
+
+
+def test_saving_as_adds_the_suffix_when_it_is_missing(own_window, monkeypatch, tmp_path) -> None:
+    own_window.view.set_notes([(64, 0.0, 1.0)])
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "mysong"), ""))
+    assert own_window._on_save() is True
+    assert own_window.project_path == tmp_path / "mysong.nto"
+    assert (tmp_path / "mysong.nto").exists()
+
+
+def test_a_project_is_picked_up_from_the_command_line(qt_app, tmp_path) -> None:
+    path = tmp_path / "song.nto"
+    project.save(
+        project.Project(values=store.project_values(store.Settings()), notes=(project.Note(1.0, 0.5, 62),)),
+        path,
+    )
+    window = MainWindow(audio=str(path))
+    try:
+        assert window.project_path == path
+        assert [note.pitch for note in window.view.notes()] == [62]
+    finally:
+        window.project_dirty = False
+        window.close()

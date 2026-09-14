@@ -29,6 +29,139 @@ ESTIMATORS = ("beats", "tempocnn")
 MODEL_SIZES = ("small", "medium", "large")
 LANGUAGES = ("en", "ja", "zh")
 SUBDIVISIONS = (1, 2, 4, 8, 16, 32)
+# the General MIDI program list, in the order the program change is meant to select them in
+GM_PROGRAMS = (
+    "Acoustic Grand Piano",
+    "Bright Acoustic Piano",
+    "Electric Grand Piano",
+    "Honky-tonk Piano",
+    "Electric Piano 1",
+    "Electric Piano 2",
+    "Harpsichord",
+    "Clavinet",
+    "Celesta",
+    "Glockenspiel",
+    "Music Box",
+    "Vibraphone",
+    "Marimba",
+    "Xylophone",
+    "Tubular Bells",
+    "Dulcimer",
+    "Drawbar Organ",
+    "Percussive Organ",
+    "Rock Organ",
+    "Church Organ",
+    "Reed Organ",
+    "Accordion",
+    "Harmonica",
+    "Tango Accordion",
+    "Acoustic Guitar (nylon)",
+    "Acoustic Guitar (steel)",
+    "Electric Guitar (jazz)",
+    "Electric Guitar (clean)",
+    "Electric Guitar (muted)",
+    "Overdriven Guitar",
+    "Distortion Guitar",
+    "Guitar Harmonics",
+    "Acoustic Bass",
+    "Electric Bass (finger)",
+    "Electric Bass (pick)",
+    "Fretless Bass",
+    "Slap Bass 1",
+    "Slap Bass 2",
+    "Synth Bass 1",
+    "Synth Bass 2",
+    "Violin",
+    "Viola",
+    "Cello",
+    "Contrabass",
+    "Tremolo Strings",
+    "Pizzicato Strings",
+    "Orchestral Harp",
+    "Timpani",
+    "String Ensemble 1",
+    "String Ensemble 2",
+    "Synth Strings 1",
+    "Synth Strings 2",
+    "Choir Aahs",
+    "Voice Oohs",
+    "Synth Voice",
+    "Orchestra Hit",
+    "Trumpet",
+    "Trombone",
+    "Tuba",
+    "Muted Trumpet",
+    "French Horn",
+    "Brass Section",
+    "Synth Brass 1",
+    "Synth Brass 2",
+    "Soprano Sax",
+    "Alto Sax",
+    "Tenor Sax",
+    "Baritone Sax",
+    "Oboe",
+    "English Horn",
+    "Bassoon",
+    "Clarinet",
+    "Piccolo",
+    "Flute",
+    "Recorder",
+    "Pan Flute",
+    "Blown Bottle",
+    "Shakuhachi",
+    "Whistle",
+    "Ocarina",
+    "Lead 1 (square)",
+    "Lead 2 (sawtooth)",
+    "Lead 3 (calliope)",
+    "Lead 4 (chiff)",
+    "Lead 5 (charang)",
+    "Lead 6 (voice)",
+    "Lead 7 (fifths)",
+    "Lead 8 (bass + lead)",
+    "Pad 1 (new age)",
+    "Pad 2 (warm)",
+    "Pad 3 (polysynth)",
+    "Pad 4 (choir)",
+    "Pad 5 (bowed)",
+    "Pad 6 (metallic)",
+    "Pad 7 (halo)",
+    "Pad 8 (sweep)",
+    "FX 1 (rain)",
+    "FX 2 (soundtrack)",
+    "FX 3 (crystal)",
+    "FX 4 (atmosphere)",
+    "FX 5 (brightness)",
+    "FX 6 (goblins)",
+    "FX 7 (echoes)",
+    "FX 8 (sci-fi)",
+    "Sitar",
+    "Banjo",
+    "Shamisen",
+    "Koto",
+    "Kalimba",
+    "Bag pipe",
+    "Fiddle",
+    "Shanai",
+    "Tinkle Bell",
+    "Agogo",
+    "Steel Drums",
+    "Woodblock",
+    "Taiko Drum",
+    "Melodic Tom",
+    "Synth Drum",
+    "Reverse Cymbal",
+    "Guitar Fret Noise",
+    "Breath Noise",
+    "Seashore",
+    "Bird Tweet",
+    "Telephone Ring",
+    "Helicopter",
+    "Applause",
+    "Gunshot",
+)
+PROGRAMS = tuple(range(len(GM_PROGRAMS)))
+PROGRAM_LABELS = tuple(f"{index}: {name}" for index, name in enumerate(GM_PROGRAMS))
 
 
 @dataclass(frozen=True)
@@ -45,9 +178,11 @@ class Field:
     step: float = 0.0  # values snap to it, 0 meaning they do not
     decimals: int = 3
     choices: tuple = ()
+    labels: tuple[str, ...] = ()  # what to show for each choice, the choices themselves when empty
     suffix: str = ""
     advanced: bool = False
     hidden: bool = False
+    scope: str = "app"  # "project": the value describes a document, so the project file owns it
 
 
 @dataclass(frozen=True)
@@ -70,6 +205,7 @@ SECTIONS: tuple[Section, ...] = (
                 "mono",
                 "Channels",
                 "Which channels the analysis reads",
+                scope="project",
                 choices=CHANNEL_MODES,
             ),
             Field(
@@ -78,6 +214,7 @@ SECTIONS: tuple[Section, ...] = (
                 40.0,
                 "Frames/s",
                 "Analysis frames per second: the time resolution of the spectrum",
+                scope="project",
                 low=1,
                 high=200,
                 decimals=2,
@@ -88,6 +225,7 @@ SECTIONS: tuple[Section, ...] = (
                 8192,
                 "FFT points",
                 "Window size of the analysis: the frequency resolution",
+                scope="project",
                 low=256,
                 high=32768,
                 step=256,
@@ -98,6 +236,7 @@ SECTIONS: tuple[Section, ...] = (
                 440.0,
                 "A4 (Hz)",
                 "Frequency of A4, followed by both the analysis bands and the played notes",
+                scope="project",
                 low=400,
                 high=480,
                 step=0.5,
@@ -110,13 +249,24 @@ SECTIONS: tuple[Section, ...] = (
         "Display",
         "Spectrum",
         (
-            Field("gain", "float", 240.0, "Gain", "Energy it takes for the spectrum to reach full red", 10, 600, 1),
+            Field(
+                "gain",
+                "float",
+                240.0,
+                "Gain",
+                "Energy it takes for the spectrum to reach full red",
+                low=10,
+                high=600,
+                step=1,
+                scope="project",
+            ),
             Field(
                 "contrast",
                 "float",
                 1.0,
                 "Contrast",
                 "Exponent applied to the spectrum's energy",
+                scope="project",
                 low=0.2,
                 high=4.0,
                 step=0.1,
@@ -161,15 +311,25 @@ SECTIONS: tuple[Section, ...] = (
                 high=1000,
                 step=10,
             ),
-            Field("velocity", "int", 100, "Velocity", "Note velocity, for an external synth", low=1, high=127),
+            Field(
+                "velocity",
+                "int",
+                100,
+                "Velocity",
+                "Note velocity, for an external synth",
+                low=1,
+                high=127,
+                scope="project",
+            ),
             Field(
                 "program",
-                "int",
+                "choice",
                 0,
                 "Program",
-                "General MIDI program sent to an external synth; 0 is a grand piano",
-                low=0,
-                high=127,
+                "General MIDI program sent to an external synth, by number; 0 is a grand piano",
+                scope="project",
+                choices=PROGRAMS,
+                labels=PROGRAM_LABELS,
             ),
             Field(
                 "preview_seconds",
@@ -188,6 +348,7 @@ SECTIONS: tuple[Section, ...] = (
                 80,
                 "Audio volume",
                 "Starting volume of the analysed audio",
+                scope="project",
                 low=0,
                 high=100,
                 suffix="%",
@@ -198,6 +359,7 @@ SECTIONS: tuple[Section, ...] = (
                 80,
                 "MIDI volume",
                 "Starting volume of the note playback",
+                scope="project",
                 low=0,
                 high=100,
                 suffix="%",
@@ -210,7 +372,6 @@ SECTIONS: tuple[Section, ...] = (
                 "Offset between the sound and the displayed waveform",
                 low=-500,
                 high=500,
-                suffix=" ms",
             ),
             Field(
                 "speed",
@@ -218,6 +379,7 @@ SECTIONS: tuple[Section, ...] = (
                 1.0,
                 "Speed",
                 "Playback speed in 5% steps, 0.10x to 2.00x; the pitch is left alone",
+                scope="project",
                 low=0.1,
                 high=2.0,
                 step=0.05,
@@ -238,13 +400,14 @@ SECTIONS: tuple[Section, ...] = (
                 "Start in edit mode",
                 "Open with the pen rather than the view tool",
             ),
-            Field("snap", "float", 0.5, "Snap", "Snap grid for the pen tool", low=0.0625, high=4.0),
+            Field("snap", "float", 0.5, "Snap", "Snap grid for the pen tool", low=0.0625, high=4.0, scope="project"),
             Field(
                 "division",
                 "choice",
                 "beats",
                 "Division",
                 "What the ruler's lower row and the drawn grid lines divide by",
+                scope="project",
                 choices=DIVISIONS,
             ),
             Field(
@@ -253,11 +416,22 @@ SECTIONS: tuple[Section, ...] = (
                 48.0,
                 "Zoom x",
                 "Pixels per beat at startup",
+                scope="project",
                 low=12,
                 high=900,
                 decimals=1,
             ),
-            Field("zoom_y", "float", 16.0, "Zoom y", "Pixels per semitone row at startup", low=8, high=64, decimals=1),
+            Field(
+                "zoom_y",
+                "float",
+                16.0,
+                "Zoom y",
+                "Pixels per semitone row at startup",
+                low=8,
+                high=64,
+                decimals=1,
+                scope="project",
+            ),
             Field(
                 "overtone_highlight",
                 "bool",
@@ -286,6 +460,7 @@ SECTIONS: tuple[Section, ...] = (
                 120.0,
                 "Tempo",
                 "Tempo of the beat grid at startup",
+                scope="project",
                 low=20,
                 high=300,
                 step=0.1,
@@ -430,7 +605,7 @@ SECTIONS: tuple[Section, ...] = (
                 "last_audio_dir",
                 "path",
                 "",
-                "Last audio directory",
+                "Last directory",
                 "Where the file chooser starts",
             ),
         ),
@@ -442,8 +617,28 @@ SECTIONS: tuple[Section, ...] = (
         (
             Field("geometry", "text", "", "Window geometry", hidden=True),
             Field("window_state", "text", "", "Window state", hidden=True),
-            Field("center_x", "float", 8.0, "View center x", hidden=True, low=0.0, high=10000.0, decimals=1),
-            Field("center_y", "float", 48.0, "View center y", hidden=True, low=0.0, high=88.0, decimals=1),
+            Field(
+                "center_x",
+                "float",
+                8.0,
+                "View center x",
+                hidden=True,
+                low=0.0,
+                high=10000.0,
+                decimals=1,
+                scope="project",
+            ),
+            Field(
+                "center_y",
+                "float",
+                48.0,
+                "View center y",
+                hidden=True,
+                low=0.0,
+                high=88.0,
+                decimals=1,
+                scope="project",
+            ),
         ),
     ),
 )
@@ -470,6 +665,27 @@ def _build_types() -> type:
 
 Settings = _build_types()
 FIELD_SPECS = {(section.name, item.name): item for section in SECTIONS for item in section.fields}
+PROJECT_FIELDS = tuple(
+    (section.name, item) for section in SECTIONS for item in section.fields if item.scope == "project"
+)
+
+
+def project_values(settings: Settings) -> dict[str, dict]:
+    """The part of the settings that belongs to a document rather than to the machine."""
+    values: dict[str, dict] = {}
+    for section, item in PROJECT_FIELDS:
+        values.setdefault(section, {})[item.name] = get_value(settings, section, item.name)
+    return values
+
+
+def apply_project_values(settings: Settings, data: Any) -> None:
+    """Put a project's values on a settings object, ignoring the keys that are not project fields."""
+    if not isinstance(data, dict):
+        return
+    for section, item in PROJECT_FIELDS:
+        stored = data.get(section)
+        if isinstance(stored, dict) and item.name in stored:
+            set_value(settings, section, item.name, stored[item.name])
 
 
 def default_path() -> Path:
@@ -494,7 +710,8 @@ def coerce(spec: Field, value: Any) -> Any:
     if spec.kind == "bool":
         return value if isinstance(value, bool) else spec.default
     if spec.kind == "choice":
-        return value if value in spec.choices else spec.default
+        # a bool would pass for 0 or 1 here, and the synthesiser would be sent a true instead of a number
+        return value if not isinstance(value, bool) and value in spec.choices else spec.default
     if spec.kind in ("int", "float"):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             return spec.default
@@ -541,11 +758,11 @@ def load(path: str | Path | None = None) -> Settings:
     return from_dict(data)
 
 
-def save(settings: Settings, path: str | Path | None = None) -> Path:
-    """Write the settings out whole: a half-written file would be read as a broken one."""
-    target = Path(path) if path is not None else default_path()
+def write_json(data: dict, path: str | Path) -> Path:
+    """Write a whole file at once, with the layout both settings and projects use."""
+    target = Path(path)
     target.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(to_dict(settings), indent=2, ensure_ascii=False, sort_keys=True) + "\n"
+    text = json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
     handle, name = tempfile.mkstemp(dir=target.parent, prefix=f"{target.name}.", suffix=".tmp")
     try:
         with os.fdopen(handle, "w", encoding="utf-8") as stream:
@@ -555,6 +772,11 @@ def save(settings: Settings, path: str | Path | None = None) -> Path:
         Path(name).unlink(missing_ok=True)
         raise
     return target
+
+
+def save(settings: Settings, path: str | Path | None = None) -> Path:
+    """Write the settings out whole: a half-written file would be read as a broken one."""
+    return write_json(to_dict(settings), Path(path) if path is not None else default_path())
 
 
 def clone(settings: Settings) -> Settings:

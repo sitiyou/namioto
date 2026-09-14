@@ -49,6 +49,8 @@ class SettingsStore(QObject):
         super().__init__(parent)
         self.settings = settings
         self.path = path or store.default_path()
+        # a project owns some of the values, so what goes to the file is not always what is on screen
+        self.source = lambda: self.settings
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(SAVE_DELAY_MS)
@@ -58,16 +60,18 @@ class SettingsStore(QObject):
         """Something changed, and more may follow: write it out when they settle."""
         self._timer.start()
 
-    def apply(self, settings) -> None:
-        """Take whole settings over, at once, from the settings window."""
+    def apply(self, settings, save: bool = True) -> None:
+        """Take whole settings over, at once, from the settings window or from an open project."""
         self.settings = settings
+        self._timer.stop()  # anything still pending is older than what is being applied
         self.changed.emit(settings)
-        self.flush()
+        if save:
+            self.flush()
 
     def flush(self) -> None:
         self._timer.stop()
         try:
-            store.save(self.settings, self.path)
+            store.save(self.source(), self.path)
         except OSError as error:  # a read-only home must not take the editor down
             self.failed.emit(f"Settings could not be saved: {error}")
 
@@ -232,7 +236,8 @@ class SettingsDialog(QDialog):
         if field.kind == "bool":
             widget = QCheckBox()
         elif field.kind == "choice":
-            return self._combo([(str(choice), choice) for choice in field.choices], value)
+            labels = field.labels or tuple(str(choice) for choice in field.choices)
+            return self._combo(list(zip(labels, field.choices, strict=True)), value)
         elif field.kind == "int":
             widget = QSpinBox()
             widget.setRange(int(field.low), int(field.high))

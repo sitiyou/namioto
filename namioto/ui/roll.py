@@ -95,9 +95,10 @@ class NoteItem(QGraphicsRectItem):
 
     def __init__(self, pitch: int, start: float, duration: float):
         super().__init__()
-        self.pitch = pitch
-        self.start = start
-        self.duration = duration
+        # notes also arrive from files and models, and they still have to land inside the roll
+        self.pitch = min(PITCH_MAX, max(PITCH_MIN, int(pitch)))
+        self.start = max(0.0, float(start))
+        self.duration = max(MIN_DURATION, float(duration))
         self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self._sync()
@@ -239,6 +240,15 @@ class PianoRollView(QGraphicsView):
         self.notes_changed.emit()
         return note
 
+    def set_notes(self, notes) -> None:
+        """Replace every note in one go: a project or an extraction arrives all at once."""
+        for note in self.notes():
+            self._scene.removeItem(note)
+        for pitch, start, duration in notes:
+            self._scene.addItem(NoteItem(pitch, start, duration))
+        self._update_scene()
+        self.notes_changed.emit()
+
     def clear_notes(self) -> None:
         for note in self.notes():
             self._scene.removeItem(note)
@@ -304,6 +314,17 @@ class PianoRollView(QGraphicsView):
         self._zoom_y = min(self.MAX_ZOOM_Y, max(self.MIN_ZOOM_Y, zoom_y))
         self.setTransform(QTransform.fromScale(self._zoom_x, self._zoom_y))
         self.refresh()
+
+    def center_on(self, x: float, y: float) -> None:
+        """Put (x, y) in the middle of the viewport, the way opening a project restores its view."""
+        self.initial_center = (x, y)
+        self.centerOn(x, y)
+        self.refresh()
+
+    @property
+    def seconds_per_beat(self) -> float:
+        """What one scene unit is worth in time: the one conversion every caller has to get right."""
+        return 60.0 / self.bpm
 
     def seconds_at_viewport_x(self, x: float) -> float:
         """The timeline position under a viewport x, for the widgets that share the roll's columns."""

@@ -11,12 +11,15 @@ from PyQt6.QtCore import QByteArray, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence, QPalette, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
+    QFileDialog,
     QGridLayout,
     QLabel,
     QMainWindow,
+    QMessageBox,
     QWidget,
 )
 
+from namioto import project
 from namioto import settings as store
 from namioto.beats import TOLERANCE, estimate
 from namioto.playback import note_frequency
@@ -185,11 +188,16 @@ class MainWindow(QMainWindow):
         self.resize(1200, 720)
         self.settings = settings if settings is not None else store.load()
         self.settings_store = SettingsStore(self.settings, parent=self)
+        self.settings_store.source = self._file_settings
         self.settings_store.changed.connect(self._on_settings_changed)
         self.settings_store.failed.connect(lambda message: self.statusBar().showMessage(message))
         self.overrides = dict(overrides or {})  # values this run was asked for, never written back
         self._display_overrides: dict[str, float] = {}
         self._seeding = False
+        self._loading = False
+        self._app_defaults: store.Settings | None = None
+        self.project_path: Path | None = None
+        self.project_dirty = False
         self.audio_path: str | None = None
         self.loader: SpectrumLoader | None = None
         self.tempo_loader: TempoLoader | None = None
@@ -277,6 +285,8 @@ class MainWindow(QMainWindow):
         self.transport.play_pause_requested.connect(self._toggle_play)
         self.transport.play_from_start_requested.connect(self._play_from_start)
         self.transport.stop_requested.connect(self._stop)
+        self.transport.open_requested.connect(self._on_open)
+        self.transport.save_requested.connect(self._on_save)
         self.player.finished.connect(self._on_playback_finished)
         self.song.finished.connect(self._on_playback_finished)
         self.view.seek_requested.connect(self._seek)
@@ -308,14 +318,20 @@ class MainWindow(QMainWindow):
         self.edit.snap.currentIndexChanged.connect(self._on_panel_changed)
 
         self.view.notes_changed.connect(self._update_status)
+        self.view.notes_changed.connect(self._mark_dirty)
+        self.transport.bpm.valueChanged.connect(self._mark_dirty)
         self.play_shortcut = QShortcut(QKeySequence("Space"), self)
         self.play_shortcut.activated.connect(self._toggle_play)
+        for keys, slot in (("Ctrl+O", self._on_open), ("Ctrl+S", self._on_save), ("Ctrl+Shift+S", self._on_save_as)):
+            QShortcut(QKeySequence(keys), self).activated.connect(slot)
         self.cursor_note = QLabel()
         self.cursor_note.setObjectName("cursorNote")
         self.statusBar().addPermanentWidget(self.cursor_note)
         self._restore_session()
         if audio is None:
             self._show_hint()
+        elif project.looks_like_project(audio):
+            self.load_project(audio)
         else:
             self.load_audio(audio)
         self._update_status()
@@ -417,7 +433,7 @@ class MainWindow(QMainWindow):
         self.player.gain = self.mix.midi_volume.value() / 100.0
         self.player.finished.connect(self._on_playback_finished)
         self.mix.midi_volume.slider.setToolTip(f"Volume of the note playback through {self.player_name}")
-        beats = 60.0 / self.view.bpm
+        beats = self.view.seconds_per_beat
         notes = tuple((note.pitch, note.start * beats, note.duration * beats) for note in self.view.notes())
         self.player.set_program(notes, self.transport.speed.value())
         if playing:
@@ -461,7 +477,157 @@ class MainWindow(QMainWindow):
         session.center_x = round(centre.x(), 1)
         session.center_y = round(centre.y(), 1)
 
+    def _file_settings(self):
+        """What the app's file keeps: once a project is open, the values you had before it are still
+        your defaults, so the project's own values never leak into them."""
+        if self._app_defaults is None:
+            return self.settings
+        kept = store.clone(self.settings)
+        for section, item in store.PROJECT_FIELDS:
+            store.set_value(kept, section, item.name, store.get_value(self._app_defaults, section, item.name))
+        return kept
+
+    def _document_name(self) -> str:
+        name = self.project_path.stem if self.project_path is not None else "Untitled"
+        return f"{name}*" if self.project_dirty else name
+
+    def _mark_dirty(self, *_args) -> None:
+        """What a save would otherwise lose: the notes, the tempo and the audio. The view and the
+        listening values are written with a project, but do not mark it as changed."""
+        if self._loading or self.project_dirty:
+            return
+        self.project_dirty = True
+        self._update_status()
+
+    def _start_directory(self) -> str:
+        """Where a file dialog opens: the folder of the project in use, else the last one opened."""
+        if self.project_path is not None:
+            return str(self.project_path.parent)
+        return self.settings.paths.last_audio_dir or str(Path.home())
+
+    def _confirm_discard(self) -> bool:
+        """Ask before unsaved notes go; False means the caller should do nothing. A roll that has no
+        file yet is a sketch, so it is not worth interrupting anyone over."""
+        if self.project_path is None or not self.project_dirty:
+            return True
+        choice = QMessageBox.warning(
+            self,
+            "Namioto",
+            f"Save the changes to {self.project_path.name}?",
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if choice == QMessageBox.StandardButton.Cancel:
+            return False
+        if choice == QMessageBox.StandardButton.Save:
+            return self._on_save()
+        return True
+
+    def _on_open(self) -> None:
+        if not self._confirm_discard():
+            return
+        chosen, _filter = QFileDialog.getOpenFileName(
+            self, "Open project", self._start_directory(), f"Namioto project (*{project.SUFFIX});;All files (*)"
+        )
+        if chosen:
+            self.load_project(chosen)
+
+    def _on_save(self) -> bool:
+        if self.project_path is None:
+            return self._on_save_as()
+        return self.save_project(self.project_path)
+
+    def _on_save_as(self) -> bool:
+        suggested = Path(self._start_directory()) / f"untitled{project.SUFFIX}"
+        chosen, _filter = QFileDialog.getSaveFileName(
+            self,
+            "Save project",
+            str(self.project_path or suggested),
+            f"Namioto project (*{project.SUFFIX})",
+        )
+        if not chosen:
+            return False
+        target = Path(chosen)
+        if not project.looks_like_project(target):
+            target = target.with_name(target.name + project.SUFFIX)
+        return self.save_project(target)
+
+    def load_project(self, path: str | Path) -> bool:
+        """Open a project: its values come over the running ones, and its notes replace the roll."""
+        try:
+            opened = project.load(path)
+        except (OSError, ValueError) as error:
+            self.statusBar().showMessage(f"Project could not be opened: {error}")
+            return False
+        self._loading = True
+        try:
+            if self._app_defaults is None:
+                self._app_defaults = store.clone(self.settings)
+            store.apply_project_values(self.settings, opened.values)
+            self.settings_store.apply(self.settings, save=False)
+            self.project_path = Path(path)
+            self.project_dirty = False
+            missing = self._open_audio(project.resolve_audio(self.project_path, opened.audio))
+            per_beat = self.view.seconds_per_beat  # scene units are beats, the file keeps seconds
+            self.view.set_notes((note.pitch, note.start / per_beat, note.duration / per_beat) for note in opened.notes)
+            self.view.center_on(self.settings.session.center_x, self.settings.session.center_y)
+        finally:
+            self._loading = False
+        self._update_status()
+        self.statusBar().showMessage(f"Opened {self.project_path.name} — {len(opened.notes)} notes{missing}")
+        return True
+
+    def save_project(self, path: str | Path) -> bool:
+        """Write the notes and the values that belong to them out to `path`."""
+        self._remember_configuration()
+        self._remember_session()
+        target = Path(path)
+        beats = self.view.seconds_per_beat
+        # scene order is not a file's order: sorted notes keep a saved project stable to diff
+        notes = tuple(
+            sorted(project.Note(note.start * beats, note.duration * beats, note.pitch) for note in self.view.notes())
+        )
+        payload = project.Project(
+            values=store.project_values(self.settings),
+            audio=project.store_audio(target, self.audio_path),
+            notes=notes,
+        )
+        try:
+            project.save(payload, target)
+        except OSError as error:
+            self.statusBar().showMessage(f"Project could not be saved: {error}")
+            return False
+        self.project_path = target
+        self.project_dirty = False
+        store.set_value(self.settings, "paths", "last_audio_dir", str(target.parent))
+        self.settings_store.touch()
+        self._update_status()
+        self.statusBar().showMessage(f"Saved {target.name} — {len(notes)} notes")
+        return True
+
+    def _open_audio(self, target: Path | None) -> str:
+        """Load the audio a project names, or say why there is none: its notes are worth having either way."""
+        if target is not None and target.exists():
+            self.load_audio(str(target))
+            return ""
+        self._clear_audio()
+        return f" (audio not found: {target})" if target is not None else ""
+
+    def _clear_audio(self) -> None:
+        """Forget the analysed file, for a project that names one this machine does not have."""
+        self.position_timer.stop()
+        self.audio_path = None
+        self.view.set_spectrum(None)
+        self.song.unload()
+        self.player.stop()
+        self.transport.detect.setEnabled(False)
+        self.transport.tempo.hide()
+        self._show_position()
+
     def closeEvent(self, event) -> None:
+        if not self._confirm_discard():
+            event.ignore()
+            return
         self._remember_configuration()
         self._remember_session()
         self.settings_store.flush()
@@ -483,6 +649,7 @@ class MainWindow(QMainWindow):
 
     def load_audio(self, path: str) -> None:
         self.audio_path = path
+        self._mark_dirty()
         store.set_value(self.settings, "paths", "last_audio_dir", str(Path(path).parent))
         self.settings_store.touch()
         self.loader = SpectrumLoader(path, parent=self, **self._analysis_options())
@@ -515,7 +682,7 @@ class MainWindow(QMainWindow):
 
     def _set_note_speed(self, speed: float) -> None:
         """Hand the notes over at `speed`, carrying on from where they are playing."""
-        beats = 60.0 / self.view.bpm  # scene units are beats, the players work in seconds
+        beats = self.view.seconds_per_beat  # scene units are beats, the players work in seconds
         notes = tuple((note.pitch, note.start * beats, note.duration * beats) for note in self.view.notes())
         if not notes:
             return
@@ -595,7 +762,7 @@ class MainWindow(QMainWindow):
 
     def _play(self) -> None:
         """Send the notes to the synth and start the audio file, both from where the cursor sits."""
-        beats = 60.0 / self.view.bpm  # scene units are beats, the players work in seconds
+        beats = self.view.seconds_per_beat  # scene units are beats, the players work in seconds
         notes = tuple((note.pitch, note.start * beats, note.duration * beats) for note in self.view.notes())
         if not notes and not self.song.is_loaded:
             self.statusBar().showMessage("Nothing to play: load a file or draw some notes")
@@ -725,12 +892,12 @@ class MainWindow(QMainWindow):
         )
 
     def _update_status(self) -> None:
-        self.setWindowTitle(f"Namioto — {len(self.view.notes())} notes")
+        self.setWindowTitle(f"{self._document_name()} — Namioto — {len(self.view.notes())} notes")
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="namioto", description="Namioto piano-roll MIDI editor")
-    parser.add_argument("audio", nargs="?", help="audio file to analyse and draw as a spectrum")
+    parser.add_argument("audio", nargs="?", help="audio file to analyse, or a .nto project to open")
     parser.add_argument("--channels", choices=CHANNEL_MODES, help="which channels to analyse, over the settings")
     parser.add_argument("--t-num", type=float, help="spectrum frames per second, over the settings")
     parser.add_argument("--gain", type=float, help="spectrum gain for this run")

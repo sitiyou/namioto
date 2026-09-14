@@ -105,6 +105,10 @@ class SongPlayer(QObject):
         self.stretch = 1.0
         self.sample_rate = int(sample_rate)
 
+    def unload(self) -> None:
+        """Drop the song: a project without audio, or without the audio it names, has nothing to play."""
+        self.load(np.zeros(0, dtype=np.float32), 0)
+
     def set_stretched(self, buffer: np.ndarray, stretch: float) -> None:
         """Take the song rerendered for a speed, carrying on from where the playhead sits."""
         position = self.position
