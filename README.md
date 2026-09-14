@@ -106,10 +106,10 @@ placeholder — the analysed audio itself cannot be played yet.
 
 | Action | Input |
 | --- | --- |
-| Edit mode | The button in front of the tools: notes can only be drawn, moved, resized and selected while it is on, the spectrum behind them fades so that they stand out over it (WaveTone does the same), and picking the pen or the select tool turns the mode on as well - entering it starts on the pen, and the snap grid and the clear button are only usable inside it. The window opens with it off, so a click in the roll moves the playhead until a tool is picked |
-| Draw note | Pen tool: left drag on the empty grid (drag either way to set the length) |
+| Edit mode | The button in front of the tools: notes can only be drawn, moved, resized and selected while it is on, the spectrum behind them fades so that they stand out over it (WaveTone does the same), and picking the pen or the select tool turns the mode on as well - entering it starts on the pen, and the snap grid and the clear button are only usable inside it. The window opens with it off, so a click in the roll moves the playhead until a tool is picked. Hovering marks the row under the mouse, and the piano key with it, in either mode; editing adds the octave and the twelfth to both |
+| Draw note | Pen tool: left drag on the empty grid. Horizontal movement sets the length, vertical movement sets the pitch, so the note follows the pointer |
 | Move note(s) | Left drag a note |
-| Resize note | Left drag the right edge of a note, or Shift + left drag anywhere on it: its left half moves the start, its right half the end |
+| Resize note | Left drag either edge of a note, or Shift + left drag anywhere on it: its left half moves the start, its right half the end |
 | Select note | Left click |
 | Add to selection | Ctrl + left click |
 | Box select | Select tool: left drag on the grid, or Ctrl + left drag with either tool |
@@ -117,7 +117,7 @@ placeholder — the analysed audio itself cannot be played yet.
 | Delete | Right click a note, or Delete / Backspace for the selection |
 | Cancel a drag | Escape |
 | Play or pause | `Space` or the play/pause button |
-| Move the playhead | A press on the empty grid in the roll - the pen draws a note there at the same time - a click in the timeline ruler (any mode), or the rewind / forward buttons for the ends. Pressing an existing note only moves, resizes or selects it |
+| Move the playhead | A press anywhere in the roll - over the grid or over a note, in either mode - or a click in the timeline ruler (any mode, and it works while the file plays), or the rewind / forward buttons for the ends. A press on a note moves, resizes or selects it *and* moves the playhead. Dragging carries the playhead along with the pointer, and sounding every row it crosses like a glissando. While the audio plays the roll keeps its cursor so editing does not jump the sound; seeking then is what the ruler is for, and the file carries on from there |
 | Double / halve the tempo | Right-click the Tempo field, or press `*` / `/` while it has the focus |
 | Pan | Middle drag, a scrollbar, or drag in the timeline ruler to scroll horizontally |
 | Zoom time | Ctrl + wheel |
@@ -136,13 +136,16 @@ The TempoCNN model (`namioto/tempo.py`, `namioto-tempocnn`) is kept as the runne
 full mixes but its 256 integer-BPM classes and its training data (full mixes only) make it a poor
 fit for stems, where beat tracking wins.
 
-The transport plays the loaded audio file and the notes on top of it. A press on the empty grid in
-the roll moves its playhead - with the pen the note is drawn there as well, so a click writes a note
-where the sound has just moved to - a click in the timeline ruler moves it in any mode (dragging the
-ruler still scrolls), and `Space` starts and pauses; the playhead, the readout and the timeline grid
-all follow the file. The audio is streamed to Qt's audio output one buffer at a
-time, mono at the sample rate of the file, so seeking is a cursor move and **Speed** becomes a
-fractional step over it: twice the speed consumes two seconds of the song per second of wall clock,
+The transport plays the loaded audio file and the notes on top of it. A press in the roll moves its
+playhead wherever it lands - over a note it edits it as well, over the empty grid the pen draws one
+there, so a click writes a note where the sound has just moved to. Held down, the drag keeps
+carrying that playhead with the pointer and sounds every row it slides over, which is a glissando
+up and down the keyboard. While the file is playing that
+press only edits: the cursor is left alone, and the timeline ruler is what seeks, from where the
+sound carries on. `Space` starts and pauses; the playhead, the readout and the timeline grid all
+follow the file. The audio is streamed to Qt's audio output one buffer at a time, mono at the sample
+rate of the file, so seeking is a cursor move and **Speed** becomes a fractional step over it: twice
+the speed consumes two seconds of the song per second of wall clock,
 which keeps the notes and the audio on the same timeline (the tape-style pitch shift that comes with
 it is what a speed control on a recording does; the note layer stays in tune).
 
@@ -151,9 +154,14 @@ MIDI bus - TiMidity and FluidSynth are recognised by name, and the tooltip of th
 says which one is in use, because that is where the sound comes from (patches included). Without
 one, the notes are rendered by a small additive synth inside the program and streamed through Qt's
 audio output instead. **Latency** nudges the
-position readout. Clicking a key on the keyboard or a note
-in the roll auditions it. Hovering the roll tints the row under the mouse in either mode; while
-editing it also tints its octave and twelfth the way WaveTone does, paints those keys red and shows
+position readout. A click in the roll auditions what it lands on - the pitch of the row, whether or
+not it is a note - in either mode, and so does a key on the keyboard: listening and editing are
+separate. Auditions never wait for the one before them: each click is its own note, and clicking the
+same row again releases that note and starts it over - one note-off before the new note-on on the
+synth, a 40 ms release ramp over the note still ringing inside - instead of stacking on it or waiting
+for it to finish, so fast clicking on one row sounds every time. Hovering the roll tints the
+row under the mouse and paints that piano key red, in
+either mode, white or black; while editing it also tints the octave and the twelfth, and shows
 the note name and frequency next to the status bar; outside edit mode the roll is a plain view of the
 spectrum and the notes.
 

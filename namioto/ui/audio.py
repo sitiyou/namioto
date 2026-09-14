@@ -11,7 +11,7 @@ import numpy as np
 from PyQt6.QtCore import QIODevice, QObject, pyqtSignal
 from PyQt6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices, QtAudio
 
-from namioto.playback import SAMPLE_RATE, render_notes
+from namioto.playback import RELEASE, SAMPLE_RATE, render_notes
 
 BUFFER_MS = 80
 INT16_PEAK = 32767.0
@@ -103,6 +103,8 @@ class MidiSink(NotePlayer):
         self.sample_rate = sample_rate
         self.mix = np.zeros(0, dtype=np.float32)
         self._key: tuple | None = None
+        self._voices: dict[int, tuple[int, int]] = {}  # pitch -> where its audition sits in the mix
+        self._release_frames = int(RELEASE * sample_rate)
         self._speed = 1.0
         self._start = 0.0
         self._sink: QAudioSink | None = None
@@ -122,11 +124,13 @@ class MidiSink(NotePlayer):
         self.stop()
         self._speed = speed
         self.mix = render_notes(notes, speed=speed)
+        self._voices.clear()
         self._key = key
 
     def _load(self, mix: np.ndarray) -> None:
         self.stop()
         self._key = None
+        self._voices.clear()
         self.mix = np.ascontiguousarray(mix, dtype=np.float32)
 
     @property
@@ -173,9 +177,33 @@ class MidiSink(NotePlayer):
         self._close()
 
     def preview(self, pitch: int, seconds: float = PREVIEW_SECONDS) -> None:
-        """Audition one note; the prepared program has to be rendered again afterwards."""
-        self._load(render_notes([(pitch, 0.0, seconds)]))
-        self.play()
+        """Audition one note, mixed over what is already sounding so clicks never cut each other."""
+        voice = render_notes([(pitch, 0.0, seconds)])
+        if self._source is None:
+            self._load(voice)
+            self.play()
+            self._voices[pitch] = (0, len(voice))
+            return
+        # the stream is read from the cursor on, so a voice mixed there starts at the playhead
+        start = self._source.cursor
+        self._release_voice(pitch, start)
+        end = start + len(voice)
+        if end > len(self.mix):
+            self.mix = np.concatenate([self.mix, np.zeros(end - len(self.mix), dtype=np.float32)])
+        self.mix[start:end] += voice
+        self._voices[pitch] = (start, len(voice))
+        self._key = None  # the mix no longer holds the prepared program alone
+
+    def _release_voice(self, pitch: int, from_frame: int) -> None:
+        """Fade out the note this pitch is still sounding, the way a synth releases it on a retrigger."""
+        voice = self._voices.pop(pitch, None)
+        if voice is None:
+            return
+        offset, frames = voice
+        region = self.mix[max(offset, from_frame) : offset + frames]
+        fade = np.linspace(1.0, 0.0, min(len(region), self._release_frames), endpoint=False, dtype=np.float32)
+        region[: len(fade)] *= fade
+        region[len(fade) :] = 0.0
 
     def _close(self) -> None:
         if self._sink is not None:
@@ -203,6 +231,7 @@ class MidiPortOut(NotePlayer):
         self._started: float | None = None
         self._stopping = False
         self._sounding: set[int] = set()
+        self._previews: dict[int, threading.Timer] = {}
         self._thread: threading.Thread | None = None
 
     def set_program(self, notes, speed) -> None:
@@ -251,6 +280,9 @@ class MidiPortOut(NotePlayer):
         if self._thread is not None:
             self._thread.join(timeout=0.5)
             self._thread = None
+        for timer in self._previews.values():
+            timer.cancel()
+        self._previews.clear()
         for pitch in tuple(self._sounding):  # a synth keeps sounding until it is told to stop
             self._send(NOTE_OFF, pitch, 0)
         self._sounding.clear()
@@ -258,9 +290,21 @@ class MidiPortOut(NotePlayer):
         self._start = 0.0
 
     def preview(self, pitch: int, seconds: float = PREVIEW_SECONDS) -> None:
+        """Audition one note; clicking it again restarts it, which needs the old note released first."""
+        pending = self._previews.pop(pitch, None)
+        if pending is not None:
+            pending.cancel()
+            self._send(NOTE_OFF, pitch, 0)  # a synth still holding the note only layers a second one
         self._send(NOTE_ON, pitch, VELOCITY)
-        timer = threading.Timer(seconds, self._send, args=(NOTE_OFF, pitch, 0))
+
+        def release() -> None:
+            if self._previews.get(pitch) is timer:  # a newer click owns the note by now
+                self._previews.pop(pitch, None)
+                self._send(NOTE_OFF, pitch, 0)
+
+        timer = threading.Timer(seconds, release)
         timer.daemon = True
+        self._previews[pitch] = timer
         timer.start()
 
     def _schedule(self) -> None:

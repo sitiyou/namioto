@@ -3,18 +3,14 @@
 
 from __future__ import annotations
 
-import os
+import numpy as np
+import pytest
+import soundfile
+from PyQt6.QtWidgets import QApplication
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-
-import numpy as np  # noqa: E402
-import pytest  # noqa: E402
-import soundfile  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
-
-from namioto.ui.app import STYLE_SHEET, dark_palette  # noqa: E402
-from namioto.ui.song import (  # noqa: E402
-    SongPlayer,  # noqa: E402
+from namioto.ui.app import STYLE_SHEET, dark_palette
+from namioto.ui.song import (
+    SongPlayer,
     _SongSource,
     load_song,
 )

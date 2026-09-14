@@ -165,8 +165,10 @@ class PianoRollView(QGraphicsView):
         self.snap = 0.25
         self.tool = "pen"
         self.edit_mode = False
+        self.playing = False
         self.division = "beats"
         self.hover_pitch: int | None = None
+        self._preview_pitch: int | None = None
         self.playhead: float | None = None
         self._bpm = 120.0
         self.gain = 240.0
@@ -449,6 +451,11 @@ class PianoRollView(QGraphicsView):
         for note in self.notes():
             note.setSelected(False)
 
+    def mouseDoubleClickEvent(self, event) -> None:
+        # Qt files the second of two quick clicks as a double-click, and that press has to seek and
+        # audition like any other: the roll has no double-click gesture for it to mean instead
+        self.mousePressEvent(event)
+
     def mousePressEvent(self, event) -> None:
         pos = event.position().toPoint()
         scene_pos = self.mapToScene(pos)
@@ -459,10 +466,19 @@ class PianoRollView(QGraphicsView):
             self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
             return
 
-        if not self.edit_mode:
-            if event.button() == Qt.MouseButton.LeftButton:
+        if event.button() == Qt.MouseButton.LeftButton:
+            if not self.playing:
+                # seeking is independent of the mode and of the tool, so every press in the roll moves
+                # the playhead, over a note as well as over the grid. While the file is playing the roll
+                # keeps its cursor and stays an editor; the time ruler is the one that seeks then
                 self.seek_requested.emit(self.seconds_at_viewport_x(pos.x()))
-            return
+            # and it sounds the row it lands on, whatever the mode, so a click is heard while editing
+            # and while only listening
+            self._preview_pitch = self._pitch_at(scene_pos.y())
+            self.note_preview.emit(self._preview_pitch)
+            if not self.edit_mode:
+                self._mode = "seek"  # dragging on, the playhead is what follows the pointer
+                return
 
         if event.button() == Qt.MouseButton.RightButton:
             note = self._note_at(scene_pos)
@@ -482,9 +498,6 @@ class PianoRollView(QGraphicsView):
         self._anchor = scene_pos
 
         if note is None:
-            # the playhead follows the press even while drawing: the pen and the cursor are
-            # independent, so a note can be written where the sound has just been moved to
-            self.seek_requested.emit(self.seconds_at_viewport_x(pos.x()))
             if ctrl or self.tool == "select":
                 if not shift:
                     self._clear_selection()
@@ -496,7 +509,6 @@ class PianoRollView(QGraphicsView):
             pitch = self._pitch_at(scene_pos.y())
             start = max(0.0, self._snap_floor_beats(scene_pos.x()))
             note = self.add_note(pitch, start, self._cell_beats())
-            self.note_preview.emit(pitch)
             self._clear_selection()
             note.setSelected(True)
             self._grab_note = note
@@ -510,7 +522,6 @@ class PianoRollView(QGraphicsView):
             # Ctrl-click is what adds to the selection now.
             self._clear_selection()
             note.setSelected(True)
-            self.note_preview.emit(note.pitch)
             self._grab_note = note
             self._mode = "trim"
             self._trim_edge = "start" if scene_pos.x() < note.start + note.duration / 2 else "end"
@@ -524,11 +535,16 @@ class PianoRollView(QGraphicsView):
             note.setSelected(True)
         if not note.isSelected():
             return
-        self.note_preview.emit(note.pitch)
 
         self._grab_note = note
         edge = self.GRAB_PX / self._zoom_x
-        self._mode = "resize" if scene_pos.x() >= note.end - edge else "move"
+        # a press on either edge changes the duration: the left one moves the start, the right one the end
+        if scene_pos.x() >= note.end - edge:
+            self._mode, self._trim_edge = "trim", "end"
+        elif scene_pos.x() <= note.start + edge:
+            self._mode, self._trim_edge = "trim", "start"
+        else:
+            self._mode = "move"
         self._snapshot = {n: (n.start, n.pitch, n.duration) for n in self.selected_notes()}
 
     def mouseMoveEvent(self, event) -> None:
@@ -536,10 +552,14 @@ class PianoRollView(QGraphicsView):
         scene_pos = self.mapToScene(pos)
         self.set_hover_pitch(self._pitch_at(scene_pos.y()))
 
+        if self._mode is not None and self._mode != "pan":
+            self._follow(pos, scene_pos)
+
         if self._mode is None:
             note = self._note_at(scene_pos) if self.edit_mode else None
             shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            if note is not None and (shift or scene_pos.x() >= note.end - self.GRAB_PX / self._zoom_x):
+            edge = self.GRAB_PX / self._zoom_x
+            if note is not None and (shift or scene_pos.x() >= note.end - edge or scene_pos.x() <= note.start + edge):
                 self.viewport().setCursor(Qt.CursorShape.SizeHorCursor)
             elif note is not None:
                 self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
@@ -581,14 +601,8 @@ class PianoRollView(QGraphicsView):
             anchor = self._anchor.x()
             left = max(0.0, self._snap_floor_beats(min(anchor, scene_pos.x())))
             right = max(left + self._cell_beats(), self._snap_ceil_beats(max(anchor, scene_pos.x())))
-            self._grab_note.set_range(left, self._snapshot[self._grab_note][1])
+            self._grab_note.set_range(left, self._pitch_at(scene_pos.y()))  # the row follows the pointer too
             self._grab_note.set_duration(right - left)
-            return
-
-        if self._mode == "resize":
-            start = self._snapshot[self._grab_note][0]
-            end = self._snap_beats(scene_pos.x())
-            self._grab_note.set_duration(end - start)
             return
 
         origin_start = self._snapshot[self._grab_note][0]
@@ -598,12 +612,22 @@ class PianoRollView(QGraphicsView):
             note.set_range(start + delta_x, pitch - delta_row)
         self.view_changed.emit()
 
+    def _follow(self, pos: QPoint, scene_pos: QPointF) -> None:
+        """A drag carries the playhead along and sounds every row it crosses, like a glissando."""
+        if not self.playing:
+            self.seek_requested.emit(self.seconds_at_viewport_x(pos.x()))
+        pitch = self._pitch_at(scene_pos.y())
+        if pitch != self._preview_pitch:
+            self._preview_pitch = pitch
+            self.note_preview.emit(pitch)
+
     def mouseReleaseEvent(self, event) -> None:
         if self._rubber.isVisible():
             self._rubber.hide()
         self._mode = None
         self._grab_note = None
         self._trim_edge = ""
+        self._preview_pitch = None
         self._snapshot = {}
         self.viewport().unsetCursor()
         self._update_scene()
@@ -738,6 +762,9 @@ class TimelineRuler(QWidget):
             self._press_x = self._last_x
             self._moved = False
 
+    def mouseDoubleClickEvent(self, event) -> None:
+        self.mousePressEvent(event)  # a quick second click on the ruler seeks like the first
+
     def mouseMoveEvent(self, event) -> None:
         position = event.position().x()
         if self._last_x is None:
@@ -785,7 +812,7 @@ class PianoKeyboard(QWidget):
         painter.setFont(font)
         white = QColor("#d8dde6")
         black = QColor("#15181e")
-        highlighted = set(self.view.highlight_pitches()) if self.view.edit_mode else set()
+        highlighted = set(self.view.highlight_pitches())
 
         for pitch in range(PITCH_MIN, PITCH_MAX + 1):
             row = PITCH_MAX - pitch
@@ -812,6 +839,9 @@ class PianoKeyboard(QWidget):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self.key_preview.emit(self._pitch_at(event.position().y()))
+
+    def mouseDoubleClickEvent(self, event) -> None:
+        self.mousePressEvent(event)  # a quick second click on a key sounds it again
 
     def _pitch_at(self, y: float) -> int:
         scene_y = self.view.mapToScene(QPoint(0, int(y) - self.origin().y())).y()

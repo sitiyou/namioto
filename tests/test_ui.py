@@ -3,24 +3,21 @@
 
 from __future__ import annotations
 
-import os
 import time
 
-os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+import numpy as np
+import pytest
+from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
+from PyQt6.QtGui import QColor, QFocusEvent, QImage, QKeyEvent, QMouseEvent, QWheelEvent
+from PyQt6.QtTest import QTest
+from PyQt6.QtWidgets import QApplication, QLabel
 
-import numpy as np  # noqa: E402
-import pytest  # noqa: E402
-from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
-from PyQt6.QtGui import QColor, QFocusEvent, QImage, QKeyEvent, QMouseEvent, QWheelEvent  # noqa: E402
-from PyQt6.QtTest import QTest  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
-
-from namioto.beats import BeatTempo, LocalWindow  # noqa: E402
-from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum  # noqa: E402
-from namioto.ui.app import STYLE_SHEET, MainWindow, TempoLoader, dark_palette  # noqa: E402
-from namioto.ui.audio import MidiPortOut, MidiSink, find_synth_port  # noqa: E402
-from namioto.ui.controls import WEAK_COLOR, Cluster, ValueSlider  # noqa: E402
-from namioto.ui.roll import (  # noqa: E402
+from namioto.beats import BeatTempo, LocalWindow
+from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
+from namioto.ui.app import STYLE_SHEET, MainWindow, TempoLoader, dark_palette
+from namioto.ui.audio import MidiPortOut, MidiSink, find_synth_port
+from namioto.ui.controls import WEAK_COLOR, Cluster, ValueSlider
+from namioto.ui.roll import (
     CONTENT_MARGIN,
     GRID_BAR,
     GRID_BEAT,
@@ -45,7 +42,7 @@ from namioto.ui.roll import (  # noqa: E402
     SPECTRUM_TOP,
     PianoRollView,
 )
-from namioto.ui.spectrogram import SpectrumImage, SpectrumLoader  # noqa: E402
+from namioto.ui.spectrogram import SpectrumImage, SpectrumLoader
 
 DEMO_NOTES = (
     (60, 0.0, 1.0),
@@ -96,6 +93,8 @@ def roll_mouse(window, kind, scene_pos: QPointF, modifiers=Qt.KeyboardModifier.N
     )
     if kind == QEvent.Type.MouseButtonPress:
         window.view.mousePressEvent(event)
+    elif kind == QEvent.Type.MouseButtonDblClick:
+        window.view.mouseDoubleClickEvent(event)
     elif kind == QEvent.Type.MouseMove:
         window.view.mouseMoveEvent(event)
     else:
@@ -474,26 +473,30 @@ def test_hover_marks_the_row_and_its_overtones(window) -> None:
     assert window.cursor_note.text() == ""
 
 
-def test_hover_turns_the_keys_red(window) -> None:
-    if not window.view.edit_mode:
-        window.edit.pen.click()
+def test_hover_turns_the_key_of_that_row_red_in_either_mode(window) -> None:
     window.view.centerOn(QPointF(8.0, float(PITCH_MAX - 65)))
-    window.view.set_hover_pitch(55)
-    marked = window.keyboard.grab().toImage()
-    red = {y for y in range(marked.height()) if marked.pixelColor(2, y) == HOVER_KEY}
+
+    def red_rows(pitch: int) -> set[int]:
+        window.view.set_hover_pitch(pitch)
+        image = window.keyboard.grab().toImage()
+        window.view.set_hover_pitch(None)
+        return {y for y in range(image.height()) if image.pixelColor(2, y) == HOVER_KEY}
+
+    def red_bands(pitch: int) -> int:
+        rows = sorted(red_rows(pitch))
+        return sum(1 for index, y in enumerate(rows) if index == 0 or y != rows[index - 1] + 1)
+
+    if window.view.edit_mode:
+        window.edit.mode.click()
+    assert red_bands(55) == 1 and red_bands(54) == 1  # G3 is a white key, F#3 a black one: both mark
+
     window.view.set_hover_pitch(None)
     plain = window.keyboard.grab().toImage()
-    assert red
     assert not {y for y in range(plain.height()) if plain.pixelColor(2, y) == HOVER_KEY}
 
-    window.edit.mode.click()  # outside edit mode the row is banded but the keys stay white
-    assert not window.view.edit_mode
-    window.view.set_hover_pitch(55)
-    assert window.view.highlight_pitches() == [55]
-    plain_keys = window.keyboard.grab().toImage()
-    assert not {y for y in range(plain_keys.height()) if plain_keys.pixelColor(2, y) == HOVER_KEY}
-    window.view.set_hover_pitch(None)
-    window.edit.pen.click()
+    window.edit.pen.click()  # editing adds the octave and the twelfth, on the keyboard as well
+    assert red_bands(55) == 3
+    window.edit.mode.click()
 
 
 def test_playhead_is_drawn_at_the_play_position(window) -> None:
@@ -577,6 +580,38 @@ class FakeSong:
     def seek(self, seconds: float) -> None:
         self.position = seconds
         self.calls.append("seek")
+
+
+def test_the_roll_waits_for_a_pause_before_it_seeks(window, monkeypatch) -> None:
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    window.view.clear_notes()
+    window.view.add_note(69, 0.0, 1.0)
+    window.view.centerOn(QPointF(2.5, 20.0))
+
+    window.transport.play_pause.click()
+    assert window.view.playhead == pytest.approx(0.0)
+
+    scene_pos = QPointF(2.5, 20.0)
+    roll_mouse(window, QEvent.Type.MouseButtonPress, scene_pos)  # playing: the roll keeps its cursor
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, scene_pos)
+    assert window.view.playhead == pytest.approx(0.0)
+    assert fake.calls.count("seek") == 0  # the click did not reach the transport
+
+    ruler_click(window, 4.0)  # the ruler seeks while the file runs
+    assert window.view.playhead == pytest.approx(2.0)
+    assert fake.calls.count("seek") == 1
+    assert fake.is_playing and window.view.playing
+
+    window.transport.play_pause.click()  # pause
+    assert not window.view.playing
+    roll_mouse(window, QEvent.Type.MouseButtonPress, scene_pos)
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, scene_pos)
+    assert window.view.playhead == pytest.approx(1.25)  # now the roll seeks again
+
+    window._stop()
+    window.view.set_playhead(None)
+    window.view.clear_notes()
 
 
 def test_transport_buttons_drive_the_player(window, monkeypatch) -> None:
@@ -693,7 +728,8 @@ def test_the_audio_file_keeps_playing_when_the_notes_end(window, monkeypatch) ->
 
 
 def test_clicking_the_roll_moves_the_playhead(window) -> None:
-    window.edit.mode.click()  # outside edit mode the roll is a seek bar
+    if window.view.edit_mode:
+        window.edit.mode.click()  # outside edit mode the roll is a seek bar
     assert not window.view.edit_mode
     scene_pos = QPointF(2.0, 40.0)  # scene units: two beats across, forty rows down
 
@@ -702,7 +738,7 @@ def test_clicking_the_roll_moves_the_playhead(window) -> None:
     assert window.view.playhead == pytest.approx(1.0)  # two beats at 120 BPM
     assert window.player.position == pytest.approx(1.0)
 
-    window.edit.mode.click()
+    window.edit.pen.click()
     window.view.set_playhead(None)
     window.view.clear_notes()
 
@@ -717,7 +753,7 @@ def test_the_pen_draws_where_the_playhead_lands(window) -> None:
 
     draw_note(window, left, right)
     assert len(window.view.notes()) == 1
-    assert window.view.playhead == pytest.approx(1.0)  # the same press moved the cursor
+    assert window.view.playhead == pytest.approx(2.0)  # the drag carried the cursor to 4 beats
     window._stop()
     window.view.set_playhead(None)
     window.view.clear_notes()
@@ -762,6 +798,117 @@ def test_clicking_a_note_previews_it(window, monkeypatch) -> None:
     window.view.clear_notes()
 
 
+def test_the_second_of_two_quick_clicks_still_sounds_and_seeks(window, monkeypatch) -> None:
+    """Qt hands the second quick click over as a double-click, and that press counts as well."""
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    if window.view.edit_mode:
+        window.edit.mode.click()
+    window.view.clear_notes()
+    row = float(PITCH_MAX - 60) + 0.5
+
+    for kind in (QEvent.Type.MouseButtonPress, QEvent.Type.MouseButtonDblClick):
+        window.view.set_playhead(None)
+        roll_mouse(window, kind, QPointF(2.5, row))
+        assert fake.previews[-1] == 60
+        assert window.view.playhead == pytest.approx(1.25)  # 2.5 beats at 120 BPM
+        roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(2.5, row))
+
+    assert fake.previews == [60, 60]
+    window._stop()
+    window.view.set_playhead(None)
+    window.view.clear_notes()
+
+
+def test_a_drag_in_view_mode_scrubs_the_playhead(window, monkeypatch) -> None:
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    if window.view.edit_mode:
+        window.edit.mode.click()
+    window.view.clear_notes()
+    window.view.set_playhead(None)
+    window.view.centerOn(QPointF(3.0, float(PITCH_MAX - 60) + 0.5))
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(2.0, float(PITCH_MAX - 60) + 0.5))
+    for beats, pitch in ((3.0, 62), (4.0, 64)):
+        roll_mouse(window, QEvent.Type.MouseMove, QPointF(float(beats), float(PITCH_MAX - pitch) + 0.5))
+        assert window.view.playhead == pytest.approx(beats / 2.0)  # two beats a second at 120 BPM
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(4.0, float(PITCH_MAX - 64) + 0.5))
+
+    assert fake.previews == [60, 62, 64]  # the drag sounds the rows it crosses
+    window._stop()
+    window.view.set_playhead(None)
+    window.view.clear_notes()
+
+
+def test_a_drag_glides_the_playhead_and_sounds_every_row_it_crosses(window, monkeypatch) -> None:
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    window.edit.pen.click()  # the pen draws and auditions while it slides
+    window.view.clear_notes()
+    window.view.set_playhead(None)
+    window.view.centerOn(QPointF(2.5, float(PITCH_MAX - 60) + 0.5))
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(2.5, float(PITCH_MAX - 60) + 0.5))
+    for pitch in (62, 64, 64, 65):  # two moves inside one row must not sound it twice
+        roll_mouse(window, QEvent.Type.MouseMove, QPointF(2.5 + (pitch - 60) * 0.5, float(PITCH_MAX - pitch) + 0.5))
+    assert fake.previews == [60, 62, 64, 65]  # a glissando up the rows
+    assert window.view.playhead == pytest.approx(2.5)  # the drag reached 5 beats at 120 BPM
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(5.0, float(PITCH_MAX - 65) + 0.5))
+
+    assert fake.previews == [60, 62, 64, 65]  # no stray preview after the release
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(7.0, float(PITCH_MAX - 70) + 0.5))
+    assert fake.previews == [60, 62, 64, 65]  # and none while merely hovering either
+    assert window.view.playhead == pytest.approx(2.5)
+
+    window._stop()
+    window.view.set_playhead(None)
+    window.view.clear_notes()
+
+
+def test_a_click_sounds_the_row_it_lands_on_in_either_mode(window, monkeypatch) -> None:
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    if window.view.edit_mode:
+        window.edit.mode.click()  # nobody has picked a tool: this is the listening mode
+    window.view.clear_notes()
+    window.view.add_note(64, 2.0, 1.0)
+    empty_row = float(PITCH_MAX - 60) + 0.5
+    note_row = float(PITCH_MAX - 64) + 0.5
+
+    draw_note(window, QPointF(2.5, empty_row))
+    assert fake.previews == [60]  # an empty row sounds the pitch it is on
+    draw_note(window, QPointF(2.5, note_row))
+    assert fake.previews == [60, 64]  # a note sounds its own
+
+    window._stop()
+    window.view.set_playhead(None)
+    window.view.clear_notes()
+
+
+def test_a_press_on_a_note_moves_the_playhead_as_well(window, monkeypatch) -> None:
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    window.edit.pen.click()
+    window.view.clear_notes()
+    note = window.view.add_note(69, 2.0, 1.0)
+    row = float(PITCH_MAX - 69) + 0.5
+    window.view.centerOn(QPointF(2.5, row))
+    window.view.set_playhead(None)
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(2.5, row))
+    assert window.view.playhead == pytest.approx(1.25)  # 2.5 beats at 120 BPM, note or not
+    assert fake.previews == [69]  # and the note is still the one being edited
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(6.0, row))
+    assert (note.start, note.end) == (5.5, 6.5)
+    assert window.view.playhead == pytest.approx(3.0)  # the playhead travels with the drag
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(6.0, row))
+
+    window._stop()
+    window.view.set_playhead(None)
+    window.view.clear_notes()
+
+
 def test_drawing_a_note_covers_the_cells_it_passed_through(window, monkeypatch) -> None:
     fake = FakeOutput()
     monkeypatch.setattr(window, "player", fake)
@@ -795,6 +942,36 @@ def test_a_click_without_a_drag_draws_one_snap_cell(window) -> None:
         draw_note(window, press, press if with_move else None)
         note = window.view.notes()[0]
         assert (note.start, note.end) == (8.0, 8.5)
+    window.view.clear_notes()
+
+
+def test_drawing_slides_the_note_to_the_row_the_pointer_moves_to(window) -> None:
+    window.view.clear_notes()
+    draw_note(
+        window,
+        QPointF(8.3, float(PITCH_MAX - 69) + 0.5),
+        QPointF(9.6, float(PITCH_MAX - 76) + 0.5),  # slid seven rows up while drawing
+    )
+    note = window.view.notes()[0]
+    assert (note.pitch, note.start, note.end) == (76, 8.0, 10.0)
+    window.view.clear_notes()
+
+
+def test_dragging_either_edge_of_a_note_changes_its_duration(window) -> None:
+    window.view.clear_notes()
+    note = window.view.add_note(69, 2.0, 2.0)  # spans 2.0 to 4.0
+    row = float(PITCH_MAX - 69) + 0.5
+    window.view.centerOn(QPointF(3.0, row))
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(2.05, row))  # within the left grab band
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(1.0, row))
+    assert (note.start, note.end) == (1.0, 4.0)  # the start moved, the end stayed
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(1.0, row))
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(3.95, row))  # within the right grab band
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(5.0, row))
+    assert (note.start, note.end) == (1.0, 5.0)  # the end moved, the start stayed
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(5.0, row))
     window.view.clear_notes()
 
 

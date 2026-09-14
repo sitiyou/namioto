@@ -324,8 +324,10 @@ class MainWindow(QMainWindow):
 
     def _show_position(self) -> None:
         seconds = self._position() + self.transport.latency.value() / 1000.0
+        playing = self._is_playing()
         self.transport.set_position(seconds)
-        self.transport.set_playing(self._is_playing())
+        self.transport.set_playing(playing)
+        self.view.playing = playing
         self.view.set_playhead(seconds)
 
     def _on_playback_finished(self) -> None:
