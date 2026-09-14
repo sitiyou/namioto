@@ -53,6 +53,21 @@ Third-party code and assets
   (or supply a permissively licensed replacement) if a commercial distribution is required.
 - See namioto/models/README.md for the attribution and the list of changes.
 
+### GAME (Generative Adaptive MIDI Extractor)
+- Upstream: Team OpenVPI, https://github.com/openvpi/GAME
+- License: MIT (code) / Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+  (the released models, namioto/models/LICENSE-CC-BY-NC-SA-4.0.txt) — the models are NOT AGPL-3.0
+- Used for: extracting notes from a singing voice. `namioto/game.py` is a port of the standalone
+  `infer_onnx.py` that goes with GAME's ONNX model exports - GAME itself is a PyTorch project and
+  ships no ONNX inference - so the module keeps GAME's MIT license, while the models stay a separate
+  work under CC BY-NC-SA 4.0. The models are not redistributed here: `namioto-game` downloads the
+  size that was asked for (small 46 MB / medium 180 MB / large 362 MB) from GAME's GitHub release
+  into the data directory - `platformdirs.user_data_dir("namioto")/models/game/<size>`, so
+  ~/.local/share/namioto/models/game/small on Linux - and a directory of them can also be given
+  directly with `--model` or `$NAMIOTO_GAME_MODEL`.
+- Consequence: a transcription produced with those models is non-commercial, exactly as with the
+  bundled TempoCNN model above.
+
 ### Dependencies (all AGPL-compatible)
 | Component | License |
 | --- | --- |

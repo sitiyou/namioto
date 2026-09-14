@@ -10,3 +10,4 @@ build/
 *.pyc
 AGENTS.md
 .firecrawl/
+*_PLAN.md

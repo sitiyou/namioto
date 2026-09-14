@@ -25,6 +25,7 @@ uv run namioto-tempocnn song.mp3          # the same with the TempoCNN model (ru
 uv run namioto-spectrum song.mp3          # analyse into 84 note bands (C1-B7)
 uv run namioto-spectrum song.mp3 --bench  # plus per-stage timings
 uv run namioto-spectrum song.mp3 --threshold 1.2   # plus auto-filled note spans
+uv run namioto-game song.mp3 --model DIR  # extract the notes of a singing voice (GAME's models)
 uv run pytest                             # tests
 uv run scripts/bench_spectrum.py          # spectrum benchmark
 ```
@@ -138,6 +139,33 @@ how the notes stay where they are relative to the spectrum and to the time ruler
 The TempoCNN model (`namioto/tempo.py`, `namioto-tempocnn`) is kept as the runner-up: it is strong on
 full mixes but its 256 integer-BPM classes and its training data (full mixes only) make it a poor
 fit for stems, where beat tracking wins.
+
+**Extracting notes with GAME.** A singing voice can be transcribed in one pass with
+[GAME](https://github.com/openvpi/GAME)'s ONNX models:
+
+```bash
+uv run namioto-game song.wav --language zh          # fetches the small model on first use
+uv run namioto-game song.wav --size medium          # one of small, medium, large
+uv run namioto-game song.wav --quantize 4 --tempo 93 --midi out.mid
+uv run namioto-game                                 # only fetch a model, do not transcribe
+```
+
+GAME is a PyTorch project and ships its models separately, in three sizes, so they are not packaged
+here: `--size` picks one and it is downloaded from GAME's GitHub release into the data directory
+(`~/.local/share/namioto/models/game/<size>`, via `platformdirs`), unpacked, and reused from then
+on. An explicit `--model DIR` or `$NAMIOTO_GAME_MODEL` skips all of that and loads a directory as it
+is.
+
+| size | download | 20 s of a singing voice, 16-core CPU |
+| --- | --- | --- |
+| small | 46 MB | 1.9 s, 46 notes |
+| medium | 180 MB | — |
+| large | 362 MB | 7.1 s, 47 notes |
+
+The notes come back as floating-point pitches with the onsets the model found; `--quantize` snaps
+them to a beat grid first, and `--midi` writes them out. The code is MIT (Team OpenVPI, like GAME
+itself); the models are CC BY-NC-SA 4.0, so anything produced with them is non-commercial, and they
+are downloaded rather than redistributed here - see NOTICE.
 
 The transport plays the loaded audio file and the notes on top of it. A press in the roll moves its
 playhead wherever it lands - over a note it edits it as well, over the empty grid the pen draws one
