@@ -59,6 +59,9 @@ def _icon(kind: str) -> QIcon:
     elif kind == "pause":
         box(0.28, 0.18, 0.15, 0.64)
         box(0.57, 0.18, 0.15, 0.64)
+    elif kind == "playstart":
+        box(0.16, 0.16, 0.10, 0.68)
+        shape([(0.40, 0.16), (0.40, 0.84), (0.90, 0.50)])
     elif kind == "stop":
         box(0.24, 0.24, 0.52, 0.52)
     elif kind == "pen":
@@ -333,8 +336,8 @@ class TransportBar(QToolBar):
     """Playback transport, position, playback speed, tempo and latency."""
 
     rewind_requested = pyqtSignal()
-    play_requested = pyqtSignal()
-    pause_requested = pyqtSignal()
+    play_from_start_requested = pyqtSignal()
+    play_pause_requested = pyqtSignal()
     stop_requested = pyqtSignal()
     forward_requested = pyqtSignal()
 
@@ -342,13 +345,13 @@ class TransportBar(QToolBar):
         super().__init__("Transport", parent)
         self.rewind = icon_button("rewind", "Rewind to the beginning")
         self.stop = icon_button("stop", "Stop")
-        self.pause = icon_button("pause", "Pause")
-        self.play = icon_button("play", "Play")
+        self.play_from_start = icon_button("playstart", "Play from the beginning")
+        self.play_pause = icon_button("play", "Play from the cursor")
         self.forward = icon_button("forward", "Go to the end")
         self.rewind.clicked.connect(self.rewind_requested)
-        self.play.clicked.connect(self.play_requested)
-        self.pause.clicked.connect(self.pause_requested)
         self.stop.clicked.connect(self.stop_requested)
+        self.play_from_start.clicked.connect(self.play_from_start_requested)
+        self.play_pause.clicked.connect(self.play_pause_requested)
         self.forward.clicked.connect(self.forward_requested)
 
         self.position = QLabel("00:00.000")
@@ -386,7 +389,7 @@ class TransportBar(QToolBar):
         self.latency.setKeyboardTracking(False)
 
         playback = Cluster("Playback")
-        for button in (self.rewind, self.stop, self.pause, self.play, self.forward):
+        for button in (self.rewind, self.stop, self.play_from_start, self.play_pause, self.forward):
             playback.add(button, row=0)
         playback.add(self.position, row=0)
 
@@ -405,6 +408,12 @@ class TransportBar(QToolBar):
 
         for cluster in (playback, speed, tempo, latency):
             self.addWidget(cluster)
+
+    def set_playing(self, playing: bool) -> None:
+        """Playing and pausing share one button the way WaveTone shows it, so it turns into a
+        pause button while the sound runs."""
+        self.play_pause.setIcon(_icon("pause" if playing else "play"))
+        self.play_pause.setToolTip("Pause playback" if playing else "Play from the cursor")
 
     def set_position(self, seconds: float) -> None:
         self.position.setText(format_time(seconds))

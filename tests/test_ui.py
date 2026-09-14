@@ -157,7 +157,7 @@ def test_mode_buttons_are_icons_not_text(window) -> None:
         window.edit.select,
         window.edit.division_beats,
         window.edit.division_seconds,
-        window.transport.play,
+        window.transport.play_pause,
     )
     for button in buttons:
         assert not button.text(), f"{button.objectName()} still has a text label"
@@ -467,12 +467,12 @@ def test_transport_buttons_drive_the_player(window, monkeypatch) -> None:
     window.view.clear_notes()
     window.view.add_note(69, 0.0, 1.0)
 
-    window.transport.play.click()
+    window.transport.play_pause.click()
     assert fake.calls == ["set_program", "play"] and fake.is_playing
     assert fake.programs == [(((69, 0.0, 0.5),), 1.0)]  # one beat at 120 BPM, handed over in seconds
     assert window.view.playhead is not None
 
-    window.transport.pause.click()
+    window.transport.play_pause.click()  # the same button pauses
     assert not fake.is_playing
     window.transport.forward.click()
     assert fake.position == pytest.approx(fake.duration)
@@ -482,6 +482,39 @@ def test_transport_buttons_drive_the_player(window, monkeypatch) -> None:
     assert not fake.is_playing and fake.position == 0.0
 
     window.view.set_playhead(None)
+    window.view.clear_notes()
+
+
+def test_the_play_button_shows_what_it_will_do(window, monkeypatch) -> None:
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    window.view.clear_notes()
+    window.view.add_note(69, 0.0, 2.0)
+
+    def icon_image() -> QImage:
+        return window.transport.play_pause.icon().pixmap(24, 24).toImage()
+
+    play_icon = icon_image()
+    window.transport.play_pause.click()
+    assert window.transport.play_pause.toolTip() == "Pause playback"
+    assert icon_image() != play_icon  # it became a pause button
+    window.transport.play_pause.click()
+    assert window.transport.play_pause.toolTip() == "Play from the cursor"
+    assert icon_image() == play_icon
+    window.view.clear_notes()
+
+
+def test_play_from_the_beginning_rewinds_first(window, monkeypatch) -> None:
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    window.view.clear_notes()
+    window.view.add_note(69, 0.0, 4.0)
+    window.transport.play_pause.click()
+    fake.position = 1.0  # pretend a second of it has played
+
+    window.transport.play_from_start.click()
+    assert "seek" in fake.calls and fake.position == 0.0 and fake.is_playing
+    window.transport.stop.click()
     window.view.clear_notes()
 
 
@@ -671,7 +704,7 @@ def test_picking_a_tool_turns_on_edit_mode(window) -> None:
 
 def test_playing_an_empty_roll_says_so(window) -> None:
     window.view.clear_notes()
-    window.transport.play.click()
+    window.transport.play_pause.click()
     assert not window.player.is_playing
     assert "Nothing to play" in window.statusBar().currentMessage()
 
@@ -708,7 +741,7 @@ def test_note_times_follow_the_tempo(window, monkeypatch) -> None:
     window.view.clear_notes()
     window.view.add_note(69, 0.0, 2.0)  # two beats, one second at 120 BPM
     window.view.bpm = 60.0  # one beat per second now, so it is one beat and still one second
-    window.transport.play.click()
+    window.transport.play_pause.click()
     assert fake.duration == pytest.approx(1.5)  # one second plus the release tail
     window.transport.stop.click()
     window.view.bpm = 120.0

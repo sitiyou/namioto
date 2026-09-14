@@ -95,7 +95,7 @@ The window has three control bars, each split into captioned blocks of related c
 
 | Bar | Blocks |
 | --- | --- |
-| Transport | **Playback** (rewind, stop, pause, play, forward, position readout), **Speed** (0.25x-2.00x with a `1.0` reset), **Tempo** (BPM, plus the estimated tempo of the audio), **Latency** (ms) |
+| Transport | **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout), **Speed** (0.25x-2.00x with a `1.0` reset), **Tempo** (BPM, plus the estimated tempo of the audio), **Latency** (ms) |
 | Edit | **Tools** (edit mode, pen, select, snap grid, clear), **Division** (note icon = the grid follows the beats of the tempo map, clock icon = it follows seconds) |
 | Mix | **Spectrum** (gain, contrast), **Volume** (audio, MIDI) |
 

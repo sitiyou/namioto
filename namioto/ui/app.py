@@ -167,8 +167,8 @@ class MainWindow(QMainWindow):
         self.transport.tempo.dismissed.connect(self.transport.tempo.hide)
         self.transport.rewind_requested.connect(lambda: self._seek(0.0))
         self.transport.forward_requested.connect(lambda: self._seek(self.player.duration))
-        self.transport.play_requested.connect(self._play)
-        self.transport.pause_requested.connect(self._pause)
+        self.transport.play_pause_requested.connect(self._toggle_play)
+        self.transport.play_from_start_requested.connect(self._play_from_start)
         self.transport.stop_requested.connect(self._stop)
         self.player.finished.connect(self._on_playback_finished)
         self.view.hover_changed.connect(self._on_hover_changed)
@@ -244,6 +244,17 @@ class MainWindow(QMainWindow):
         else:
             self.statusBar().showMessage(f"{self.player_name} did not accept the notes")
 
+    def _toggle_play(self) -> None:
+        """One button for both, so it asks the player what it is doing right now."""
+        if self.player.is_playing:
+            self._pause()
+        else:
+            self._play()
+
+    def _play_from_start(self) -> None:
+        self.player.seek(0.0)
+        self._play()
+
     def _pause(self) -> None:
         self.position_timer.stop()
         self.player.pause()
@@ -261,6 +272,7 @@ class MainWindow(QMainWindow):
     def _show_position(self) -> None:
         seconds = self.player.position + self.transport.latency.value() / 1000.0
         self.transport.set_position(seconds)
+        self.transport.set_playing(self.player.is_playing)
         self.view.set_playhead(seconds)
 
     def _on_playback_finished(self) -> None:
