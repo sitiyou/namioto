@@ -11,13 +11,14 @@ import numpy as np
 from PyQt6.QtCore import QIODevice, QObject, pyqtSignal
 from PyQt6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices, QtAudio
 
-from namioto.playback import RELEASE, SAMPLE_RATE, render_notes
+from namioto.playback import A4, RELEASE, SAMPLE_RATE, render_notes
 
 BUFFER_MS = 80
 INT16_PEAK = 32767.0
 PREVIEW_SECONDS = 0.6
 NOTE_ON, NOTE_OFF, VELOCITY = 0x90, 0x80, 100
-PROGRAM_CHANGE = (0xC0, 0x00)  # acoustic grand piano on channel 0
+PROGRAM_CHANGE = 0xC0  # program change on channel 0: which instrument the synth should use
+DEFAULT_PROGRAM = 0  # a grand piano
 CHANNEL_VOLUME = (0xB0, 0x07)  # control change 7: the volume of channel 0, 0 to 127
 SYNTH_NAMES = ("timidity", "fluidsynth", "qsynth", "wavetable")
 
@@ -29,6 +30,22 @@ def find_synth_port(port_names: Sequence[str]) -> int | None:
         if "through" not in lowered and any(part in lowered for part in SYNTH_NAMES):
             return index
     return None
+
+
+def find_port(port_names: Sequence[str], wanted: str = "") -> int | None:
+    """The port a name asks for, else the first software synth: either way, None when there is none.
+
+    The name is matched loosely as well, because a synthesiser's port is numbered by its client when
+    it starts, and that number changes between sessions.
+    """
+    if wanted:
+        for index, name in enumerate(port_names):
+            if name == wanted:
+                return index
+        for index, name in enumerate(port_names):
+            if wanted.lower() in name.lower():
+                return index
+    return find_synth_port(port_names)
 
 
 class NotePlayer(QObject):
@@ -99,9 +116,16 @@ class _MixSource(QIODevice):
 class MidiSink(NotePlayer):
     """The built-in synth: the notes rendered into one buffer and streamed to Qt's audio sink."""
 
-    def __init__(self, parent=None, buffer_ms: int = BUFFER_MS, sample_rate: int = SAMPLE_RATE):
+    def __init__(
+        self,
+        parent=None,
+        buffer_ms: int = BUFFER_MS,
+        sample_rate: int = SAMPLE_RATE,
+        a4: float = A4,
+    ):
         super().__init__(parent)
         self.sample_rate = sample_rate
+        self.a4 = a4
         self.mix = np.zeros(0, dtype=np.float32)
         self._key: tuple | None = None
         self._voices: dict[int, tuple[int, int]] = {}  # pitch -> where its audition sits in the mix
@@ -124,7 +148,7 @@ class MidiSink(NotePlayer):
             return
         self.stop()
         self._speed = speed
-        self.mix = render_notes(notes, speed=speed)
+        self.mix = render_notes(notes, speed=speed, a4=self.a4)
         self._voices.clear()
         self._key = key
 
@@ -179,7 +203,7 @@ class MidiSink(NotePlayer):
 
     def preview(self, pitch: int, seconds: float = PREVIEW_SECONDS) -> None:
         """Audition one note, mixed over what is already sounding so clicks never cut each other."""
-        voice = render_notes([(pitch, 0.0, seconds)])
+        voice = render_notes([(pitch, 0.0, seconds)], a4=self.a4)
         if self._source is None:
             self._load(voice)
             self.play()
@@ -223,9 +247,11 @@ class MidiSink(NotePlayer):
 class MidiPortOut(NotePlayer):
     """An external MIDI synth such as TiMidity: the notes are scheduled onto its port."""
 
-    def __init__(self, port, parent=None):
+    def __init__(self, port, parent=None, velocity: int = VELOCITY, program: int = DEFAULT_PROGRAM):
         self.port = port  # before the base class, whose gain setter sends a control change
         super().__init__(parent)
+        self.velocity = velocity
+        self.program = program
         self._notes: tuple[tuple[int, float, float], ...] = ()
         self._speed = 1.0
         self._start = 0.0
@@ -249,7 +275,7 @@ class MidiPortOut(NotePlayer):
         self.stop()
         self._notes = tuple(sorted(notes, key=lambda note: note[1]))
         self._speed = max(0.01, speed)
-        self.port.send_message(list(PROGRAM_CHANGE))
+        self.port.send_message([PROGRAM_CHANGE, self.program])
 
     @property
     def duration(self) -> float:
@@ -306,7 +332,7 @@ class MidiPortOut(NotePlayer):
         if pending is not None:
             pending.cancel()
             self._send(NOTE_OFF, pitch, 0)  # a synth still holding the note only layers a second one
-        self._send(NOTE_ON, pitch, VELOCITY)
+        self._send(NOTE_ON, pitch, self.velocity)
 
         def release() -> None:
             if self._previews.get(pitch) is timer:  # a newer click owns the note by now
@@ -330,7 +356,7 @@ class MidiPortOut(NotePlayer):
         for offset, kind, pitch in sorted(events, key=lambda event: event[0]):
             if not self._wait_until(started + offset):
                 return
-            self._send(kind, pitch, VELOCITY if kind == NOTE_ON else 0)
+            self._send(kind, pitch, self.velocity if kind == NOTE_ON else 0)
         if self._wait_until(started + (self.duration - self._start) / self._speed):
             self._started = None
             self._start = self.duration
@@ -352,20 +378,41 @@ class MidiPortOut(NotePlayer):
             self._sounding.discard(pitch)
 
 
-def open_player(parent=None) -> tuple[NotePlayer, str]:
-    """A player and a description of where it sends the sound.
-
-    The external synth is preferred: it brings its own patches (TiMidity's piano, FluidSynth's
-    SoundFont), which is what the rest of the machine already sounds like.
-    """
+def port_names() -> tuple[str, ...]:
+    """What MIDI ports this machine has to offer, for the settings window."""
     try:
         import rtmidi
 
-        port = rtmidi.MidiOut()
-        index = find_synth_port(port.get_ports())
-    except Exception:  # no MIDI backend on this machine
-        return MidiSink(parent), "the built-in synth"
-    if index is None:
-        return MidiSink(parent), "the built-in synth"
-    port.open_port(index)
-    return MidiPortOut(port, parent), port.get_port_name(index)
+        return tuple(rtmidi.MidiOut().get_ports())
+    except Exception:  # no MIDI backend, or none to list
+        return ()
+
+
+def open_player(
+    parent=None,
+    backend: str = "auto",
+    port_name: str = "",
+    buffer_ms: int = BUFFER_MS,
+    velocity: int = VELOCITY,
+    program: int = DEFAULT_PROGRAM,
+    a4: float = A4,
+) -> tuple[NotePlayer, str]:
+    """A player and a description of where it sends the sound.
+
+    The external synth is preferred: it brings its own patches (TiMidity's piano, FluidSynth's
+    SoundFont), which is what the rest of the machine already sounds like. `backend` overrides that
+    choice, and a backend that was asked for and cannot be had falls back to the built-in one.
+    """
+    if backend != "builtin":
+        try:
+            import rtmidi
+
+            port = rtmidi.MidiOut()
+            index = find_port(port.get_ports(), port_name)
+        except Exception:  # no MIDI backend on this machine
+            index = None
+            port = None
+        if index is not None:
+            port.open_port(index)
+            return MidiPortOut(port, parent, velocity=velocity, program=program), port.get_port_name(index)
+    return MidiSink(parent, buffer_ms=buffer_ms, a4=a4), "the built-in synth"

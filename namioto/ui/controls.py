@@ -103,6 +103,18 @@ def _icon(kind: str) -> QIcon:
         painter.setPen(QPen(QColor(ICON_COLOR), 0.12 * size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
         painter.drawLine(QPointF(0.28 * size, 0.28 * size), QPointF(0.72 * size, 0.72 * size))
         painter.drawLine(QPointF(0.72 * size, 0.28 * size), QPointF(0.28 * size, 0.72 * size))
+    elif kind == "gear":
+        center = QPointF(0.5 * size, 0.5 * size)
+        for step in range(8):
+            painter.save()
+            painter.translate(center)
+            painter.rotate(step * 45.0)
+            box(-0.10, -0.47, 0.20, 0.17)
+            painter.restore()
+        painter.drawEllipse(center, 0.30 * size, 0.30 * size)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        painter.drawEllipse(center, 0.12 * size, 0.12 * size)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
     elif kind == "refresh":
         painter.setBrush(Qt.BrushStyle.NoBrush)
         painter.setPen(QPen(QColor(ICON_COLOR), 0.10 * size, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
@@ -315,16 +327,22 @@ class TempoSuggestion(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.hide()
 
-    def estimate(self, bpm: float, agreement: float, windows: int, residual: float) -> None:
+    def estimate(
+        self,
+        bpm: float,
+        agreement: float,
+        windows: int,
+        source: str,
+        residual: float | None = None,
+    ) -> None:
         """Show `bpm` as a candidate, dimmed while few of the analysed windows agree on it."""
         self._bpm = bpm
         self.label.setText(f"≈{bpm:.0f} BPM")
         self.label.setStyleSheet(f"color: {SUGGESTION_COLOR if agreement >= WEAK_AGREEMENT else WEAK_COLOR}")
-        self.setToolTip(
-            f"Beat tracking + least-squares fit over {windows} windows of 12 s: "
-            f"{agreement:.0%} of them agree.\nBeat fit residual {1000 * residual:.0f} ms.\n"
-            "Nothing changes until you click the tick."
-        )
+        detail = f"{source}, over {windows} windows: {agreement:.0%} of them agree."
+        if residual is not None:
+            detail += f"\nBeat fit residual {1000 * residual:.0f} ms."
+        self.setToolTip(f"{detail}\nNothing changes until you click the tick.")
         self.show()
 
 
@@ -398,6 +416,7 @@ class TransportBar(QToolBar):
 
     def __init__(self, parent=None):
         super().__init__("Transport", parent)
+        self.setObjectName("transportBar")  # saveState needs one to remember the toolbar
         self.rewind = icon_button("rewind", "Rewind to the beginning")
         self.stop = icon_button("stop", "Stop")
         self.play_from_start = icon_button("playstart", "Play from the beginning")
@@ -486,6 +505,7 @@ class EditBar(QToolBar):
 
     def __init__(self, snap_choices, parent=None):
         super().__init__("Edit", parent)
+        self.setObjectName("editBar")
         self.mode = icon_button(
             "edit",
             "Edit mode: draw, move and select notes (off: a click in the roll moves the playhead)",
@@ -539,6 +559,13 @@ class EditBar(QToolBar):
         self.addWidget(tools)
         self.addWidget(division)
 
+    def set_mode(self, editing: bool) -> None:
+        """Open in a mode, or leave it, without a click: the settings say where the editor starts."""
+        if editing == self.mode.isChecked():
+            return
+        self.mode.setChecked(editing)
+        self._mode_clicked()
+
     def _mode_clicked(self) -> None:
         editing = self.mode.isChecked()
         self._set_mode(editing)
@@ -569,6 +596,7 @@ class MixBar(QToolBar):
 
     def __init__(self, parent=None):
         super().__init__("Mix", parent)
+        self.setObjectName("mixBar")
         self.gain = ValueSlider("Gain", 10, 600, 240)
         self.gain.slider.setToolTip("Spectrum gain: how much energy it takes to reach full red")
         self.contrast = ValueSlider("Contrast", 0.2, 4.0, 1.0, scale=10)
@@ -586,5 +614,11 @@ class MixBar(QToolBar):
         volume.add(self.audio_volume, row=0)
         volume.add(self.midi_volume, row=0)
 
+        self.settings_button = icon_button("gear", "Settings: what the program remembers between runs")
+        spacer = QWidget()
+        spacer.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+
         self.addWidget(spectrum)
         self.addWidget(volume)
+        self.addWidget(spacer)
+        self.addWidget(self.settings_button)

@@ -78,17 +78,27 @@ def refine_grid(beats: np.ndarray, bpm: float) -> float:
     return float(candidates[int(np.argmax(scores))])
 
 
-def local_windows(beats: np.ndarray) -> tuple[LocalWindow, ...]:
+def local_windows(
+    beats: np.ndarray,
+    window_seconds: float = WINDOW_SECONDS,
+    window_hop_seconds: float = WINDOW_HOP_SECONDS,
+) -> tuple[LocalWindow, ...]:
     windows = []
-    for start in np.arange(0.0, beats[-1], WINDOW_HOP_SECONDS):
-        inside = beats[(beats >= start) & (beats < start + WINDOW_SECONDS)]
+    for start in np.arange(0.0, beats[-1], window_hop_seconds):
+        inside = beats[(beats >= start) & (beats < start + window_seconds)]
         if len(inside) >= MIN_WINDOW_BEATS:
             slope = np.polyfit(np.arange(len(inside)), inside, 1)[0]
-            windows.append(LocalWindow(float(start), float(start + WINDOW_SECONDS), 60.0 / slope))
+            windows.append(LocalWindow(float(start), float(start + window_seconds), 60.0 / slope))
     return tuple(windows)
 
 
-def estimate_array(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> BeatTempo:
+def estimate_array(
+    audio: np.ndarray,
+    sample_rate: int = SAMPLE_RATE,
+    *,
+    window_seconds: float = WINDOW_SECONDS,
+    window_hop_seconds: float = WINDOW_HOP_SECONDS,
+) -> BeatTempo:
     if sample_rate != SAMPLE_RATE:
         audio = librosa.resample(audio, orig_sr=sample_rate, target_sr=SAMPLE_RATE)
     onset = librosa.onset.onset_strength(y=audio, sr=SAMPLE_RATE, hop_length=HOP_LENGTH)
@@ -97,12 +107,23 @@ def estimate_array(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> BeatTem
     if len(beats) < MIN_BEATS:
         raise ValueError(f"Found only {len(beats)} beats, which is too few to fit a tempo to")
     bpm, residual = fit_beats(beats)
-    return BeatTempo(refine_grid(beats, bpm), tuple(beats.tolist()), local_windows(beats), residual)
+    windows = local_windows(beats, window_seconds, window_hop_seconds)
+    return BeatTempo(refine_grid(beats, bpm), tuple(beats.tolist()), windows, residual)
 
 
-def estimate(path: str | Path) -> BeatTempo:
+def estimate(
+    path: str | Path,
+    *,
+    window_seconds: float = WINDOW_SECONDS,
+    window_hop_seconds: float = WINDOW_HOP_SECONDS,
+) -> BeatTempo:
     audio, sample_rate = librosa.load(path, sr=SAMPLE_RATE, mono=True)
-    return estimate_array(audio, sample_rate)
+    return estimate_array(
+        audio,
+        sample_rate,
+        window_seconds=window_seconds,
+        window_hop_seconds=window_hop_seconds,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import time
 
 import numpy as np
@@ -12,10 +13,11 @@ from PyQt6.QtGui import QColor, QFocusEvent, QImage, QKeyEvent, QMouseEvent, QWh
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication, QLabel, QSlider
 
+from namioto import settings as store
 from namioto.beats import BeatTempo, LocalWindow
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.ui.app import STYLE_SHEET, MainWindow, TempoLoader, dark_palette
-from namioto.ui.audio import MidiPortOut, MidiSink, find_synth_port
+from namioto.ui.audio import MidiPortOut, MidiSink, find_port, find_synth_port
 from namioto.ui.controls import WEAK_COLOR, Cluster, ValueSlider
 from namioto.ui.roll import (
     CONTENT_MARGIN,
@@ -42,6 +44,7 @@ from namioto.ui.roll import (
     SPECTRUM_TOP,
     PianoRollView,
 )
+from namioto.ui.settings_dialog import SettingsDialog
 from namioto.ui.spectrogram import SpectrumImage, SpectrumLoader
 
 DEMO_NOTES = (
@@ -1551,3 +1554,218 @@ def test_spectrum_loader_reports_a_bad_file(window, tmp_path) -> None:
     loader.failed.connect(messages.append)
     loader.run()
     assert len(messages) == 1 and "Error" in messages[0]
+
+
+@pytest.fixture
+def own_window(tmp_path, monkeypatch):
+    """A window with a settings file of its own, for the tests that read or write one."""
+    monkeypatch.setenv("NAMIOTO_SETTINGS", str(tmp_path / "settings.json"))
+    opened = MainWindow()
+    opened.resize(1200, 720)
+    yield opened
+    opened.close()
+
+
+def row_writer(dialog, section: str, name: str):
+    """The write half of one row of the settings window, to change it the way a widget would."""
+    for row_section, field, _read, write in dialog._rows:
+        if (row_section, field.name) == (section, name):
+            return write
+    raise AssertionError(f"the settings window has no row for {section}.{name}")
+
+
+def test_the_gear_button_opens_the_settings_window(own_window, monkeypatch) -> None:
+    opened: list[SettingsDialog] = []
+    monkeypatch.setattr(SettingsDialog, "exec", lambda self: opened.append(self) or 0)
+    own_window.mix.settings_button.click()
+    assert len(opened) == 1
+    assert opened[0].parent() is own_window
+
+
+def test_the_settings_window_lists_every_visible_field(own_window) -> None:
+    dialog = SettingsDialog(own_window.settings, parent=own_window)
+    names = {(section, field.name) for section, field, _read, _write in dialog._rows}
+    expected = {
+        (section.name, field.name) for section in store.SECTIONS for field in section.fields if not field.hidden
+    }
+    assert names == expected
+    dialog.close()
+
+
+def test_applying_the_settings_window_reaches_the_window_and_the_file(own_window) -> None:
+    dialog = SettingsDialog(own_window.settings, parent=own_window)
+    dialog.applied.connect(own_window.settings_store.apply)  # the window wires this up when it opens it
+    row_writer(dialog, "spectrum", "gain")(300.0)
+    row_writer(dialog, "playback", "midi_volume")(40)
+    row_writer(dialog, "editor", "zoom_x")(120.0)
+    row_writer(dialog, "editor", "division")("seconds")
+    row_writer(dialog, "editor", "overtone_highlight")(False)
+    dialog.apply()
+
+    assert own_window.view.gain == 300.0
+    assert own_window.mix.midi_volume.value() == 40
+    assert own_window.view.zoom[0] == 120.0
+    assert own_window.view.division == "seconds"
+    assert own_window.edit.division_seconds.isChecked()
+    assert own_window.view.overtone_highlight is False
+    saved = json.loads(store.default_path().read_text())
+    assert saved["spectrum"]["gain"] == 300.0
+    assert saved["editor"]["overtone_highlight"] is False
+    dialog.close()
+
+
+def test_restoring_defaults_puts_every_widget_back(own_window) -> None:
+    dialog = SettingsDialog(own_window.settings, parent=own_window)
+    row_writer(dialog, "analysis", "t_num")(12.0)
+    row_writer(dialog, "extraction", "model_size")("large")
+    assert store.get_value(dialog.values(), "extraction", "model_size") == "large"
+
+    dialog.restore_defaults()
+    values = dialog.values()
+    assert store.get_value(values, "extraction", "model_size") == "small"
+    assert store.get_value(values, "analysis", "t_num") == 40.0
+    dialog.close()
+
+
+def test_closing_the_window_remembers_the_session(own_window) -> None:
+    own_window.view.set_zoom(96.0, 20.0)
+    own_window.close()
+
+    saved = store.load()
+    assert saved.session.geometry
+    assert saved.session.window_state  # the toolbars need an object name to be remembered, and have one
+    assert saved.editor.zoom_x == 96.0
+    assert saved.editor.zoom_y == 20.0
+    assert saved.session.center_x > 0.0
+
+
+def test_the_settings_are_read_when_the_window_starts(tmp_path, monkeypatch) -> None:
+    path = tmp_path / "settings.json"
+    monkeypatch.setenv("NAMIOTO_SETTINGS", str(path))
+    saved = store.Settings()
+    store.set_value(saved, "spectrum", "contrast", 2.5)
+    store.set_value(saved, "editor", "snap", 0.25)
+    store.set_value(saved, "editor", "zoom_y", 24.0)
+    store.set_value(saved, "tempo", "bpm", 84.0)
+    store.set_value(saved, "playback", "speed", 1.25)
+    store.set_value(saved, "playback", "backend", "builtin")
+    store.save(saved)
+
+    opened = MainWindow()
+    assert opened.view.contrast == 2.5
+    assert opened.view.snap == 0.25
+    assert opened.view.zoom[1] == 24.0
+    assert opened.transport.bpm.value() == 84.0
+    assert opened.transport.speed.value() == 1.25
+    assert opened.player_name == "the built-in synth"
+    opened.close()
+
+
+def test_the_command_line_seeds_the_run_without_writing_itself_back(own_window) -> None:
+    before = store.load()
+    own_window.apply_overrides(gain=300.0, contrast=2.0)
+    assert own_window.view.gain == 300.0
+    own_window.close()
+
+    saved = store.load()
+    assert saved.spectrum.gain == before.spectrum.gain
+    assert saved.spectrum.contrast == before.spectrum.contrast
+
+
+def test_a_command_line_channel_beats_the_settings(own_window) -> None:
+    store.set_value(own_window.settings, "analysis", "channels", "side")
+    own_window.overrides["channels"] = "left"
+    own_window.overrides["t_num"] = None
+    options = own_window._analysis_options()
+    assert options["channels"] == "left"
+    assert options["t_num"] == 40.0
+    assert options["fft_points"] == 8192
+    assert options["a4"] == 440.0
+
+
+def test_the_spectrum_loader_takes_every_analysis_parameter(tmp_path) -> None:
+    loader = SpectrumLoader(tmp_path / "song.wav", channels="side", t_num=25.0, fft_points=2048, a4=442.0)
+    assert (loader.channels, loader.t_num, loader.fft_points, loader.a4) == ("side", 25.0, 2048, 442.0)
+    assert loader.path == tmp_path / "song.wav"
+
+
+def test_loading_a_file_hands_the_settings_to_the_analysers(own_window, monkeypatch) -> None:
+    class Signal:
+        def connect(self, *_args) -> None:
+            pass
+
+    class FakeLoader:
+        def __init__(self, *args, **kwargs):
+            self.progress = self.loaded = self.failed = Signal()
+            captured.append(kwargs)
+
+        def start(self) -> None:
+            pass
+
+    captured: list[dict] = []
+
+    class FakeLoaderWithParent(FakeLoader):
+        def __init__(self, *args, parent=None, **kwargs):
+            super().__init__(**kwargs)
+
+    monkeypatch.setattr("namioto.ui.app.SpectrumLoader", FakeLoaderWithParent)
+    monkeypatch.setattr("namioto.ui.app.SongLoader", FakeLoaderWithParent)
+    monkeypatch.setattr("namioto.ui.app.TempoLoader", FakeLoaderWithParent)
+    store.set_value(own_window.settings, "analysis", "fft_points", 4096)
+    store.set_value(own_window.settings, "analysis", "a4", 441.0)
+    store.set_value(own_window.settings, "tempo", "estimator", "tempocnn")
+    own_window.overrides["channels"] = "left"
+
+    own_window.load_audio("/tmp/song.wav")
+
+    analysis, _song, tempo = captured
+    assert analysis == {"channels": "left", "t_num": 40.0, "fft_points": 4096, "a4": 441.0}
+    assert tempo == {"estimator": "tempocnn", "window_seconds": 12.0, "window_hop_seconds": 6.0}
+    assert store.get_value(own_window.settings, "paths", "last_audio_dir") == "/tmp"
+
+
+def test_the_tempo_loader_follows_the_settings(own_window, monkeypatch) -> None:
+    own_window.audio_path = "song.wav"
+    store.set_value(own_window.settings, "tempo", "estimator", "tempocnn")
+    store.set_value(own_window.settings, "tempo", "window_seconds", 8.0)
+    monkeypatch.setattr(TempoLoader, "start", lambda self: None)
+    own_window._start_tempo()
+    assert own_window.tempo_loader.estimator == "tempocnn"
+    assert own_window.tempo_loader.window_seconds == 8.0
+
+
+def test_the_overtone_highlight_can_be_turned_off(window) -> None:
+    window.view.edit_mode = True
+    window.view.set_hover_pitch(60)
+    assert window.view.highlight_pitches() == [60, 72, 79]
+
+    window.view.overtone_highlight = False
+    assert window.view.highlight_pitches() == [60]
+
+    window.view.edit_mode = False
+    assert window.view.highlight_pitches() == [60]
+    window.view.overtone_highlight = True
+    window.view.set_hover_pitch(None)
+
+
+def test_the_zoom_can_be_set_from_outside(window) -> None:
+    window.view.set_zoom(96.0, 32.0)
+    assert window.view.zoom == (96.0, 32.0)
+    window.view.set_zoom(1.0, 500.0)  # both ends are held to what the roll can draw
+    assert window.view.zoom == (window.view.MIN_ZOOM_X, window.view.MAX_ZOOM_Y)
+    window.view.set_zoom(48.0, 16.0)
+
+
+def test_the_song_buffer_follows_the_settings(own_window) -> None:
+    own_window.song.buffer_ms = 200
+    assert own_window.song.buffer_ms == 200
+    own_window.song.buffer_ms = 1
+    assert own_window.song.buffer_ms == 10
+
+
+def test_a_midi_port_is_matched_by_name() -> None:
+    ports = ("Midi Through:Midi Through Port-0 14:0", "TiMidity:TiMidity port 0 128:0")
+    assert find_port(ports, "TiMidity:TiMidity port 0 128:0") == 1
+    assert find_port(ports, "TiMidity") == 1  # the client number changes between sessions
+    assert find_port(ports, "Nonesuch") == 1  # nothing matches, so the first synth is used
+    assert find_port(("Midi Through:0",), "") is None

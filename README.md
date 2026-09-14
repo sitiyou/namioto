@@ -46,6 +46,28 @@ side, both), `--t-num` the frames per second.
 
 ![spectrum](docs/spectrum.png)
 
+## Settings
+
+The gear at the right end of the Mix row opens the settings window. It holds the advanced options,
+one page per group: the spectrum analysis parameters (channels, frames per second, FFT size, A4), the
+spectrum's starting display, the playback backend and buffer, the editor defaults, the tempo
+estimator, the GAME extraction parameters, and the directory the file chooser starts in. Each page
+puts its advanced rows under an `ADVANCED` heading; `Restore defaults` puts everything back, and
+`Apply` lets the change go live without closing the window. Analysis parameters reach the spectrum
+the next time a file is loaded, and the Analysis page has a `Re-analyse now` button for jumping the
+gun.
+
+![settings](docs/settings.png)
+
+What is in that window is also what the program remembers. The settings are written to
+`~/.config/namioto/settings.json` (`$NAMIOTO_SETTINGS` points somewhere else) whenever they settle
+and when the window closes, together with the window geometry, the toolbars and the last view
+position. They are plain JSON, so they can be edited by hand - and a hand-mangled or half-written
+file falls back to the defaults field by field instead of refusing to start.
+
+The command line still wins for one run: `--channels`, `--t-num`, `--gain` and `--contrast` shape
+this run alone and are never written back into the file.
+
 ## Build
 
 ```bash
@@ -99,7 +121,7 @@ The window has three control bars, each split into captioned blocks of related c
 | --- | --- |
 | Transport | **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout), **Speed** (0.10x-2.00x in 5% steps with a `1.0` reset, pitch unchanged), **Tempo** (BPM, plus the estimated tempo of the audio), **Latency** (ms) |
 | Edit | **Tools** (edit mode, pen, select, snap grid, clear), **Division** (note icon = the grid follows the beats of the tempo map, clock icon = it follows seconds) |
-| Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes) |
+| Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window |
 
 **Volume** has a slider for each layer: the audio file is streamed at the level of the first one, and
 the second is the note playback - a scale factor for the built-in synth, and control change 7 (channel

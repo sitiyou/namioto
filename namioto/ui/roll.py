@@ -165,8 +165,10 @@ class PianoRollView(QGraphicsView):
         self.snap = 0.25
         self.tool = "pen"
         self.edit_mode = False
+        self.overtone_highlight = True
         self.playing = False
         self.division = "beats"
+        self.initial_center = (8.0, float(PITCH_MAX - 60))  # where the view opens, unless a session says otherwise
         self.hover_pitch: int | None = None
         self._preview_pitch: int | None = None
         self.playhead: float | None = None
@@ -268,7 +270,7 @@ class PianoRollView(QGraphicsView):
         rows of its overtones, which is the WaveTone hint about where a note would double it."""
         if self.hover_pitch is None:
             return []
-        if not self.edit_mode:
+        if not self.edit_mode or not self.overtone_highlight:
             return [self.hover_pitch]
         pitches = [self.hover_pitch]
         for harmonic in OVERTONES:
@@ -290,6 +292,18 @@ class PianoRollView(QGraphicsView):
 
     def pixels_per_beat(self) -> float:
         return self._zoom_x
+
+    @property
+    def zoom(self) -> tuple[float, float]:
+        """Pixels per beat and per semitone row, as the zoom controls leave them."""
+        return self._zoom_x, self._zoom_y
+
+    def set_zoom(self, zoom_x: float, zoom_y: float) -> None:
+        """Start at a given zoom, the way `showEvent` centers the view where the session left it."""
+        self._zoom_x = min(self.MAX_ZOOM_X, max(self.MIN_ZOOM_X, zoom_x))
+        self._zoom_y = min(self.MAX_ZOOM_Y, max(self.MIN_ZOOM_Y, zoom_y))
+        self.setTransform(QTransform.fromScale(self._zoom_x, self._zoom_y))
+        self.refresh()
 
     def seconds_at_viewport_x(self, x: float) -> float:
         """The timeline position under a viewport x, for the widgets that share the roll's columns."""
@@ -339,7 +353,7 @@ class PianoRollView(QGraphicsView):
         super().showEvent(event)
         if not self._initialized:
             self._initialized = True
-            self.centerOn(8.0, PITCH_MAX - 60)
+            self.centerOn(*self.initial_center)
 
     def scrollContentsBy(self, dx: int, dy: int) -> None:
         super().scrollContentsBy(dx, dy)

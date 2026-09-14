@@ -71,11 +71,21 @@ class SpectrumLoader(QThread):
     failed = pyqtSignal(str)
     progress = pyqtSignal(int, int)
 
-    def __init__(self, path: str | Path, channels: str = "mono", t_num: float = 40.0, parent=None):
+    def __init__(
+        self,
+        path: str | Path,
+        channels: str = "mono",
+        t_num: float = 40.0,
+        fft_points: int = 8192,
+        a4: float = 440.0,
+        parent=None,
+    ):
         super().__init__(parent)
         self.path = Path(path)
         self.channels = channels
         self.t_num = t_num
+        self.fft_points = fft_points
+        self.a4 = a4
 
     def run(self) -> None:
         try:
@@ -83,6 +93,8 @@ class SpectrumLoader(QThread):
                 self.path,
                 channels=self.channels,
                 t_num=self.t_num,
+                fft_points=self.fft_points,
+                a4=self.a4,
                 progress=lambda done, total: self.progress.emit(done, total),
             )
         except Exception as error:  # a broken file must not take the editor down

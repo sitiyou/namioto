@@ -7,7 +7,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from PyQt6.QtCore import QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QByteArray, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QKeySequence, QPalette, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
@@ -17,17 +17,21 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from namioto.beats import BeatTempo, estimate
+from namioto import settings as store
+from namioto.beats import TOLERANCE, estimate
 from namioto.playback import note_frequency
 from namioto.spectrum import CHANNEL_MODES, NoteSpectrum
-from namioto.ui.audio import open_player
+from namioto.ui.audio import open_player, port_names
 from namioto.ui.controls import EditBar, MixBar, TransportBar
 from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler, note_name
+from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
 from namioto.ui.song import SongPlayer, load_song, stretch_song
 from namioto.ui.spectrogram import SpectrumLoader
 
 POSITION_INTERVAL_MS = 40
 SPEED_SETTLE_MS = 400
+BEAT_SOURCE = "Beat tracking and least-squares fit"
+TEMPOCNN_SOURCE = "TempoCNN"
 
 STYLE_SHEET = """
 QMainWindow, QToolBar, QStatusBar { background: #191c23; }
@@ -51,12 +55,20 @@ QSlider::groove:horizontal { height: 4px; background: #2f3541; border-radius: 2p
 QSlider::sub-page:horizontal { background: #3b9dff; border-radius: 2px; }
 QSlider::handle:horizontal { width: 9px; height: 14px; margin: -5px 0;
                              background: #cfd6e4; border-radius: 2px; }
-QComboBox, QSpinBox, QDoubleSpinBox { background: #1c2129; color: #cfd6e4;
+QComboBox, QSpinBox, QDoubleSpinBox, QLineEdit { background: #1c2129; color: #cfd6e4;
                                       border: 1px solid #3a4152; border-radius: 3px; padding: 1px 4px; }
 QComboBox QAbstractItemView { background: #262b34; color: #cfd6e4;
                               selection-background-color: #1f3a5c; }
 QStatusBar::item { border: 0; }
 QLabel#cursorNote { color: #cfd6e4; }
+QDialog { background: #20242c; }
+QTabWidget::pane { border: 1px solid #2f3644; }
+QTabBar::tab { background: #262b34; color: #94a0b5; padding: 5px 11px; }
+QTabBar::tab:selected { background: #1f3a5c; color: #e6ecf5; }
+QCheckBox { color: #cfd6e4; spacing: 6px; }
+QCheckBox::indicator { width: 13px; height: 13px; border: 1px solid #3a4152;
+                       border-radius: 3px; background: #1c2129; }
+QCheckBox::indicator:checked { background: #3b9dff; border-color: #3b9dff; }
 QScrollBar:horizontal, QScrollBar:vertical { background: #191c23; border: 0; }
 QScrollBar:horizontal { height: 11px; }
 QScrollBar:vertical { width: 11px; }
@@ -90,18 +102,37 @@ def dark_palette() -> QPalette:
 
 
 class TempoLoader(QThread):
-    """Estimates the tempo of a file off the GUI thread."""
+    """Estimates the tempo of a file off the GUI thread, with the estimator the settings picked."""
 
     loaded = pyqtSignal(object)
     failed = pyqtSignal(str)
 
-    def __init__(self, path: str | Path, parent=None):
+    def __init__(
+        self,
+        path: str | Path,
+        estimator: str = "beats",
+        window_seconds: float = 12.0,
+        window_hop_seconds: float = 6.0,
+        parent=None,
+    ):
         super().__init__(parent)
         self.path = Path(path)
+        self.estimator = estimator
+        self.window_seconds = window_seconds
+        self.window_hop_seconds = window_hop_seconds
 
     def run(self) -> None:
         try:
-            result = estimate(self.path)
+            if self.estimator == "tempocnn":
+                from namioto.tempo import estimate as estimate_tempocnn  # only the model needs onnxruntime
+
+                result = estimate_tempocnn(self.path)
+            else:
+                result = estimate(
+                    self.path,
+                    window_seconds=self.window_seconds,
+                    window_hop_seconds=self.window_hop_seconds,
+                )
         except Exception as error:  # a broken file must not take the editor down
             self.failed.emit(f"{type(error).__name__}: {error}")
             return
@@ -148,10 +179,17 @@ class StretchLoader(QThread):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, audio: str | None = None, channels: str = "mono", t_num: float = 40.0):
+    def __init__(self, audio: str | None = None, settings=None, overrides: dict | None = None):
         super().__init__()
         self.setWindowTitle("Namioto")
         self.resize(1200, 720)
+        self.settings = settings if settings is not None else store.load()
+        self.settings_store = SettingsStore(self.settings, parent=self)
+        self.settings_store.changed.connect(self._on_settings_changed)
+        self.settings_store.failed.connect(lambda message: self.statusBar().showMessage(message))
+        self.overrides = dict(overrides or {})  # values this run was asked for, never written back
+        self._display_overrides: dict[str, float] = {}
+        self._seeding = False
         self.audio_path: str | None = None
         self.loader: SpectrumLoader | None = None
         self.tempo_loader: TempoLoader | None = None
@@ -159,12 +197,19 @@ class MainWindow(QMainWindow):
         self.stretch_loader: StretchLoader | None = None
         self.pending_play = False
 
+        editor = self.settings.editor
         self.view = PianoRollView()
+        self.view.set_zoom(editor.zoom_x, editor.zoom_y)
+        self.view.initial_center = (self.settings.session.center_x, self.settings.session.center_y)
+        self.view.overtone_highlight = editor.overtone_highlight
+        self.view.division = editor.division
+        self.view.snap = editor.snap
         self.ruler = TimelineRuler(self.view)
         self.keyboard = PianoKeyboard(self.view)
-        self.player, self.player_name = open_player(self)
-        self.player.gain = 0.8
-        self.song = SongPlayer(self)
+        self.player, self.player_name = self._make_player()
+        self._current_player_key = self._player_key()
+        self.player.gain = self.settings.playback.midi_volume / 100.0
+        self.song = SongPlayer(self, buffer_ms=self.settings.playback.buffer_ms)
         self.position_timer = QTimer(self)
         self.position_timer.setInterval(POSITION_INTERVAL_MS)
         self.position_timer.timeout.connect(self._show_position)
@@ -193,7 +238,6 @@ class MainWindow(QMainWindow):
         self.transport = TransportBar(self)
         self.transport.speed.slider.valueChanged.connect(self._on_speed_changed)
         self.edit = EditBar(SNAP_CHOICES, self)
-        self.view.edit_mode = self.edit.mode.isChecked()
         self.mix = MixBar(self)
         self.addToolBar(self.transport)
         self.addToolBarBreak()
@@ -205,8 +249,21 @@ class MainWindow(QMainWindow):
             bar.setMovable(False)
             bar.setFloatable(False)
 
-        self.edit.snap.currentIndexChanged.connect(lambda: setattr(self.view, "snap", self.edit.snap.currentData()))
+        self.edit.snap.setCurrentIndex(max(0, self.edit.snap.findData(editor.snap)))
+        self.edit.division_beats.setChecked(editor.division == "beats")
+        self.edit.division_seconds.setChecked(editor.division == "seconds")
         self.view.snap = self.edit.snap.currentData()
+        self.view.edit_mode = editor.start_in_edit_mode
+        self.edit.set_mode(editor.start_in_edit_mode)
+        self.transport.bpm.setValue(self.settings.tempo.bpm)
+        self.transport.latency.setValue(self.settings.playback.latency_ms)
+        self.transport.speed.set_value(self.settings.playback.speed)
+        self.mix.gain.set_value(self.settings.spectrum.gain)
+        self.mix.contrast.set_value(self.settings.spectrum.contrast)
+        self.mix.audio_volume.set_value(self.settings.playback.audio_volume)
+        self.mix.midi_volume.set_value(self.settings.playback.midi_volume)
+
+        self.edit.snap.currentIndexChanged.connect(lambda: setattr(self.view, "snap", self.edit.snap.currentData()))
         self.edit.clear_requested.connect(self.view.clear_notes)
         self.edit.tool_changed.connect(self._on_tool_changed)
         self.edit.mode_changed.connect(self._on_mode_changed)
@@ -226,6 +283,7 @@ class MainWindow(QMainWindow):
         self.view.hover_changed.connect(self._on_hover_changed)
         self.view.note_preview.connect(self._on_note_preview)
         self.keyboard.key_preview.connect(self._on_note_preview)
+        self.mix.settings_button.clicked.connect(self._open_settings)
         self.mix.midi_volume.value_changed.connect(self._on_midi_volume)
         self.mix.midi_volume.slider.setToolTip(f"Volume of the note playback through {self.player_name}")
         self.mix.audio_volume.value_changed.connect(self._on_audio_volume)
@@ -235,21 +293,199 @@ class MainWindow(QMainWindow):
         self.view.contrast = self.mix.contrast.value()
         self.view.bpm = self.transport.bpm.value()
 
+        # the bar and the settings are the same thing: whatever is on screen is what comes back
+        for signal in (
+            self.mix.gain.value_changed,
+            self.mix.contrast.value_changed,
+            self.mix.audio_volume.value_changed,
+            self.mix.midi_volume.value_changed,
+            self.transport.speed.value_changed,
+            self.transport.latency.valueChanged,
+            self.transport.bpm.valueChanged,
+            self.edit.division_changed,
+        ):
+            signal.connect(self._on_panel_changed)
+        self.edit.snap.currentIndexChanged.connect(self._on_panel_changed)
+
         self.view.notes_changed.connect(self._update_status)
         self.play_shortcut = QShortcut(QKeySequence("Space"), self)
         self.play_shortcut.activated.connect(self._toggle_play)
         self.cursor_note = QLabel()
         self.cursor_note.setObjectName("cursorNote")
         self.statusBar().addPermanentWidget(self.cursor_note)
+        self._restore_session()
         if audio is None:
             self._show_hint()
         else:
-            self.load_audio(audio, channels=channels, t_num=t_num)
+            self.load_audio(audio)
         self._update_status()
 
-    def load_audio(self, path: str, channels: str = "mono", t_num: float = 40.0) -> None:
+    def _make_player(self):
+        playback = self.settings.playback
+        return open_player(
+            self,
+            backend=playback.backend,
+            port_name=playback.midi_port,
+            buffer_ms=playback.buffer_ms,
+            velocity=playback.velocity,
+            program=playback.program,
+            a4=self.settings.analysis.a4,
+        )
+
+    def _player_key(self) -> tuple:
+        """What a player is built from: a change to any of it means building a new one."""
+        playback = self.settings.playback
+        return (
+            playback.backend,
+            playback.midi_port,
+            playback.buffer_ms,
+            playback.velocity,
+            playback.program,
+            self.settings.analysis.a4,
+        )
+
+    def apply_overrides(self, gain: float | None = None, contrast: float | None = None) -> None:
+        """Values a command line asked for: they shape this run, not what is remembered."""
+        if gain is not None:
+            self._display_overrides["gain"] = gain
+        if contrast is not None:
+            self._display_overrides["contrast"] = contrast
+        self._seeding = True  # the panel is being filled in, not touched
+        try:
+            if gain is not None:
+                self.mix.gain.set_value(gain)
+            if contrast is not None:
+                self.mix.contrast.set_value(contrast)
+        finally:
+            self._seeding = False
+
+    def _open_settings(self) -> None:
+        dialog = SettingsDialog(
+            self.settings,
+            ports=port_names,
+            can_reanalyse=self.audio_path is not None,
+            parent=self,
+        )
+        dialog.applied.connect(self.settings_store.apply)
+        dialog.reanalyse_requested.connect(self._reanalyse)
+        dialog.exec()
+
+    def _reanalyse(self) -> None:
+        if self.audio_path is not None:
+            self.load_audio(self.audio_path)
+
+    def _on_settings_changed(self, settings) -> None:
+        """Take a finished settings window over the running one.
+
+        The panel is filled in with the change kept quiet: every slider moved would otherwise write
+        the values of the ones not yet moved back into the settings being applied.
+        """
+        self.settings = settings
+        self._seeding = True
+        try:
+            self.view.overtone_highlight = settings.editor.overtone_highlight
+            self.view.gain = settings.spectrum.gain
+            self.view.contrast = settings.spectrum.contrast
+            self.view.set_zoom(settings.editor.zoom_x, settings.editor.zoom_y)
+            self.edit.snap.setCurrentIndex(max(0, self.edit.snap.findData(settings.editor.snap)))
+            self.view.snap = self.edit.snap.currentData()
+            self.edit.division_beats.setChecked(settings.editor.division == "beats")
+            self.edit.division_seconds.setChecked(settings.editor.division == "seconds")
+            self.view.division = settings.editor.division
+            self.view.refresh()
+            self.mix.gain.set_value(settings.spectrum.gain)
+            self.mix.contrast.set_value(settings.spectrum.contrast)
+            self.mix.audio_volume.set_value(settings.playback.audio_volume)
+            self.mix.midi_volume.set_value(settings.playback.midi_volume)
+            self.transport.bpm.setValue(settings.tempo.bpm)
+            self.transport.latency.setValue(settings.playback.latency_ms)
+            self.transport.speed.set_value(settings.playback.speed)
+            self.song.buffer_ms = settings.playback.buffer_ms
+            if self._player_key() != self._current_player_key:
+                self._rebuild_player()
+        finally:
+            self._seeding = False
+        self._update_status()
+
+    def _rebuild_player(self) -> None:
+        """A different backend, port, buffer or tuning is a different player; the notes go over again."""
+        playing = self.player.is_playing
+        position = self._position()
+        self.player.stop()
+        self.player, self.player_name = self._make_player()
+        self._current_player_key = self._player_key()
+        self.player.gain = self.mix.midi_volume.value() / 100.0
+        self.player.finished.connect(self._on_playback_finished)
+        self.mix.midi_volume.slider.setToolTip(f"Volume of the note playback through {self.player_name}")
+        beats = 60.0 / self.view.bpm
+        notes = tuple((note.pitch, note.start * beats, note.duration * beats) for note in self.view.notes())
+        self.player.set_program(notes, self.transport.speed.value())
+        if playing:
+            self.player.play(position)
+
+    def _remember_configuration(self) -> None:
+        """The bar values are the settings, so what is on screen is what comes back next time."""
+        if "gain" not in self._display_overrides:
+            store.set_value(self.settings, "spectrum", "gain", self.mix.gain.value())
+        if "contrast" not in self._display_overrides:
+            store.set_value(self.settings, "spectrum", "contrast", self.mix.contrast.value())
+        store.set_value(self.settings, "playback", "audio_volume", self.mix.audio_volume.value())
+        store.set_value(self.settings, "playback", "midi_volume", self.mix.midi_volume.value())
+        store.set_value(self.settings, "playback", "speed", self.transport.speed.value())
+        store.set_value(self.settings, "playback", "latency_ms", self.transport.latency.value())
+        store.set_value(self.settings, "tempo", "bpm", self.transport.bpm.value())
+        store.set_value(self.settings, "editor", "snap", self.view.snap)
+        store.set_value(self.settings, "editor", "division", self.view.division)
+        store.set_value(self.settings, "editor", "zoom_x", self.view.zoom[0])
+        store.set_value(self.settings, "editor", "zoom_y", self.view.zoom[1])
+
+    def _on_panel_changed(self, *_args) -> None:
+        if self._seeding:
+            return
+        self._display_overrides.clear()  # the panel was touched after all, so it is what is remembered
+        self._remember_configuration()
+        self.settings_store.touch()
+
+    def _restore_session(self) -> None:
+        session = self.settings.session
+        if session.geometry:
+            self.restoreGeometry(QByteArray.fromBase64(session.geometry.encode()))
+        if session.window_state:
+            self.restoreState(QByteArray.fromBase64(session.window_state.encode()))
+
+    def _remember_session(self) -> None:
+        session = self.settings.session
+        session.geometry = bytes(self.saveGeometry().toBase64()).decode()
+        session.window_state = bytes(self.saveState().toBase64()).decode()
+        centre = self.view.mapToScene(self.view.viewport().rect().center())
+        session.center_x = round(centre.x(), 1)
+        session.center_y = round(centre.y(), 1)
+
+    def closeEvent(self, event) -> None:
+        self._remember_configuration()
+        self._remember_session()
+        self.settings_store.flush()
+        super().closeEvent(event)
+
+    def _analysis_options(self) -> dict:
+        """What the analysis runs with: the settings, then whatever this run was told to use."""
+        analysis = self.settings.analysis
+        chosen = {
+            "channels": analysis.channels,
+            "t_num": analysis.t_num,
+            "fft_points": analysis.fft_points,
+            "a4": analysis.a4,
+        }
+        for name, value in self.overrides.items():
+            if value is not None and name in chosen:
+                chosen[name] = value
+        return chosen
+
+    def load_audio(self, path: str) -> None:
         self.audio_path = path
-        self.loader = SpectrumLoader(path, channels=channels, t_num=t_num, parent=self)
+        store.set_value(self.settings, "paths", "last_audio_dir", str(Path(path).parent))
+        self.settings_store.touch()
+        self.loader = SpectrumLoader(path, parent=self, **self._analysis_options())
         self.loader.progress.connect(self._on_analysis_progress)
         self.loader.loaded.connect(self._on_spectrum_loaded)
         self.loader.failed.connect(lambda message: self.statusBar().showMessage(f"Spectrum failed: {message}"))
@@ -322,16 +558,31 @@ class MainWindow(QMainWindow):
             return
         self.transport.tempo.hide()
         self.transport.detect.setEnabled(False)
-        self.tempo_loader = TempoLoader(self.audio_path, parent=self)
+        tempo = self.settings.tempo
+        self.tempo_loader = TempoLoader(
+            self.audio_path,
+            estimator=tempo.estimator,
+            window_seconds=tempo.window_seconds,
+            window_hop_seconds=tempo.window_hop_seconds,
+            parent=self,
+        )
         self.tempo_loader.loaded.connect(self._on_tempo_loaded)
         self.tempo_loader.failed.connect(self._on_tempo_failed)
         self.tempo_loader.start()
 
-    def _on_tempo_loaded(self, result: BeatTempo) -> None:
+    def _on_tempo_loaded(self, result) -> None:
+        """Offer what was estimated as a candidate, whichever estimator produced it."""
         self.transport.detect.setEnabled(True)
         if not result.local:
             return
-        self.transport.tempo.estimate(result.bpm, result.agreement, len(result.local), result.residual)
+        residual = getattr(result, "residual", None)
+        if residual is None:
+            source = TEMPOCNN_SOURCE
+            agreement = _patch_agreement(result)
+        else:
+            source = BEAT_SOURCE
+            agreement = result.agreement
+        self.transport.tempo.estimate(result.bpm, agreement, len(result.local), source, residual)
 
     def _on_tempo_failed(self, message: str) -> None:
         self.transport.detect.setEnabled(self.audio_path is not None)
@@ -427,7 +678,7 @@ class MainWindow(QMainWindow):
 
     def _on_note_preview(self, pitch: int) -> None:
         """Audition a note the user clicked or drew."""
-        self.player.preview(pitch)
+        self.player.preview(pitch, self.settings.playback.preview_seconds)
 
     def _on_hover_changed(self, pitch: int | None) -> None:
         if pitch is None:
@@ -440,7 +691,7 @@ class MainWindow(QMainWindow):
             "space: play or pause  |  click (outside edit mode): move the playhead  |  "
             "pen: drag an empty row to draw  |  select: drag a box, ctrl-click to add  |  "
             "shift drag a note: trim its start (left half) or end (right half)  |  right click: delete  |  "
-            "middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y"
+            "middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y  |  gear: settings"
         )
 
     def _on_tool_changed(self, tool: str) -> None:
@@ -480,11 +731,16 @@ class MainWindow(QMainWindow):
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="namioto", description="Namioto piano-roll MIDI editor")
     parser.add_argument("audio", nargs="?", help="audio file to analyse and draw as a spectrum")
-    parser.add_argument("--channels", choices=CHANNEL_MODES, default="mono", help="which channels to analyse")
-    parser.add_argument("--t-num", type=float, default=40.0, help="spectrum frames per second")
-    parser.add_argument("--gain", type=float, help="initial spectrum gain")
-    parser.add_argument("--contrast", type=float, help="initial spectrum contrast")
+    parser.add_argument("--channels", choices=CHANNEL_MODES, help="which channels to analyse, over the settings")
+    parser.add_argument("--t-num", type=float, help="spectrum frames per second, over the settings")
+    parser.add_argument("--gain", type=float, help="spectrum gain for this run")
+    parser.add_argument("--contrast", type=float, help="spectrum contrast for this run")
     return parser.parse_args(argv)
+
+
+def _patch_agreement(result) -> float:
+    """Share of the TempoCNN patches that agree with the tempo it settled on."""
+    return sum(abs(local.bpm - result.bpm) <= result.bpm * TOLERANCE for local in result.local) / len(result.local)
 
 
 def main() -> int:
@@ -493,11 +749,8 @@ def main() -> int:
     app.setStyle("Fusion")
     app.setPalette(dark_palette())
     app.setStyleSheet(STYLE_SHEET)
-    window = MainWindow(audio=args.audio, channels=args.channels, t_num=args.t_num)
-    if args.gain is not None:
-        window.mix.gain.set_value(args.gain)
-    if args.contrast is not None:
-        window.mix.contrast.set_value(args.contrast)
+    window = MainWindow(audio=args.audio, overrides={"channels": args.channels, "t_num": args.t_num})
+    window.apply_overrides(gain=args.gain, contrast=args.contrast)
     window.show()
     return app.exec()
 

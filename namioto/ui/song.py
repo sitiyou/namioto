@@ -89,6 +89,15 @@ class SongPlayer(QObject):
         self._source: _SongSource | None = None
         self._buffer_ms = buffer_ms
 
+    @property
+    def buffer_ms(self) -> int:
+        return self._buffer_ms
+
+    @buffer_ms.setter
+    def buffer_ms(self, value: int) -> None:
+        """Takes effect on the next play: the sink is built with it when the sound starts."""
+        self._buffer_ms = max(10, int(value))
+
     def load(self, samples: np.ndarray, sample_rate: int) -> None:
         self.stop()
         self.samples = np.ascontiguousarray(samples, dtype=np.float32)

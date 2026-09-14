@@ -1,0 +1,299 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+"""The settings window, and the store that keeps the file in step with what is running.
+
+The window is built from `namioto.settings`: one row per field of the spec, so a new setting is a
+line in that table and nothing here.
+"""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Sequence
+from typing import Any
+
+from PyQt6.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QSpinBox,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
+
+from namioto import settings as store
+from namioto.settings import Field
+from namioto.ui.controls import caption_font, text_button
+from namioto.ui.roll import SNAP_CHOICES
+
+SAVE_DELAY_MS = 1000
+BROWSE_CAPTION = "Browse…"
+EDITOR_WIDTH = 300  # a form of numbers that stretch across the page is hard to read
+
+
+class SettingsStore(QObject):
+    """The settings the program runs with, written out once the changes stop coming."""
+
+    changed = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, settings, path=None, parent=None):
+        super().__init__(parent)
+        self.settings = settings
+        self.path = path or store.default_path()
+        self._timer = QTimer(self)
+        self._timer.setSingleShot(True)
+        self._timer.setInterval(SAVE_DELAY_MS)
+        self._timer.timeout.connect(self.flush)
+
+    def touch(self) -> None:
+        """Something changed, and more may follow: write it out when they settle."""
+        self._timer.start()
+
+    def apply(self, settings) -> None:
+        """Take whole settings over, at once, from the settings window."""
+        self.settings = settings
+        self.changed.emit(settings)
+        self.flush()
+
+    def flush(self) -> None:
+        self._timer.stop()
+        try:
+            store.save(self.settings, self.path)
+        except OSError as error:  # a read-only home must not take the editor down
+            self.failed.emit(f"Settings could not be saved: {error}")
+
+
+def _read(widget: QWidget) -> Any:
+    if isinstance(widget, QCheckBox):
+        return widget.isChecked()
+    if isinstance(widget, QDoubleSpinBox):  # before QSpinBox's sibling check, they do not nest
+        return widget.value()
+    if isinstance(widget, QSpinBox):
+        return widget.value()
+    if isinstance(widget, QComboBox):
+        return widget.currentData()
+    if isinstance(widget, QLineEdit):
+        return widget.text()
+    raise TypeError(f"no way to read a {type(widget).__name__}")
+
+
+def _write(widget: QWidget, value: Any) -> None:
+    if isinstance(widget, QCheckBox):
+        widget.setChecked(bool(value))
+    elif isinstance(widget, (QDoubleSpinBox, QSpinBox)):
+        widget.setValue(value)
+    elif isinstance(widget, QComboBox):
+        widget.setCurrentIndex(max(0, widget.findData(value)))
+    elif isinstance(widget, QLineEdit):
+        widget.setText(str(value))
+    else:
+        raise TypeError(f"no way to fill a {type(widget).__name__}")
+
+
+class SettingsDialog(QDialog):
+    """Every setting, on a page per group, over a copy that is only handed over when applied."""
+
+    applied = pyqtSignal(object)
+    reanalyse_requested = pyqtSignal()
+
+    def __init__(
+        self,
+        settings,
+        *,
+        ports: Callable[[], Sequence[str]] | None = None,
+        can_reanalyse: bool = False,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.setWindowTitle("Settings")
+        self.resize(560, 460)
+        self._settings = store.clone(settings)
+        self._ports = ports
+        self._rows: list[tuple[str, Field, Callable[[], Any], Callable[[Any], None]]] = []
+
+        pages = QTabWidget()
+        for page in dict.fromkeys(section.page for section in store.SECTIONS):
+            pages.addTab(self._page(page, can_reanalyse), page)
+
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Apply
+        )
+        restore = buttons.addButton("Restore defaults", QDialogButtonBox.ButtonRole.ResetRole)
+        restore.clicked.connect(self.restore_defaults)
+        buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(self.apply)
+        buttons.accepted.connect(self._accept)
+        buttons.rejected.connect(self.reject)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(pages)
+        layout.addWidget(buttons)
+
+    def values(self):
+        """The copy, with everything the widgets hold read back into it."""
+        for section, field, read, _write_value in self._rows:
+            store.set_value(self._settings, section, field.name, read())
+        return self._settings
+
+    def apply(self) -> None:
+        self.applied.emit(self.values())
+
+    def restore_defaults(self) -> None:
+        self._settings = store.Settings()
+        for _section, field, _read_value, write in self._rows:
+            write(field.default)
+
+    def _accept(self) -> None:
+        self.apply()
+        self.accept()
+
+    def _page(self, page: str, can_reanalyse: bool) -> QWidget:
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        for advanced in (False, True):
+            rows = [
+                (section, field)
+                for section in store.SECTIONS
+                if section.page == page
+                for field in section.fields
+                if field.advanced is advanced and not field.hidden
+            ]
+            if not rows:
+                continue
+            if advanced:
+                caption = QLabel("ADVANCED")
+                caption.setObjectName("clusterCaption")
+                caption.setFont(caption_font())
+                layout.addWidget(caption)
+            form = QFormLayout()
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            for section, field in rows:
+                editor, read, write = self._editor(section.name, field)
+                editor.setMaximumWidth(EDITOR_WIDTH)
+                self._rows.append((section.name, field, read, write))
+                label = QLabel(field.caption)
+                if field.tooltip:
+                    label.setToolTip(field.tooltip)
+                    editor.setToolTip(field.tooltip)
+                form.addRow(label, editor)
+            layout.addLayout(form)
+        if page == "Analysis":
+            layout.addWidget(self._analysis_hint(can_reanalyse))
+        if page == "Advanced":
+            layout.addWidget(self._path_hint())
+        layout.addStretch(1)
+        return widget
+
+    def _analysis_hint(self, can_reanalyse: bool) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        hint = QLabel("Analysis changes reach the spectrum the next time a file is loaded.")
+        hint.setObjectName("fieldLabel")
+        layout.addWidget(hint)
+        if can_reanalyse:
+            again = text_button("Re-analyse now", "Run the analysis again with these settings")
+            again.clicked.connect(self.reanalyse_requested)
+            layout.addWidget(again)
+        layout.addStretch(1)
+        return widget
+
+    def _path_hint(self) -> QWidget:
+        widget = QWidget()
+        layout = QHBoxLayout(widget)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(QLabel("File"))
+        path = QLineEdit(str(store.default_path()))
+        path.setReadOnly(True)
+        layout.addWidget(path, 1)
+        folder = text_button("Show folder", "Open the directory holding the settings file")
+        folder.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(store.default_path().parent))))
+        layout.addWidget(folder)
+        return widget
+
+    def _editor(self, section: str, field: Field) -> tuple[QWidget, Callable[[], Any], Callable[[Any], None]]:
+        value = store.get_value(self._settings, section, field.name)
+        if field.name == "snap":
+            return self._combo([(label, beats) for label, beats in SNAP_CHOICES], value)
+        if field.name == "midi_port":
+            return self._port_combo(value)
+        if field.kind == "path":
+            return self._path_editor(value)
+        if field.kind == "bool":
+            widget = QCheckBox()
+        elif field.kind == "choice":
+            return self._combo([(str(choice), choice) for choice in field.choices], value)
+        elif field.kind == "int":
+            widget = QSpinBox()
+            widget.setRange(int(field.low), int(field.high))
+            widget.setSingleStep(max(1, int(field.step) or 1))
+            widget.setSuffix(field.suffix)
+        elif field.kind == "float":
+            widget = QDoubleSpinBox()
+            widget.setRange(field.low, field.high)
+            widget.setDecimals(field.decimals)
+            widget.setSingleStep(field.step or 0.1)
+            widget.setSuffix(field.suffix)
+            widget.setKeyboardTracking(False)
+        else:
+            widget = QLineEdit()
+        _write(widget, value)
+        return widget, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
+
+    def _combo(self, entries: Sequence[tuple[str, Any]], value: Any):
+        widget = QComboBox()
+        for caption, data in entries:
+            widget.addItem(caption, data)
+        _write(widget, value)
+        return widget, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
+
+    def _port_combo(self, value: Any):
+        widget = QComboBox()
+
+        def fill() -> None:
+            current = widget.currentData()
+            widget.clear()
+            widget.addItem("Auto", "")
+            for name in self._ports() if self._ports else ():
+                widget.addItem(name, name)
+            widget.setCurrentIndex(max(0, widget.findData(current)))
+
+        fill()
+        _write(widget, value)
+        refresh = text_button("Refresh", "Look for MIDI ports again")
+        refresh.clicked.connect(fill)
+
+        holder = QWidget()
+        layout = QHBoxLayout(holder)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(widget, 1)
+        layout.addWidget(refresh)
+        return holder, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
+
+    def _path_editor(self, value: Any):
+        widget = QLineEdit()
+        _write(widget, value)
+        browse = text_button(BROWSE_CAPTION, "Choose a directory")
+
+        def choose() -> None:
+            chosen = QFileDialog.getExistingDirectory(self, "Choose a directory", widget.text())
+            if chosen:
+                widget.setText(chosen)
+
+        browse.clicked.connect(choose)
+        holder = QWidget()
+        layout = QHBoxLayout(holder)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(widget, 1)
+        layout.addWidget(browse)
+        return holder, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
