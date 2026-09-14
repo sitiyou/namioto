@@ -39,6 +39,13 @@ include = ["namioto", "scripts", "build.sh", "LICENSE", "NOTICE", "README.md", "
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
+[tool.pyright]
+venvPath = "."
+venv = ".venv"
+typeCheckingMode = "basic"
+include = ["namioto", "tests", "scripts"]
+exclude = ["refs", "build", "dist"]
+
 [tool.ruff]
 line-length = 120
 

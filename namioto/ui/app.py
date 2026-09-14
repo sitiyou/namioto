@@ -471,8 +471,8 @@ class MainWindow(QMainWindow):
 
     def _remember_session(self) -> None:
         session = self.settings.session
-        session.geometry = bytes(self.saveGeometry().toBase64()).decode()
-        session.window_state = bytes(self.saveState().toBase64()).decode()
+        session.geometry = self.saveGeometry().toBase64().data().decode()
+        session.window_state = self.saveState().toBase64().data().decode()
         centre = self.view.mapToScene(self.view.viewport().rect().center())
         session.center_x = round(centre.x(), 1)
         session.center_y = round(centre.y(), 1)
