@@ -70,7 +70,8 @@ namioto/playback.py   note synthesis: pitches rendered into one audio buffer, no
 namioto/models/       bundled ONNX models
 namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars, roll.py: widgets,
                       spectrogram.py: spectrum colour map, image cache and loader,
-                      audio.py: note playback outputs - an external MIDI synth or the built-in one)
+                      audio.py: note playback outputs - an external MIDI synth or the built-in one,
+                      song.py: the audio file streamed to Qt's audio output)
 tests/                pytest
 scripts/              developer tools (spectrum benchmark)
 build.sh              packaging script
@@ -105,7 +106,7 @@ placeholder — the analysed audio itself cannot be played yet.
 
 | Action | Input |
 | --- | --- |
-| Edit mode | The button in front of the tools: notes can only be drawn, moved, resized and selected while it is on. Picking the pen or the select tool turns it on as well, entering the mode starts on the pen, and the snap grid and the clear button are only usable inside it |
+| Edit mode | The button in front of the tools: notes can only be drawn, moved, resized and selected while it is on, the spectrum behind them fades so that they stand out over it (WaveTone does the same), and picking the pen or the select tool turns the mode on as well - entering it starts on the pen, and the snap grid and the clear button are only usable inside it. The window opens with it off, so a click in the roll moves the playhead until a tool is picked |
 | Draw note | Pen tool: left drag on the empty grid (drag either way to set the length) |
 | Move note(s) | Left drag a note |
 | Resize note | Left drag the right edge of a note, or Shift + left drag anywhere on it: its left half moves the start, its right half the end |
@@ -115,6 +116,8 @@ placeholder — the analysed audio itself cannot be played yet.
 | Select all | Ctrl + A |
 | Delete | Right click a note, or Delete / Backspace for the selection |
 | Cancel a drag | Escape |
+| Play or pause | `Space` or the play/pause button |
+| Move the playhead | A press on the empty grid in the roll - the pen draws a note there at the same time - a click in the timeline ruler (any mode), or the rewind / forward buttons for the ends. Pressing an existing note only moves, resizes or selects it |
 | Double / halve the tempo | Right-click the Tempo field, or press `*` / `/` while it has the focus |
 | Pan | Middle drag, a scrollbar, or drag in the timeline ruler to scroll horizontally |
 | Zoom time | Ctrl + wheel |
@@ -133,15 +136,25 @@ The TempoCNN model (`namioto/tempo.py`, `namioto-tempocnn`) is kept as the runne
 full mixes but its 256 integer-BPM classes and its training data (full mixes only) make it a poor
 fit for stems, where beat tracking wins.
 
-The transport plays the notes. They go to a **software MIDI synth** when one is listening on the
+The transport plays the loaded audio file and the notes on top of it. A press on the empty grid in
+the roll moves its playhead - with the pen the note is drawn there as well, so a click writes a note
+where the sound has just moved to - a click in the timeline ruler moves it in any mode (dragging the
+ruler still scrolls), and `Space` starts and pauses; the playhead, the readout and the timeline grid
+all follow the file. The audio is streamed to Qt's audio output one buffer at a
+time, mono at the sample rate of the file, so seeking is a cursor move and **Speed** becomes a
+fractional step over it: twice the speed consumes two seconds of the song per second of wall clock,
+which keeps the notes and the audio on the same timeline (the tape-style pitch shift that comes with
+it is what a speed control on a recording does; the note layer stays in tune).
+
+The notes go to a **software MIDI synth** when one is listening on the
 MIDI bus - TiMidity and FluidSynth are recognised by name, and the tooltip of the **MIDI** slider
 says which one is in use, because that is where the sound comes from (patches included). Without
 one, the notes are rendered by a small additive synth inside the program and streamed through Qt's
-audio output instead. **Speed** scales the timeline without changing the pitch, **Latency** nudges
-the position readout, and the playhead follows the clock. Clicking a key on the keyboard or a note
-in the roll auditions it. Hovering the roll while editing highlights the row under the mouse
-together with its octave and twelfth the way WaveTone does, paints those keys red and shows the
-note name and frequency next to the status bar; outside edit mode the roll is a plain view of the
+audio output instead. **Latency** nudges the
+position readout. Clicking a key on the keyboard or a note
+in the roll auditions it. Hovering the roll tints the row under the mouse in either mode; while
+editing it also tints its octave and twelfth the way WaveTone does, paints those keys red and shows
+the note name and frequency next to the status bar; outside edit mode the roll is a plain view of the
 spectrum and the notes.
 
 The **Snap** combo sets the quantisation applied when drawing, moving, and resizing notes, and

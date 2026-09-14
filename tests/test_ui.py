@@ -12,6 +12,7 @@ import numpy as np  # noqa: E402
 import pytest  # noqa: E402
 from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt  # noqa: E402
 from PyQt6.QtGui import QColor, QFocusEvent, QImage, QKeyEvent, QMouseEvent, QWheelEvent  # noqa: E402
+from PyQt6.QtTest import QTest  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
 
 from namioto.beats import BeatTempo, LocalWindow  # noqa: E402
@@ -99,6 +100,76 @@ def roll_mouse(window, kind, scene_pos: QPointF, modifiers=Qt.KeyboardModifier.N
         window.view.mouseMoveEvent(event)
     else:
         window.view.mouseReleaseEvent(event)
+
+
+def ruler_mouse(window, kind, x: float) -> None:
+    """Send a mouse event to the timeline ruler, whose columns line up with the roll's."""
+    position = QPointF(x, 10.0)
+    event = QMouseEvent(
+        kind,
+        position,
+        window.ruler.mapToGlobal(position),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    if kind == QEvent.Type.MouseButtonPress:
+        window.ruler.mousePressEvent(event)
+    elif kind == QEvent.Type.MouseMove:
+        window.ruler.mouseMoveEvent(event)
+    else:
+        window.ruler.mouseReleaseEvent(event)
+
+
+def ruler_click(window, beats: float) -> None:
+    x = window.ruler.origin().x() + window.view.mapFromScene(QPointF(beats, 0.0)).x()
+    ruler_mouse(window, QEvent.Type.MouseButtonPress, x)
+    ruler_mouse(window, QEvent.Type.MouseButtonRelease, x)
+
+
+def test_clicking_the_timeline_moves_the_playhead(window) -> None:
+    window.edit.pen.click()  # the ruler seeks even while editing
+    window.view.set_playhead(None)
+
+    ruler_click(window, 3.0)
+    assert window.view.playhead == pytest.approx(1.5)  # three beats at 120 BPM
+
+    hbar = window.view.horizontalScrollBar()
+    hbar.setValue(0)
+    window.view.set_playhead(None)
+    ruler_mouse(window, QEvent.Type.MouseButtonPress, 400.0)
+    ruler_mouse(window, QEvent.Type.MouseMove, 300.0)
+    ruler_mouse(window, QEvent.Type.MouseButtonRelease, 300.0)
+    assert hbar.value() == 100 and window.view.playhead is None  # a drag scrolls instead
+    hbar.setValue(0)
+    window._stop()
+    window.view.set_playhead(None)
+
+
+def test_a_click_with_the_select_tool_moves_the_playhead(window) -> None:
+    window.edit.select.click()  # picking a tool enters edit mode
+    assert window.view.edit_mode
+    window.view.clear_notes()
+    window.view.set_playhead(None)
+    point = QPointF(3.0, 40.0)
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, point)
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, point)
+    assert window.view.playhead == pytest.approx(1.5)  # the press moves the cursor
+    assert not window.view.notes()
+
+    window.edit.pen.click()
+    window._stop()
+    window.view.set_playhead(None)
+    window.view.clear_notes()
+
+
+def test_a_new_window_starts_with_editing_off(qt_app) -> None:
+    window = MainWindow()
+    try:
+        assert not window.edit.mode.isChecked() and not window.view.edit_mode
+    finally:
+        window.close()
 
 
 def draw_note(window, press: QPointF, release: QPointF | None = None) -> None:
@@ -383,6 +454,8 @@ def test_tempo_loader_reports_a_bad_file(window, tmp_path) -> None:
 
 
 def test_hover_marks_the_row_and_its_overtones(window) -> None:
+    if not window.view.edit_mode:
+        window.edit.pen.click()
     window.view.clear_notes()
     window.view.centerOn(QPointF(8.0, float(PITCH_MAX - 65)))  # both G3 and its twelfth in view
     window.view.set_hover_pitch(55)  # G3
@@ -402,6 +475,8 @@ def test_hover_marks_the_row_and_its_overtones(window) -> None:
 
 
 def test_hover_turns_the_keys_red(window) -> None:
+    if not window.view.edit_mode:
+        window.edit.pen.click()
     window.view.centerOn(QPointF(8.0, float(PITCH_MAX - 65)))
     window.view.set_hover_pitch(55)
     marked = window.keyboard.grab().toImage()
@@ -410,6 +485,15 @@ def test_hover_turns_the_keys_red(window) -> None:
     plain = window.keyboard.grab().toImage()
     assert red
     assert not {y for y in range(plain.height()) if plain.pixelColor(2, y) == HOVER_KEY}
+
+    window.edit.mode.click()  # outside edit mode the row is banded but the keys stay white
+    assert not window.view.edit_mode
+    window.view.set_hover_pitch(55)
+    assert window.view.highlight_pitches() == [55]
+    plain_keys = window.keyboard.grab().toImage()
+    assert not {y for y in range(plain_keys.height()) if plain_keys.pixelColor(2, y) == HOVER_KEY}
+    window.view.set_hover_pitch(None)
+    window.edit.pen.click()
 
 
 def test_playhead_is_drawn_at_the_play_position(window) -> None:
@@ -441,6 +525,40 @@ class FakeOutput:
 
     def preview(self, pitch: int, seconds: float = 0.6) -> None:
         self.previews.append(pitch)
+
+    def play(self, seconds: float = 0.0) -> None:
+        self.position = seconds
+        self.is_playing = True
+        self.calls.append("play")
+
+    def pause(self) -> None:
+        self.is_playing = False
+        self.calls.append("pause")
+
+    def stop(self) -> None:
+        self.is_playing = False
+        self.position = 0.0
+        self.calls.append("stop")
+
+    def seek(self, seconds: float) -> None:
+        self.position = seconds
+        self.calls.append("seek")
+
+
+class FakeSong:
+    """Stands in for the audio file layer, so the transport can be tested without a device."""
+
+    def __init__(self, duration: float = 30.0) -> None:
+        self.gain = 1.0
+        self.speed = 1.0
+        self.is_loaded = True
+        self.duration = duration
+        self.position = 0.0
+        self.is_playing = False
+        self.calls: list[str] = []
+
+    def set_speed(self, speed: float) -> None:
+        self.speed = speed
 
     def play(self, seconds: float = 0.0) -> None:
         self.position = seconds
@@ -496,10 +614,10 @@ def test_the_play_button_shows_what_it_will_do(window, monkeypatch) -> None:
 
     play_icon = icon_image()
     window.transport.play_pause.click()
-    assert window.transport.play_pause.toolTip() == "Pause playback"
+    assert window.transport.play_pause.toolTip() == "Pause playback (Space)"
     assert icon_image() != play_icon  # it became a pause button
     window.transport.play_pause.click()
-    assert window.transport.play_pause.toolTip() == "Play from the cursor"
+    assert window.transport.play_pause.toolTip() == "Play from the cursor (Space)"
     assert icon_image() == play_icon
     window.view.clear_notes()
 
@@ -515,6 +633,93 @@ def test_play_from_the_beginning_rewinds_first(window, monkeypatch) -> None:
     window.transport.play_from_start.click()
     assert "seek" in fake.calls and fake.position == 0.0 and fake.is_playing
     window.transport.stop.click()
+    window.view.clear_notes()
+
+
+def test_space_plays_and_pauses(window, monkeypatch) -> None:
+    fake = FakeOutput()
+    monkeypatch.setattr(window, "player", fake)
+    window.view.clear_notes()
+    window.view.add_note(69, 0.0, 2.0)
+    QApplication.setActiveWindow(window)  # an offscreen window is never active on its own
+
+    QTest.keyClick(window, Qt.Key.Key_Space)
+    assert fake.is_playing
+    QTest.keyClick(window, Qt.Key.Key_Space)
+    assert not fake.is_playing
+    window.view.clear_notes()
+
+
+def test_the_audio_file_plays_alongside_the_notes(window, monkeypatch) -> None:
+    song, notes = FakeSong(), FakeOutput()
+    monkeypatch.setattr(window, "song", song)
+    monkeypatch.setattr(window, "player", notes)
+    window.view.clear_notes()
+    window.view.add_note(69, 0.0, 1.0)
+    window.transport.speed.set_value(0.5)
+    song.position = 4.0  # the playhead already sits inside the file
+
+    window.transport.play_pause.click()
+    assert song.calls == ["play"] and song.position == pytest.approx(4.0) and song.is_playing
+    assert song.speed == 0.5  # the speed control steps the audio as well
+    assert notes.calls == ["set_program", "play"] and notes.position == pytest.approx(4.0)
+    assert notes.programs[0][1] == 0.5
+
+    song.position = 6.5
+    window._show_position()
+    assert window.view.playhead == pytest.approx(6.5)  # the file leads the readout
+    assert window.transport.position.text() == "00:06.500"
+
+    window.transport.stop.click()
+    assert song.calls == ["play", "stop"] and song.position == 0.0 and not song.is_playing
+    window.transport.speed.set_value(1.0)
+    window.view.clear_notes()
+
+
+def test_the_audio_file_keeps_playing_when_the_notes_end(window, monkeypatch) -> None:
+    song, notes = FakeSong(), FakeOutput()
+    monkeypatch.setattr(window, "song", song)
+    monkeypatch.setattr(window, "player", notes)
+    window.position_timer.start()
+    song.is_playing = True
+
+    window._on_playback_finished()  # the note layer ran out first
+    assert window.position_timer.isActive()
+
+    song.is_playing = False
+    window._on_playback_finished()  # and now the file is over too
+    assert not window.position_timer.isActive()
+    window.view.set_playhead(None)
+
+
+def test_clicking_the_roll_moves_the_playhead(window) -> None:
+    window.edit.mode.click()  # outside edit mode the roll is a seek bar
+    assert not window.view.edit_mode
+    scene_pos = QPointF(2.0, 40.0)  # scene units: two beats across, forty rows down
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, scene_pos)
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, scene_pos)
+    assert window.view.playhead == pytest.approx(1.0)  # two beats at 120 BPM
+    assert window.player.position == pytest.approx(1.0)
+
+    window.edit.mode.click()
+    window.view.set_playhead(None)
+    window.view.clear_notes()
+
+
+def test_the_pen_draws_where_the_playhead_lands(window) -> None:
+    window.edit.pen.click()  # picking a tool enters edit mode
+    assert window.view.edit_mode and window.view.tool == "pen"
+    window.view.set_playhead(None)
+    window.view.clear_notes()
+    left = QPointF(2.0, 40.0)
+    right = QPointF(4.0, 40.0)
+
+    draw_note(window, left, right)
+    assert len(window.view.notes()) == 1
+    assert window.view.playhead == pytest.approx(1.0)  # the same press moved the cursor
+    window._stop()
+    window.view.set_playhead(None)
     window.view.clear_notes()
 
 
@@ -671,6 +876,8 @@ def test_the_roll_only_edits_in_edit_mode(window) -> None:
     note = window.view.add_note(69, 8.0, 1.0)
     note.setSelected(True)
 
+    if not window.view.edit_mode:
+        window.edit.mode.click()
     window.edit.mode.click()  # leaving edit mode
     assert not window.view.edit_mode
     assert window.view.tool is None
@@ -681,8 +888,9 @@ def test_the_roll_only_edits_in_edit_mode(window) -> None:
     window.view.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier))
     assert len(window.view.notes()) == 1  # and delete did nothing either
     window.view.set_hover_pitch(69)
-    assert window.view.highlight_pitches() == []  # no row highlight outside edit mode
+    assert window.view.highlight_pitches() == [69]  # only the row under the mouse, no overtones
     window.view.set_hover_pitch(None)
+    window._stop()
 
     window.edit.mode.click()  # back in
     assert window.view.edit_mode and window.view.tool == "pen"
@@ -693,7 +901,8 @@ def test_the_roll_only_edits_in_edit_mode(window) -> None:
 
 
 def test_picking_a_tool_turns_on_edit_mode(window) -> None:
-    window.edit.mode.click()
+    if window.view.edit_mode:
+        window.edit.mode.click()
     assert not window.view.edit_mode
     window.edit.select.click()
     assert window.view.edit_mode and window.edit.mode.isChecked() and window.view.tool == "select"
@@ -939,6 +1148,8 @@ def test_octave_lines_sit_on_the_b_and_c_boundary() -> None:
 
 
 def test_roll_paints_the_spectrum(window) -> None:
+    if window.view.edit_mode:
+        window.edit.mode.click()  # full colour, so the edit-mode fade has to be off
     window.view.set_spectrum(make_spectrum(frames=200, value=9.0))
     image = window.view.grab().toImage()
     assert not image.isNull()
@@ -950,7 +1161,26 @@ def test_roll_paints_the_spectrum(window) -> None:
     window.view.set_spectrum(None)
 
 
+def test_editing_fades_the_spectrum_behind_the_notes(window) -> None:
+    if window.view.edit_mode:
+        window.edit.mode.click()
+    window.view.set_hover_pitch(None)
+    window.view.set_spectrum(make_spectrum(frames=200, value=9.0))
+    window.view.centerOn(QPointF(2.0, 40.5))
+
+    plain = pixel_at(window.view, window.view.grab().toImage(), 2.0, 40.5)
+    window.edit.pen.click()  # the spectrum steps back so a note draws attention over it
+    dimmed = pixel_at(window.view, window.view.grab().toImage(), 2.0, 40.5)
+    assert dimmed.lightness() < plain.lightness()
+
+    window.edit.mode.click()
+    assert pixel_at(window.view, window.view.grab().toImage(), 2.0, 40.5).lightness() == plain.lightness()
+    window.view.set_spectrum(None)
+
+
 def test_notes_are_drawn_over_the_spectrum(window) -> None:
+    if window.view.edit_mode:
+        window.edit.mode.click()
     window.view.clear_notes()
     window.view.set_spectrum(make_spectrum(frames=400, value=9.0))
     note = window.view.add_note(60, 1.0, 4.0)

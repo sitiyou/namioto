@@ -413,7 +413,7 @@ class TransportBar(QToolBar):
         """Playing and pausing share one button the way WaveTone shows it, so it turns into a
         pause button while the sound runs."""
         self.play_pause.setIcon(_icon("pause" if playing else "play"))
-        self.play_pause.setToolTip("Pause playback" if playing else "Play from the cursor")
+        self.play_pause.setToolTip("Pause playback (Space)" if playing else "Play from the cursor (Space)")
 
     def set_position(self, seconds: float) -> None:
         self.position.setText(format_time(seconds))
@@ -430,15 +430,15 @@ class EditBar(QToolBar):
     def __init__(self, snap_choices, parent=None):
         super().__init__("Edit", parent)
         self.mode = icon_button(
-            "edit", "Edit mode: draw, move and select notes (picking a tool turns it on)", checkable=True
+            "edit",
+            "Edit mode: draw, move and select notes (off: a click in the roll moves the playhead)",
+            checkable=True,
         )
-        self.mode.setChecked(True)
         self.mode.clicked.connect(self._mode_clicked)
         self.pen = icon_button("pen", "Pen: click or drag an empty row to draw a note", checkable=True)
         self.select = icon_button(
             "select", "Select: drag a box, ctrl-click a note to add, drag a note to move", checkable=True
         )
-        self.pen.setChecked(True)
         self.tools = QButtonGroup(self)
         self.tools.setExclusive(True)
         self.tools.addButton(self.pen)

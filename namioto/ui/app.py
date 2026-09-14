@@ -8,7 +8,7 @@ import sys
 from pathlib import Path
 
 from PyQt6.QtCore import QThread, QTimer, pyqtSignal
-from PyQt6.QtGui import QColor, QPalette
+from PyQt6.QtGui import QColor, QKeySequence, QPalette, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
     QGridLayout,
@@ -23,6 +23,7 @@ from namioto.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.ui.audio import open_player
 from namioto.ui.controls import EditBar, MixBar, TransportBar
 from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler, note_name
+from namioto.ui.song import SongPlayer, load_song
 from namioto.ui.spectrogram import SpectrumLoader
 
 POSITION_INTERVAL_MS = 40
@@ -106,6 +107,25 @@ class TempoLoader(QThread):
         self.loaded.emit(result)
 
 
+class SongLoader(QThread):
+    """Decodes the file for playback off the GUI thread."""
+
+    loaded = pyqtSignal(object, int)
+    failed = pyqtSignal(str)
+
+    def __init__(self, path: str | Path, parent=None):
+        super().__init__(parent)
+        self.path = Path(path)
+
+    def run(self) -> None:
+        try:
+            samples, sample_rate = load_song(self.path)
+        except Exception as error:  # a broken file must not take the editor down
+            self.failed.emit(f"{type(error).__name__}: {error}")
+            return
+        self.loaded.emit(samples, sample_rate)
+
+
 class MainWindow(QMainWindow):
     def __init__(self, audio: str | None = None, channels: str = "mono", t_num: float = 40.0):
         super().__init__()
@@ -114,12 +134,14 @@ class MainWindow(QMainWindow):
         self.audio_path: str | None = None
         self.loader: SpectrumLoader | None = None
         self.tempo_loader: TempoLoader | None = None
+        self.song_loader: SongLoader | None = None
 
         self.view = PianoRollView()
         self.ruler = TimelineRuler(self.view)
         self.keyboard = PianoKeyboard(self.view)
         self.player, self.player_name = open_player(self)
         self.player.gain = 0.8
+        self.song = SongPlayer(self)
         self.position_timer = QTimer(self)
         self.position_timer.setInterval(POSITION_INTERVAL_MS)
         self.position_timer.timeout.connect(self._show_position)
@@ -166,11 +188,13 @@ class MainWindow(QMainWindow):
         self.transport.tempo.applied.connect(self._apply_tempo)
         self.transport.tempo.dismissed.connect(self.transport.tempo.hide)
         self.transport.rewind_requested.connect(lambda: self._seek(0.0))
-        self.transport.forward_requested.connect(lambda: self._seek(self.player.duration))
+        self.transport.forward_requested.connect(lambda: self._seek(self._duration()))
         self.transport.play_pause_requested.connect(self._toggle_play)
         self.transport.play_from_start_requested.connect(self._play_from_start)
         self.transport.stop_requested.connect(self._stop)
         self.player.finished.connect(self._on_playback_finished)
+        self.song.finished.connect(self._on_playback_finished)
+        self.view.seek_requested.connect(self._seek)
         self.view.hover_changed.connect(self._on_hover_changed)
         self.view.note_preview.connect(self._on_note_preview)
         self.keyboard.key_preview.connect(self._on_note_preview)
@@ -183,6 +207,8 @@ class MainWindow(QMainWindow):
         self.view.bpm = self.transport.bpm.value()
 
         self.view.notes_changed.connect(self._update_status)
+        self.play_shortcut = QShortcut(QKeySequence("Space"), self)
+        self.play_shortcut.activated.connect(self._toggle_play)
         self.cursor_note = QLabel()
         self.cursor_note.setObjectName("cursorNote")
         self.statusBar().addPermanentWidget(self.cursor_note)
@@ -200,7 +226,15 @@ class MainWindow(QMainWindow):
         self.loader.failed.connect(lambda message: self.statusBar().showMessage(f"Spectrum failed: {message}"))
         self.statusBar().showMessage(f"Analysing {path} …")
         self.loader.start()
+        self.song_loader = SongLoader(path, parent=self)
+        self.song_loader.loaded.connect(self._on_song_loaded)
+        self.song_loader.failed.connect(lambda message: self.statusBar().showMessage(f"Playback failed: {message}"))
+        self.song_loader.start()
         self._start_tempo()
+
+    def _on_song_loaded(self, samples, sample_rate: int) -> None:
+        self.song.load(samples, sample_rate)
+        self.song.set_speed(self.transport.speed.value())
 
     def _start_tempo(self) -> None:
         """Estimate the tempo of the loaded audio in the background, as a suggestion only."""
@@ -229,53 +263,74 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Tempo set to {bpm:.0f} BPM from the audio")
 
     def _play(self) -> None:
-        """Hand the notes to the player, then play from where the cursor sits."""
-        if not self.view.notes():
-            self.statusBar().showMessage("Nothing to play: draw some notes first")
-            return
-        beats = 60.0 / self.view.bpm  # scene units are beats, the player works in seconds
+        """Send the notes to the synth and start the audio file, both from where the cursor sits."""
+        beats = 60.0 / self.view.bpm  # scene units are beats, the players work in seconds
         notes = tuple((note.pitch, note.start * beats, note.duration * beats) for note in self.view.notes())
-        self.player.set_program(notes, self.transport.speed.value())
-        position = self.player.position
-        self.player.play(0.0 if position >= self.player.duration - 1e-3 else position)
+        if not notes and not self.song.is_loaded:
+            self.statusBar().showMessage("Nothing to play: load a file or draw some notes")
+            return
+        seconds = self._position()
+        if seconds >= self._duration() - 1e-3:
+            seconds = 0.0
+        speed = self.transport.speed.value()
+        if self.song.is_loaded:
+            self.song.set_speed(speed)
+            self.song.play(seconds)
+        self.player.set_program(notes, speed)
+        self.player.play(seconds)
         self._show_position()
-        if self.player.is_playing:
+        if self._is_playing():
             self.position_timer.start()
         else:
             self.statusBar().showMessage(f"{self.player_name} did not accept the notes")
 
     def _toggle_play(self) -> None:
-        """One button for both, so it asks the player what it is doing right now."""
-        if self.player.is_playing:
+        """One button for both, so it asks the players what they are doing right now."""
+        if self._is_playing():
             self._pause()
         else:
             self._play()
 
     def _play_from_start(self) -> None:
-        self.player.seek(0.0)
+        self._seek(0.0)
         self._play()
 
     def _pause(self) -> None:
         self.position_timer.stop()
+        self.song.pause()
         self.player.pause()
         self._show_position()
 
     def _stop(self) -> None:
         self.position_timer.stop()
+        self.song.stop()
         self.player.stop()
         self._show_position()
 
     def _seek(self, seconds: float) -> None:
+        self.song.seek(seconds)
         self.player.seek(seconds)
         self._show_position()
 
+    def _position(self) -> float:
+        """Where the transport sits: the audio file leads when one is loaded, else the notes."""
+        return self.song.position if self.song.is_loaded else self.player.position
+
+    def _duration(self) -> float:
+        return self.song.duration if self.song.is_loaded else self.player.duration
+
+    def _is_playing(self) -> bool:
+        return self.song.is_playing or self.player.is_playing
+
     def _show_position(self) -> None:
-        seconds = self.player.position + self.transport.latency.value() / 1000.0
+        seconds = self._position() + self.transport.latency.value() / 1000.0
         self.transport.set_position(seconds)
-        self.transport.set_playing(self.player.is_playing)
+        self.transport.set_playing(self._is_playing())
         self.view.set_playhead(seconds)
 
     def _on_playback_finished(self) -> None:
+        if self._is_playing():  # the other layer is still running
+            return
         self.position_timer.stop()
         self._show_position()
 
@@ -294,6 +349,7 @@ class MainWindow(QMainWindow):
 
     def _show_hint(self) -> None:
         self.statusBar().showMessage(
+            "space: play or pause  |  click (outside edit mode): move the playhead  |  "
             "pen: drag an empty row to draw  |  select: drag a box, ctrl-click to add  |  "
             "shift drag a note: trim its start (left half) or end (right half)  |  right click: delete  |  "
             "middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y"

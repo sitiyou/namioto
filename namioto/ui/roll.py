@@ -52,8 +52,10 @@ MIN_LINE_SPACING = 16.0
 OVERTONES = (2, 3)  # the partials WaveTone marks over the row under the mouse
 HOVER_BAND = QColor(255, 255, 255, 85)
 HOVER_KEY = QColor("#ff4040")
+EDIT_DIM = 0.65  # the spectrum steps back while editing so the notes stand out over it
 PLAYHEAD = QColor("#e6ecf5")
 MIN_GRID_SPACING = 9.0
+CLICK_SLOP_PX = 4
 RULER_TIME_ROW = 24
 RULER_HEIGHT = 46
 TIME_LABEL_SPACING = 84.0
@@ -149,6 +151,7 @@ class PianoRollView(QGraphicsView):
     notes_changed = pyqtSignal()
     hover_changed = pyqtSignal(object)
     note_preview = pyqtSignal(int)
+    seek_requested = pyqtSignal(float)
 
     GRAB_PX = 7
     MIN_ZOOM_X, MAX_ZOOM_X = 12.0, 900.0
@@ -259,9 +262,12 @@ class PianoRollView(QGraphicsView):
         return self.spectrum.spectrum.frame_ms / 1000.0 * self.bpm / 60.0
 
     def highlight_pitches(self) -> list[int]:
-        """The row under the mouse and the rows of its overtones; only while editing."""
-        if self.hover_pitch is None or not self.edit_mode:
+        """The rows to tint behind the notes: the row under the mouse, and while editing also the
+        rows of its overtones, which is the WaveTone hint about where a note would double it."""
+        if self.hover_pitch is None:
             return []
+        if not self.edit_mode:
+            return [self.hover_pitch]
         pitches = [self.hover_pitch]
         for harmonic in OVERTONES:
             pitch = self.hover_pitch + round(12 * math.log2(harmonic))
@@ -282,6 +288,10 @@ class PianoRollView(QGraphicsView):
 
     def pixels_per_beat(self) -> float:
         return self._zoom_x
+
+    def seconds_at_viewport_x(self, x: float) -> float:
+        """The timeline position under a viewport x, for the widgets that share the roll's columns."""
+        return max(0.0, self.mapToScene(QPoint(int(x), 0)).x()) * 60.0 / self.bpm
 
     def pixels_per_second(self) -> float:
         return self._zoom_x * self.bpm / 60.0
@@ -406,7 +416,10 @@ class PianoRollView(QGraphicsView):
         painter.setRenderHint(
             QPainter.RenderHint.SmoothPixmapTransform, width * self._zoom_x < 1.0 or self._zoom_y < 1.0
         )
+        if self.edit_mode:
+            painter.setOpacity(EDIT_DIM)  # blends with the black underneath, so only the cells fade
         painter.drawImage(target, image, source)
+        painter.setOpacity(1.0)
         painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, False)
 
     # --- interaction -----------------------------------------------------
@@ -447,6 +460,8 @@ class PianoRollView(QGraphicsView):
             return
 
         if not self.edit_mode:
+            if event.button() == Qt.MouseButton.LeftButton:
+                self.seek_requested.emit(self.seconds_at_viewport_x(pos.x()))
             return
 
         if event.button() == Qt.MouseButton.RightButton:
@@ -467,6 +482,9 @@ class PianoRollView(QGraphicsView):
         self._anchor = scene_pos
 
         if note is None:
+            # the playhead follows the press even while drawing: the pen and the cursor are
+            # independent, so a note can be written where the sound has just been moved to
+            self.seek_requested.emit(self.seconds_at_viewport_x(pos.x()))
             if ctrl or self.tool == "select":
                 if not shift:
                     self._clear_selection()
@@ -661,6 +679,8 @@ class TimelineRuler(QWidget):
         super().__init__()
         self.view = view
         self._last_x: float | None = None
+        self._press_x = 0.0
+        self._moved = False
         self.setFixedHeight(RULER_HEIGHT)
         self.setCursor(Qt.CursorShape.SizeHorCursor)
         view.view_changed.connect(self.update)
@@ -715,15 +735,23 @@ class TimelineRuler(QWidget):
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
             self._last_x = event.position().x()
+            self._press_x = self._last_x
+            self._moved = False
 
     def mouseMoveEvent(self, event) -> None:
+        position = event.position().x()
         if self._last_x is None:
             return
+        if abs(position - self._press_x) > CLICK_SLOP_PX:
+            self._moved = True
         hbar = self.view.horizontalScrollBar()
-        hbar.setValue(hbar.value() - int(event.position().x() - self._last_x))
-        self._last_x = event.position().x()
+        hbar.setValue(hbar.value() - int(position - self._last_x))
+        self._last_x = position
 
     def mouseReleaseEvent(self, event) -> None:
+        if self._last_x is not None and not self._moved:  # a click moves the cursor, a drag scrolls
+            x = event.position().x() - self.origin().x()
+            self.view.seek_requested.emit(self.view.seconds_at_viewport_x(x))
         self._last_x = None
 
     def wheelEvent(self, event) -> None:
@@ -757,7 +785,7 @@ class PianoKeyboard(QWidget):
         painter.setFont(font)
         white = QColor("#d8dde6")
         black = QColor("#15181e")
-        highlighted = set(self.view.highlight_pitches())
+        highlighted = set(self.view.highlight_pitches()) if self.view.edit_mode else set()
 
         for pitch in range(PITCH_MIN, PITCH_MAX + 1):
             row = PITCH_MAX - pitch

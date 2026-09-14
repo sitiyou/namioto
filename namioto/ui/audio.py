@@ -164,7 +164,9 @@ class MidiSink(NotePlayer):
         if self.is_playing:
             self.play(seconds)
         else:
-            self._start = max(0.0, min(seconds, self.duration))
+            # the end of the current program is not the end of the timeline: a click past it
+            # has to land where it was aimed, and play() clamps when the sound actually starts
+            self._start = max(0.0, seconds)
 
     def stop(self) -> None:
         self._start = 0.0
@@ -242,7 +244,7 @@ class MidiPortOut(NotePlayer):
         if self.is_playing:
             self.play(seconds)
         else:
-            self._start = max(0.0, min(seconds, self.duration))
+            self._start = max(0.0, seconds)  # see MidiSink.seek
 
     def stop(self) -> None:
         self._stopping = True
