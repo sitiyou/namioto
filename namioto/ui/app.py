@@ -27,9 +27,8 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from namioto import midi, project
+from namioto import bpm, midi, project
 from namioto import settings as store
-from namioto.beats import estimate
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
 from namioto.channels import set_field as channel_set_field
@@ -50,7 +49,6 @@ from namioto.ui.transcription_dialog import TranscriptionDialog
 
 POSITION_INTERVAL_MS = 40
 SPEED_SETTLE_MS = 100
-BEAT_SOURCE = "Beat tracking and least-squares fit"
 PROJECT_FILTER = f"Namioto project (*{project.SUFFIX})"
 MIDI_FILTER = f"MIDI file ({' '.join(f'*{suffix}' for suffix in midi.SUFFIXES)})"
 
@@ -74,25 +72,28 @@ class _Binding:
 
 
 class TempoLoader(LoadingThread):
-    """Estimates the tempo of a file off the GUI thread, from the beats of its onsets."""
+    """Estimates the tempo of a file off the GUI thread, with the chosen algorithm."""
 
     loaded = pyqtSignal(object)
 
     def __init__(
         self,
         path: str | Path,
+        algorithm: str = bpm.DEFAULT,
         window_seconds: float = 12.0,
         window_hop_seconds: float = 6.0,
         parent=None,
     ):
         super().__init__(path, parent)
+        self.algorithm = algorithm
         self.window_seconds = window_seconds
         self.window_hop_seconds = window_hop_seconds
 
     def load(self) -> None:
         self.loaded.emit(
-            estimate(
+            bpm.estimate(
                 self.path,
+                self.algorithm,
                 window_seconds=self.window_seconds,
                 window_hop_seconds=self.window_hop_seconds,
             )
@@ -128,6 +129,7 @@ class MainWindow(QMainWindow):
         self.audio_path: str | None = None
         self.loader: SpectrumLoader | None = None
         self.tempo_loader: TempoLoader | None = None
+        self._tempo_manual = False
         self.song_loader: SongLoader | None = None
 
         editor = self.settings.editor
@@ -204,7 +206,7 @@ class MainWindow(QMainWindow):
         for binding in self._bindings:
             binding.signal.connect(partial(self._binding_changed, binding))
         self.edit.interaction_changed.connect(self.view.apply_interaction)
-        self.transport.detect.clicked.connect(self._start_tempo)
+        self.transport.detect.clicked.connect(lambda: self._start_tempo(manual=True))
         self.transport.suggestion.applied.connect(self._apply_tempo)
         self.transport.suggestion.dismissed.connect(self.transport.suggestion.hide)
         self.transport.rewind_requested.connect(lambda: self._seek(0.0))
@@ -894,15 +896,21 @@ class MainWindow(QMainWindow):
         channel = next(channel for channel in self.view.channels if channel.channel == number)
         self.statusBar().showMessage(f"Drawing into {channel.label}", 2000)
 
-    def _start_tempo(self) -> None:
-        """Estimate the tempo of the loaded audio in the background, as a suggestion only."""
+    def _start_tempo(self, manual: bool = False) -> None:
+        """Estimate the tempo of the loaded audio in the background, as a suggestion only.
+
+        A run the user asked for offers its result whatever the BPM field holds; one that follows an
+        audio load stays quiet over a tempo of the user's own.
+        """
         if self.audio_path is None:
             return
+        self._tempo_manual = manual
         self.transport.suggestion.hide()
         self.transport.detect.setEnabled(False)
         tempo = self.settings.tempo
         self.tempo_loader = TempoLoader(
             self.audio_path,
+            algorithm=tempo.estimator,
             window_seconds=tempo.window_seconds,
             window_hop_seconds=tempo.window_hop_seconds,
             parent=self,
@@ -912,17 +920,16 @@ class MainWindow(QMainWindow):
         self.tempo_loader.start()
 
     def _on_tempo_loaded(self, result) -> None:
-        """Offer what was estimated as a candidate, unless the field already holds a tempo of its own."""
+        """Offer what was estimated as a candidate, unless the field already holds that tempo."""
         self.transport.detect.setEnabled(True)
-        if not result.local:
+        manual, self._tempo_manual = self._tempo_manual, False
+        if not result.bpm:
             return
-        if self.transport.bpm.value() != store.FIELD_SPECS[("tempo", "bpm")].default:
+        if not manual and self.transport.bpm.value() != store.FIELD_SPECS[("tempo", "bpm")].default:
             return  # a tempo the user set, or took from an estimate, is not one to suggest over
         if round(result.bpm) == round(self.transport.bpm.value()):
             return  # the balloon would read what the field already says
-        self.transport.suggestion.estimate(
-            result.bpm, result.agreement, len(result.local), BEAT_SOURCE, result.residual
-        )
+        self.transport.suggestion.estimate(result.bpm, result.agreement, result.windows, result.source, result.residual)
         self.transport.suggestion.show_under(self.transport.bpm)
 
     def _on_tempo_failed(self, message: str) -> None:

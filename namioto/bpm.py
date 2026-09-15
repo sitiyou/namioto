@@ -1,0 +1,72 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+"""The tempo algorithms behind one switch: WaveTone's volume-envelope DFT (the default), the librosa
+beat tracker and the TempoCNN model.
+
+Each returns the same `BpmEstimate`, so the editor offers the number and where it came from without
+knowing which algorithm ran. TempoCNN brings ONNX and its model with it, so it is imported only when
+it is the chosen one.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from namioto import beats, wavetone
+from namioto.beats import WINDOW_HOP_SECONDS, WINDOW_SECONDS
+
+ALGORITHMS = ("wavetone", "librosa", "tempocnn")
+SOURCES = {
+    "wavetone": "WaveTone volume-envelope DFT",
+    "librosa": "Librosa beat tracking and least-squares fit",
+    "tempocnn": "TempoCNN model",
+}
+DEFAULT = ALGORITHMS[0]
+
+
+@dataclass(frozen=True)
+class BpmEstimate:
+    """A tempo and what is known about it: the windows it was fitted over, how many agree, the fit
+    residual, and the algorithm it came from."""
+
+    bpm: float
+    algorithm: str
+    windows: int = 0
+    agreement: float = 0.0
+    residual: float | None = None
+
+    @property
+    def source(self) -> str:
+        return SOURCES[self.algorithm]
+
+
+def estimate(
+    path: str | Path,
+    algorithm: str = DEFAULT,
+    *,
+    window_seconds: float = WINDOW_SECONDS,
+    window_hop_seconds: float = WINDOW_HOP_SECONDS,
+) -> BpmEstimate:
+    if algorithm == "wavetone":
+        return BpmEstimate(wavetone.estimate(path), algorithm)
+    if algorithm == "librosa":
+        result = beats.estimate(path, window_seconds=window_seconds, window_hop_seconds=window_hop_seconds)
+        return BpmEstimate(
+            result.bpm,
+            algorithm,
+            windows=len(result.local),
+            agreement=result.agreement,
+            residual=result.residual,
+        )
+    if algorithm == "tempocnn":
+        from namioto import tempo
+
+        result = tempo.estimate(path)
+        agree = sum(1 for local in result.local if local.bpm == round(result.bpm))
+        return BpmEstimate(
+            result.bpm,
+            algorithm,
+            windows=len(result.local),
+            agreement=agree / len(result.local) if result.local else 0.0,
+        )
+    raise ValueError(f"Unknown tempo algorithm {algorithm!r}, expected one of {ALGORITHMS}")

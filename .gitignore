@@ -9,6 +9,7 @@ build/
 *.egg-info/
 *.pyc
 AGENTS.md
+DEV_NOTES.md
 .firecrawl/
 *_PLAN.md
 .envrc

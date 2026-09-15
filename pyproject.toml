@@ -21,6 +21,7 @@ dependencies = [
 [project.scripts]
 namioto = "namioto.ui.app:main"
 namioto-tempo = "namioto.beats:main"
+namioto-wavetone = "namioto.wavetone:main"
 namioto-spectrum = "namioto.spectrum:main"
 namioto-tempocnn = "namioto.tempo:main"
 namioto-game = "namioto.game:main"

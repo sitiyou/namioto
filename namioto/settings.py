@@ -19,6 +19,7 @@ from typing import Any
 
 import platformdirs
 
+from namioto.bpm import ALGORITHMS
 from namioto.spectrum import CHANNEL_MODES
 
 VERSION = 2
@@ -414,6 +415,14 @@ SECTIONS: tuple[Section, ...] = (
                 high=300,
                 step=0.1,
                 decimals=1,
+            ),
+            Field(
+                "estimator",
+                "choice",
+                ALGORITHMS[0],
+                "Algorithm",
+                "Which algorithm estimates the tempo from the audio",
+                choices=ALGORITHMS,
             ),
             Field(
                 "window_seconds",

@@ -276,10 +276,12 @@ class TempoSuggestion(QWidget):
         source: str,
         residual: float | None = None,
     ) -> None:
-        """Offer `bpm`, and say how many of the analysed windows agree on it."""
+        """Offer `bpm`, and say how the algorithm that measured it saw the result."""
         self._bpm = bpm
         self.label.setText(f"≈{bpm:.0f} BPM")
-        detail = f"{source}, over {windows} windows: {agreement:.0%} of them agree."
+        detail = source
+        if windows:
+            detail += f", over {windows} windows: {agreement:.0%} of them agree."
         if residual is not None:
             detail += f"\nBeat fit residual {1000 * residual:.0f} ms."
         self.setToolTip(f"{detail}\nNothing changes until you click the tick.")

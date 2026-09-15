@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
 
 from namioto import midi, project, transcription
 from namioto import settings as store
-from namioto.beats import BeatTempo, LocalWindow
+from namioto.bpm import BpmEstimate
 from namioto.channels import Channel
 from namioto.interaction import Interaction, Tool
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
@@ -508,9 +508,14 @@ def test_the_tempo_can_be_doubled_and_halved(window) -> None:
     assert box.value() == 120.0
 
 
-def fake_estimate(bpm: float = 96.0, windows: int = 10, agree: int = 6) -> BeatTempo:
-    local = tuple(LocalWindow(i * 6.0, i * 6.0 + 12.0, bpm if i < agree else bpm * 1.2) for i in range(windows))
-    return BeatTempo(bpm=bpm, beats=(0.0, 60.0 / bpm), local=local, residual=0.02)
+def fake_estimate(bpm: float = 96.0, windows: int = 10, agree: int = 6) -> BpmEstimate:
+    return BpmEstimate(
+        bpm=bpm,
+        algorithm="librosa",
+        windows=windows,
+        agreement=agree / windows if windows else 0.0,
+        residual=0.02,
+    )
 
 
 def test_tempo_estimate_is_only_a_suggestion(window) -> None:
@@ -537,6 +542,20 @@ def test_a_tempo_of_its_own_keeps_the_suggestion_away(window) -> None:
     window._on_tempo_loaded(fake_estimate(bpm=140.0))
     assert not window.transport.suggestion.isVisible()
     assert window.transport.bpm.value() == 96.0
+    window.transport.bpm.setValue(120.0)
+
+
+def test_a_manual_detect_offers_its_tempo_over_a_tempo_of_its_own(window, monkeypatch) -> None:
+    window.transport.bpm.setValue(96.0)
+    window.audio_path = "song.wav"
+    window.transport.detect.setEnabled(True)
+    monkeypatch.setattr(TempoLoader, "start", lambda self: None)
+
+    window.transport.detect.click()
+    assert window._tempo_manual
+    window._on_tempo_loaded(fake_estimate(bpm=140.0))
+    assert window.transport.suggestion.isVisible()
+    assert window.transport.bpm.value() == 96.0  # still a suggestion
     window.transport.bpm.setValue(120.0)
 
 
@@ -2291,17 +2310,19 @@ def test_loading_a_file_hands_the_settings_to_the_analysers(own_window, monkeypa
 
     analysis, _song, tempo = captured
     assert analysis == {"channels": "left", "t_num": 40.0, "fft_points": 4096, "a4": 441.0}
-    assert tempo == {"window_seconds": 8.0, "window_hop_seconds": 6.0}
+    assert tempo == {"algorithm": "wavetone", "window_seconds": 8.0, "window_hop_seconds": 6.0}
     assert store.get_value(own_window.settings, "paths", "last_audio_dir") == "/tmp"
     assert own_window.transport.transcribe.isEnabled()
 
 
 def test_the_tempo_loader_follows_the_settings(own_window, monkeypatch) -> None:
     own_window.audio_path = "song.wav"
+    store.set_value(own_window.settings, "tempo", "estimator", "librosa")
     store.set_value(own_window.settings, "tempo", "window_seconds", 8.0)
     store.set_value(own_window.settings, "tempo", "window_hop_seconds", 3.0)
     monkeypatch.setattr(TempoLoader, "start", lambda self: None)
     own_window._start_tempo()
+    assert own_window.tempo_loader.algorithm == "librosa"
     assert own_window.tempo_loader.window_seconds == 8.0
     assert own_window.tempo_loader.window_hop_seconds == 3.0
 
