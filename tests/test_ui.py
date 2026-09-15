@@ -18,6 +18,7 @@ from namioto import project
 from namioto import settings as store
 from namioto.beats import BeatTempo, LocalWindow
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
+from namioto.tracks import Track
 from namioto.ui import theme
 from namioto.ui.app import MainWindow, TempoLoader
 from namioto.ui.audio import MidiPortOut, MidiSink, find_port, find_synth_port
@@ -30,9 +31,6 @@ from namioto.ui.roll import (
     HOVER_KEY,
     LENGTH_BEATS,
     MIN_DURATION,
-    NOTE_EDGE_DARK,
-    NOTE_EDGE_LIGHT,
-    NOTE_FILL,
     NOTE_INSET,
     NOTE_SELECTED,
     NOTE_SELECTED_EDGE,
@@ -86,15 +84,17 @@ def window(qt_app):
     window.close()
 
 
-def roll_mouse(window, kind, scene_pos: QPointF, modifiers=Qt.KeyboardModifier.NoModifier) -> None:
+def roll_mouse(
+    window, kind, scene_pos: QPointF, modifiers=Qt.KeyboardModifier.NoModifier, button=Qt.MouseButton.LeftButton
+) -> None:
     """Send a mouse event to the roll at a scene position, as a real click would arrive."""
     position = window.view.mapFromScene(scene_pos)
     event = QMouseEvent(
         kind,
         QPointF(position),
         window.view.viewport().mapToGlobal(QPointF(position)),
-        Qt.MouseButton.LeftButton,
-        Qt.MouseButton.LeftButton,
+        button,
+        button,
         modifiers,
     )
     if kind == QEvent.Type.MouseButtonPress:
@@ -287,8 +287,7 @@ def test_mode_buttons_are_icons_not_text(window) -> None:
         window.edit.mode,
         window.edit.pen,
         window.edit.select,
-        window.edit.division_beats,
-        window.edit.division_seconds,
+        window.edit.division,
         window.transport.play_pause,
     )
     for button in buttons:
@@ -333,13 +332,14 @@ def test_keyboard_rows_line_up_with_the_roll(window) -> None:
     assert [y + offset for y in white_keys] == white_rows
 
 
-def test_division_buttons_are_exclusive(window) -> None:
-    window.edit.division_seconds.click()
-    assert window.edit.division_seconds.isChecked()
-    assert not window.edit.division_beats.isChecked()
-    window.edit.division_beats.click()
-    assert window.edit.division_beats.isChecked()
-    assert not window.edit.division_seconds.isChecked()
+def test_the_division_button_flips_between_beats_and_seconds(window) -> None:
+    assert window.edit.division.isChecked()  # beats by default
+    window.edit.division.click()
+    assert not window.edit.division.isChecked()
+    assert window.view.division == "seconds"
+    window.edit.division.click()
+    assert window.edit.division.isChecked()
+    assert window.view.division == "beats"
 
 
 def text_columns(image: QImage, top: int, bottom: int) -> set[int]:
@@ -394,7 +394,7 @@ def test_defaults_of_the_control_bars(window) -> None:
     assert window.mix.contrast.value() == 1.0
     assert window.mix.audio_volume.value() == 80.0
     assert window.edit.snap.currentData() == 0.5 and window.view.snap == 0.5  # 1/8 by default
-    assert window.edit.division_beats.isChecked()
+    assert window.edit.division.isChecked()
 
 
 def test_transport_position_is_a_clock(window) -> None:
@@ -593,9 +593,9 @@ class FakeOutput:
         self.programs: list[tuple] = []
         self.previews: list[int] = []
 
-    def set_program(self, notes, speed) -> None:
+    def set_program(self, notes, speed, channels=()) -> None:
         self.programs.append((tuple(notes), speed))
-        self.duration = max((start + duration for _pitch, start, duration in notes), default=0.0) + 0.5
+        self.duration = max((start + duration for _pitch, start, duration, *_rest in notes), default=0.0) + 0.5
         self.calls.append("set_program")
 
     def preview(self, pitch: int, seconds: float = 0.6) -> None:
@@ -731,7 +731,7 @@ def test_transport_buttons_drive_the_player(window, monkeypatch) -> None:
 
     window.transport.play_pause.click()
     assert fake.calls == ["set_program", "play"] and fake.is_playing
-    assert fake.programs == [(((69, 0.0, 0.5),), 1.0)]  # one beat at 120 BPM, handed over in seconds
+    assert fake.programs == [(((69, 0.0, 0.5, 0),), 1.0)]  # one beat at 120 BPM, handed over in seconds
     assert window.view.playhead is not None
 
     window.transport.play_pause.click()  # the same button pauses
@@ -1542,7 +1542,7 @@ def test_notes_are_drawn_over_the_spectrum(window) -> None:
     middle = (note.start + note.duration / 2, PITCH_MAX - note.pitch + 0.5)
     window.view.centerOn(QPointF(*middle))
     image = window.view.grab().toImage()
-    assert pixel_at(window.view, image, *middle) == NOTE_FILL
+    assert pixel_at(window.view, image, *middle) == note.fill
     assert pixel_at(window.view, image, note.start - 0.5, middle[1]) == QColor(255, 0, 0)  # the spectrum beside it
     window.view.clear_notes()
     window.view.set_spectrum(None)
@@ -1561,14 +1561,14 @@ def test_notes_are_flat_red_with_a_bevel(window) -> None:
 
     mid_x = (top_left.x() + bottom_right.x()) // 2
     column = [image.pixelColor(mid_x, y) for y in range(top_left.y(), bottom_right.y())]
-    assert NOTE_EDGE_LIGHT in column[:2]  # the light bevel is on top
-    assert NOTE_EDGE_DARK in column[-2:]  # the dark one below
-    assert {colour.name() for colour in column[2:-2]} == {NOTE_FILL.name()}
+    assert note.edge_light in column[:2]  # the light bevel is on top
+    assert note.edge_dark in column[-2:]  # the dark one below
+    assert {colour.name() for colour in column[2:-2]} == {note.fill.name()}
 
     row = [image.pixelColor(x, (top_left.y() + bottom_right.y()) // 2) for x in range(top_left.x(), bottom_right.x())]
-    assert NOTE_EDGE_LIGHT in row[:2]  # and light on the left, dark on the right
-    assert NOTE_EDGE_DARK in row[-2:]
-    assert {colour.name() for colour in row[2:-2]} == {NOTE_FILL.name()}
+    assert note.edge_light in row[:2]  # and light on the left, dark on the right
+    assert note.edge_dark in row[-2:]
+    assert {colour.name() for colour in row[2:-2]} == {note.fill.name()}
 
 
 def test_selected_notes_use_the_wavetone_highlight(window) -> None:
@@ -1649,7 +1649,7 @@ def test_applying_the_settings_window_reaches_the_window_and_the_file(own_window
     assert own_window.mix.midi_volume.value() == 40
     assert own_window.view.zoom[0] == 120.0
     assert own_window.view.division == "seconds"
-    assert own_window.edit.division_seconds.isChecked()
+    assert own_window.edit.division.isChecked() is False
     assert own_window.view.overtone_highlight is False
     saved = json.loads(store.default_path().read_text())
     assert saved["spectrum"]["gain"] == 300.0
@@ -2019,3 +2019,83 @@ def test_a_project_is_picked_up_from_the_command_line(qt_app, tmp_path) -> None:
     finally:
         window.project_dirty = False
         window.close()
+
+
+def reset_tracks(window) -> None:
+    window.view.set_tracks((Track(name="Track 1"),))
+    window.view.clear_notes()
+
+
+def test_notes_land_on_the_active_track_and_wear_its_colour(window) -> None:
+    window.edit.pen.click()
+    window.view.clear_notes()
+    window.view.add_track(program=4)
+    window.view.set_active_track(1)
+    draw_note(window, QPointF(2.0, 40.0), QPointF(3.0, 40.0))
+    drawn = window.view.notes()[0]
+    assert drawn.track == 1
+    on_first = window.view.add_note(60, 0.0, 1.0, 0)
+    assert on_first.fill != drawn.fill  # each track paints its own colour
+    reset_tracks(window)
+
+
+def test_a_locked_track_cannot_be_edited(window) -> None:
+    window.edit.pen.click()
+    window.view.clear_notes()
+    note = window.view.add_note(60, 2.0, 2.0)
+    scene_pos = QPointF(3.0, PITCH_MAX - 60 + 0.5)
+    window.view.set_track_field(0, lock=True)
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, scene_pos, button=Qt.MouseButton.RightButton)
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, scene_pos, button=Qt.MouseButton.RightButton)
+    assert window.view.notes() == [note]  # a right click does not delete on a locked track
+
+    draw_note(window, QPointF(6.0, 30.0))  # and the pen stays silent on it too
+    assert window.view.notes() == [note]
+    window.view.set_track_field(0, lock=False)
+    window.view.clear_notes()
+
+
+def test_an_invisible_track_hides_its_notes(window) -> None:
+    window.view.clear_notes()
+    note = window.view.add_note(60, 2.0, 2.0)
+    assert note.isVisible()
+    window.view.set_track_field(0, visible=False, lock=True)  # hiding also locks, noteDigger style
+    assert not note.isVisible()
+    window.view.set_track_field(0, visible=True, lock=False)
+    assert note.isVisible()
+    window.view.clear_notes()
+
+
+def test_removing_a_track_takes_its_notes_and_renumbers_the_rest(window) -> None:
+    window.view.clear_notes()
+    window.view.add_track()
+    window.view.add_note(60, 0.0, 1.0, 0)
+    survivor = window.view.add_note(64, 1.0, 1.0, 1)
+    assert window.view.remove_track(0)
+    assert [note.pitch for note in window.view.notes()] == [64]
+    assert survivor.track == 0
+    reset_tracks(window)
+
+
+def test_a_muted_track_is_left_out_of_the_program(window) -> None:
+    window.view.clear_notes()
+    window.view.add_track(program=4)
+    window.view.add_note(60, 0.0, 1.0, 0)
+    window.view.add_note(64, 0.0, 1.0, 1)
+    notes, channels = window._program()
+    assert len(notes) == 2 and len(channels) == 2
+
+    window.view.set_track_field(1, mute=True)
+    notes, channels = window._program()
+    assert [note[0] for note in notes] == [60]
+    assert [channel[0] for channel in channels] == [0]
+    reset_tracks(window)
+
+
+def test_the_tracks_button_toggles_the_sidebar(window) -> None:
+    window.track_panel.setVisible(False)
+    window.edit.tracks.click()
+    assert window.track_panel.isVisible()
+    window.edit.tracks.click()
+    assert not window.track_panel.isVisible()

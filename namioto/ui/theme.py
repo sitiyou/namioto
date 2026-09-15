@@ -15,6 +15,26 @@ from PyQt6.QtWidgets import QApplication
 
 ACCENT = "#3b9dff"
 
+# One body colour per track; the first equals the single note colour the editor had before tracks.
+NOTE_PALETTE = (
+    "#ff2f2f",
+    "#ff9d2f",
+    "#ffd52f",
+    "#b8e22f",
+    "#4fe06a",
+    "#2fe0c8",
+    "#38b6ff",
+    "#4d6bff",
+    "#8a5cff",
+    "#c25cff",
+    "#ff5cd0",
+    "#ff5c8a",
+    "#ff7a5c",
+    "#8fa3bf",
+    "#d4a24f",
+    "#7fe0a8",
+)
+
 TOKENS: dict[str, dict[str, str]] = {
     "dark": {
         "BG": "#191c23",
@@ -58,9 +78,7 @@ class Canvas:
     grid_line: QColor
     grid_beat: QColor
     grid_bar: QColor
-    note_fill: QColor
-    note_edge_light: QColor
-    note_edge_dark: QColor
+    note_colors: tuple[QColor, ...]
     note_selected: QColor
     note_selected_edge: QColor
     text: QColor
@@ -87,9 +105,7 @@ CANVASES: dict[str, Canvas] = {
         grid_line=QColor("#2f3541"),
         grid_beat=QColor("#434c5c"),
         grid_bar=QColor("#6d7a92"),
-        note_fill=QColor("#ff2f2f"),
-        note_edge_light=QColor("#ffb9b9"),
-        note_edge_dark=QColor("#550f0f"),
+        note_colors=tuple(QColor(hex) for hex in NOTE_PALETTE),
         note_selected=QColor("#fecfcf"),
         note_selected_edge=QColor("#fe7474"),
         text=QColor("#b6c0ce"),
@@ -123,6 +139,9 @@ QWidget#suggestion {
     border: 1px solid %CARD_BORDER%;
     border-radius: 6px;
 }
+QWidget#trackPanel { background: %PANEL%; border-right: 1px solid %CARD_BORDER%; }
+QWidget#trackCard { background: %CARD%; border: 1px solid %CARD_BORDER%; border-radius: 6px; }
+QWidget#trackCard[active="true"] { background: %ACCENT_SOFT%; border-color: %ACCENT%; }
 QWidget#corner { background: %PANEL%; }
 QLabel { color: %TEXT_DIM%; background: transparent; }
 QLabel#sliderValue, QLabel#cursorNote { color: %TEXT%; }
@@ -226,6 +245,23 @@ def palette(theme: str = "dark", accent: str = ACCENT) -> QPalette:
     ):
         result.setColor(role, QColor(colour))
     return result
+
+
+def note_shades(body: QColor) -> tuple[QColor, QColor, QColor]:
+    """A note body and the light and dark bevel edges painted around it.
+
+    Two thirds of the way to white and to black keeps the first palette entry at the very shades
+    the single-colour roll used to draw. Integer arithmetic, so the match is exact.
+    """
+
+    def shade(target: QColor) -> QColor:
+        return QColor(
+            body.red() + (target.red() - body.red()) * 2 // 3,
+            body.green() + (target.green() - body.green()) * 2 // 3,
+            body.blue() + (target.blue() - body.blue()) * 2 // 3,
+        )
+
+    return body, shade(QColor("#ffffff")), shade(QColor("#000000"))
 
 
 def canvas(theme: str = "dark") -> Canvas:

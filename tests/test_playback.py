@@ -67,3 +67,26 @@ def test_speed_scales_the_timeline_without_moving_the_pitch():
     fast = render_notes([(69, 0.0, 0.4)], speed=2.0)
     assert len(slow) == pytest.approx(4 * len(fast), rel=0.01)
     assert dominant_frequency(slow) == pytest.approx(dominant_frequency(fast), rel=0.01)
+
+
+def test_a_channel_gains_its_track_volume():
+    # both renders stay under the clipping peak, so the mix is not normalised and the ratio is exact
+    quiet = render_notes([(69, 0.0, 0.4, 0)], channels=((0, 0, 10),))
+    loud = render_notes([(69, 0.0, 0.4, 0)], channels=((0, 0, 20),))
+    assert rms(quiet) == pytest.approx(rms(loud) * 0.5, rel=0.01)
+
+
+def test_a_channel_picks_the_voice_of_its_program():
+    piano = render_notes([(69, 0.0, 1.0, 0)], channels=((0, 0, 100),))
+    organ = render_notes([(69, 0.0, 1.0, 0)], channels=((0, 16, 100),))
+    head = slice(0, int(0.1 * SAMPLE_RATE))
+    tail = slice(int(0.8 * SAMPLE_RATE), int(0.9 * SAMPLE_RATE))
+    # the piano has decayed away by the tail, the organ is sustained and keeps sounding
+    assert rms(piano[tail]) < 0.3 * rms(piano[head])
+    assert rms(organ[tail]) > 0.8 * rms(organ[head])
+
+
+def test_a_note_without_a_channel_plays_on_the_default_one():
+    plain = render_notes([(69, 0.0, 0.4)])
+    channelled = render_notes([(69, 0.0, 0.4, 0)], channels=((0, 0, 100),))
+    assert np.array_equal(plain, channelled)

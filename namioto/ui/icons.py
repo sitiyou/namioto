@@ -19,7 +19,6 @@ GLYPHS = {
     "select": "mdi.cursor-default",
     "edit": "mdi.pencil-ruler",
     "beat": "mdi.metronome",
-    "seconds": "mdi.timer-outline",
     "snap": "mdi.music-note-eighth",
     "check": "mdi.check",
     "cross": "mdi.close",
@@ -27,6 +26,13 @@ GLYPHS = {
     "refresh": "mdi.refresh",
     "open": "mdi.folder-open",
     "save": "mdi.content-save",
+    "tracks": "mdi.layers",
+    "lock": "mdi.lock",
+    "unlock": "mdi.lock-open-variant",
+    "eye": "mdi.eye",
+    "eyeoff": "mdi.eye-off",
+    "mute": "mdi.volume-off",
+    "sound": "mdi.volume-high",
 }
 
 SECTION_GLYPHS = {

@@ -503,6 +503,7 @@ class EditBar(_Group):
             checkable=True,
         )
         self.mode.clicked.connect(self._mode_clicked)
+        self.tracks = icon_button("tracks", "Tracks: colours, mute and instruments, one card per track", checkable=True)
         self.pen = icon_button("pen", "Pen: click or drag an empty row to draw a note", checkable=True)
         self.select = icon_button(
             "select", "Select: drag a box, ctrl-click a note to add, drag a note to move", checkable=True
@@ -530,18 +531,18 @@ class EditBar(_Group):
         tools.add(icon_label("snap", "Snap grid for the pen tool: the note the grid is divided by"))
         tools.add(self.snap)
 
-        self.division_beats = icon_button("beat", "Divide the time axis by beats of the tempo map", checkable=True)
-        self.division_seconds = icon_button("seconds", "Divide the time axis by seconds", checkable=True)
-        self.division_beats.setChecked(True)
-        self.division = QButtonGroup(self)
-        self.division.setExclusive(True)
-        self.division.addButton(self.division_beats)
-        self.division.addButton(self.division_seconds)
-        self.division_beats.clicked.connect(lambda: self.division_changed.emit("beats"))
-        self.division_seconds.clicked.connect(lambda: self.division_changed.emit("seconds"))
+        self.division = icon_button(
+            "beat",
+            "Time division: checked follows the beats of the tempo map, unchecked follows seconds",
+            checkable=True,
+        )
+        self.division.setChecked(True)  # beats by default; a click flips it to seconds
+        self.division.clicked.connect(lambda checked: self.division_changed.emit("beats" if checked else "seconds"))
+
+        # the editing tools stay one group; the track sidebar and the time division sit beside them
         tools.add(separator())
-        tools.add(self.division_beats)
-        tools.add(self.division_seconds)
+        tools.add(self.tracks)
+        tools.add(self.division)
 
         self.place(tools, 1, 0, 2)
 

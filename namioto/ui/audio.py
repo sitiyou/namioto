@@ -17,9 +17,10 @@ BUFFER_MS = 80
 INT16_PEAK = 32767.0
 PREVIEW_SECONDS = 0.6
 NOTE_ON, NOTE_OFF, VELOCITY = 0x90, 0x80, 100
-PROGRAM_CHANGE = 0xC0  # program change on channel 0: which instrument the synth should use
+PROGRAM_CHANGE = 0xC0  # program change per channel: which instrument the synth should use
 DEFAULT_PROGRAM = 0  # a grand piano
-CHANNEL_VOLUME = (0xB0, 0x07)  # control change 7: the volume of channel 0, 0 to 127
+CHANNEL_VOLUME = (0xB0, 0x07)  # control change 7: the volume of a channel, 0 to 127
+DEFAULT_CHANNEL = (0, DEFAULT_PROGRAM, 100)  # what a program without tracks still plays on
 SYNTH_NAMES = ("timidity", "fluidsynth", "qsynth", "wavetable")
 
 
@@ -140,15 +141,16 @@ class MidiSink(NotePlayer):
         self._format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
         self._buffer_bytes = int(sample_rate * 2 * buffer_ms / 1000)
 
-    def set_program(self, notes, speed) -> None:
+    def set_program(self, notes, speed, channels=()) -> None:
         """Render the notes into a buffer, but only when they or the speed changed."""
         notes = tuple(notes)
-        key = (notes, round(speed, 6))
+        channels = tuple(channels) or (DEFAULT_CHANNEL,)
+        key = (notes, round(speed, 6), channels)
         if key == self._key:
             return
         self.stop()
         self._speed = speed
-        self.mix = render_notes(notes, speed=speed, a4=self.a4)
+        self.mix = render_notes(notes, speed=speed, a4=self.a4, channels=channels)
         self._voices.clear()
         self._key = key
 
@@ -249,10 +251,11 @@ class MidiPortOut(NotePlayer):
 
     def __init__(self, port, parent=None, velocity: int = VELOCITY, program: int = DEFAULT_PROGRAM):
         self.port = port  # before the base class, whose gain setter sends a control change
+        self._programs: dict[int, int] = {0: program}
+        self._volumes: dict[int, int] = {0: 100}
         super().__init__(parent)
         self.velocity = velocity
-        self.program = program
-        self._notes: tuple[tuple[int, float, float], ...] = ()
+        self._notes: tuple[tuple[int, float, float, int], ...] = ()
         self._speed = 1.0
         self._start = 0.0
         self._started: float | None = None
@@ -269,17 +272,31 @@ class MidiPortOut(NotePlayer):
     def gain(self, value: float) -> None:
         """A synth does its own mixing, so its volume is a control change rather than a scale factor."""
         self._gain = max(0.0, min(1.0, value))
-        self.port.send_message([*CHANNEL_VOLUME, round(self._gain * 127)])
+        for channel in self._volumes:
+            self._send_volume(channel)
 
-    def set_program(self, notes, speed) -> None:
+    def _send_volume(self, channel: int) -> None:
+        # the track volume rides on the global one, both on the same control change
+        level = min(1.0, min(1.27, self._volumes.get(channel, 100) / 100) * self._gain)
+        self.port.send_message([CHANNEL_VOLUME[0] | channel, CHANNEL_VOLUME[1], round(level * 127)])
+
+    def set_program(self, notes, speed, channels=()) -> None:
         self.stop()
-        self._notes = tuple(sorted(notes, key=lambda note: note[1]))
+        channels = tuple(channels) or (DEFAULT_CHANNEL,)
+        self._notes = tuple(
+            (note[0], note[1], note[2], note[3] if len(note) > 3 else 0)
+            for note in sorted(notes, key=lambda note: note[1])
+        )
         self._speed = max(0.01, speed)
-        self.port.send_message([PROGRAM_CHANGE, self.program])
+        for channel, program, volume in channels:
+            self._programs[channel] = program
+            self._volumes[channel] = volume
+            self.port.send_message([PROGRAM_CHANGE | channel, program])
+            self._send_volume(channel)
 
     @property
     def duration(self) -> float:
-        return max((start + duration for _pitch, start, duration in self._notes), default=0.0)
+        return max((start + duration for _pitch, start, duration, _ch in self._notes), default=0.0)
 
     @property
     def position(self) -> float:
@@ -320,8 +337,8 @@ class MidiPortOut(NotePlayer):
         for timer in self._previews.values():
             timer.cancel()
         self._previews.clear()
-        for pitch in tuple(self._sounding):  # a synth keeps sounding until it is told to stop
-            self._send(NOTE_OFF, pitch, 0)
+        for channel, pitch in tuple(self._sounding):  # a synth keeps sounding until it is told to stop
+            self._send(NOTE_OFF, pitch, 0, channel)
         self._sounding.clear()
         self._started = None
         self._start = 0.0
@@ -346,17 +363,17 @@ class MidiPortOut(NotePlayer):
 
     def _schedule(self) -> None:
         started = self._started
-        events: list[tuple[float, int, int]] = []
-        for pitch, start, duration in self._notes:
+        events: list[tuple[float, int, int, int]] = []
+        for pitch, start, duration, channel in self._notes:
             if start + duration <= self._start:
                 continue
             begin = max(start, self._start)
-            events.append(((begin - self._start) / self._speed, NOTE_ON, pitch))
-            events.append(((start + duration - self._start) / self._speed, NOTE_OFF, pitch))
-        for offset, kind, pitch in sorted(events, key=lambda event: event[0]):
+            events.append(((begin - self._start) / self._speed, NOTE_ON, pitch, channel))
+            events.append(((start + duration - self._start) / self._speed, NOTE_OFF, pitch, channel))
+        for offset, kind, pitch, channel in sorted(events, key=lambda event: event[0]):
             if not self._wait_until(started + offset):
                 return
-            self._send(kind, pitch, self.velocity if kind == NOTE_ON else 0)
+            self._send(kind, pitch, self.velocity if kind == NOTE_ON else 0, channel)
         if self._wait_until(started + (self.duration - self._start) / self._speed):
             self._started = None
             self._start = self.duration
@@ -370,12 +387,12 @@ class MidiPortOut(NotePlayer):
             time.sleep(min(remaining, 0.005))
         return False
 
-    def _send(self, status: int, pitch: int, velocity: int) -> None:
-        self.port.send_message([status, pitch, velocity])
+    def _send(self, status: int, pitch: int, velocity: int, channel: int = 0) -> None:
+        self.port.send_message([status | channel, pitch, velocity])
         if status == NOTE_ON:
-            self._sounding.add(pitch)
+            self._sounding.add((channel, pitch))
         else:
-            self._sounding.discard(pitch)
+            self._sounding.discard((channel, pitch))
 
 
 def port_names() -> tuple[str, ...]:

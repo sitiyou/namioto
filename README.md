@@ -142,12 +142,20 @@ The window has three control bars, each split into captioned blocks of related c
 | Bar | Blocks |
 | --- | --- |
 | Transport | **Project** (open, save), **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout), **Speed** (0.10x-2.00x in 5% steps with a `1.0` reset, pitch unchanged), **Tempo** (BPM, plus the estimated tempo of the audio), **Latency** (ms) |
-| Edit | **Tools** (edit mode, pen, select, snap grid, clear), **Division** (note icon = the grid follows the beats of the tempo map, clock icon = it follows seconds) |
+| Edit | **Tools** (edit mode, track sidebar, pen, select, snap grid, clear), **Division** (the metronome icon: checked, the grid follows the beats of the tempo map; unchecked, it follows seconds) |
 | Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window |
 
 **Volume** has a slider for each layer: the audio file is streamed at the level of the first one, and
 the second is the note playback - a scale factor for the built-in synth, and control change 7 (channel
 volume) for an external one, which does its own mixing.
+
+**Tracks** are toggled by the layers icon in the tools: a sidebar with one card per track. The notes
+of each track are painted in its colour, and the card holds the name (double-click to rename), the
+GM instrument the track plays, and the lock, show and mute switches. Clicking a card makes it the
+drawing track; the context menu adds a track, sets its volume or deletes it (the last one stays).
+A locked track cannot be edited, a hidden one is not drawn, and a muted one stays silent - the
+built-in synth plays each track with the voice of its instrument family, an external one receives
+the real GM program on the track's own MIDI channel.
 
 | Action | Input |
 | --- | --- |

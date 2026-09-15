@@ -13,6 +13,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QFileDialog,
     QGridLayout,
+    QHBoxLayout,
     QLabel,
     QMainWindow,
     QMessageBox,
@@ -25,6 +26,8 @@ from namioto import settings as store
 from namioto.beats import TOLERANCE, estimate
 from namioto.playback import note_frequency
 from namioto.spectrum import CHANNEL_MODES, NoteSpectrum
+from namioto.tracks import audible as audible_tracks
+from namioto.tracks import channel_of
 from namioto.ui import theme
 from namioto.ui.audio import open_player, port_names
 from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
@@ -32,6 +35,7 @@ from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, Timeline
 from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
 from namioto.ui.song import SongPlayer, load_song
 from namioto.ui.spectrogram import SpectrumLoader
+from namioto.ui.track_panel import TrackPanel
 
 POSITION_INTERVAL_MS = 40
 SPEED_SETTLE_MS = 100
@@ -166,12 +170,18 @@ class MainWindow(QMainWindow):
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(0)
         column.addWidget(self.controls)
-        column.addWidget(panel, 1)
+        self.track_panel = TrackPanel(self.view, default_program=self.settings.playback.program)
+        self.track_panel.setVisible(False)  # one track needs no sidebar; the icon opens it
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(0)
+        row.addWidget(self.track_panel)
+        row.addWidget(panel, 1)
+        column.addLayout(row, 1)
         self.setCentralWidget(central)
 
         self.edit.snap.setCurrentIndex(max(0, self.edit.snap.findData(editor.snap)))
-        self.edit.division_beats.setChecked(editor.division == "beats")
-        self.edit.division_seconds.setChecked(editor.division == "seconds")
+        self.edit.division.setChecked(editor.division == "beats")
         self.view.snap = self.edit.snap.currentData()
         self.view.edit_mode = editor.start_in_edit_mode
         self.edit.set_mode(editor.start_in_edit_mode)
@@ -230,6 +240,9 @@ class MainWindow(QMainWindow):
 
         self.view.notes_changed.connect(self._update_status)
         self.view.notes_changed.connect(self._mark_dirty)
+        self.view.tracks_changed.connect(self._on_tracks_changed)
+        self.view.active_track_changed.connect(self._on_active_track_changed)
+        self.edit.tracks.toggled.connect(self.track_panel.setVisible)
         self.transport.bpm.valueChanged.connect(self._mark_dirty)
         self.play_shortcut = QShortcut(QKeySequence("Space"), self)
         self.play_shortcut.activated.connect(self._toggle_play)
@@ -317,8 +330,7 @@ class MainWindow(QMainWindow):
             self.view.set_zoom(settings.editor.zoom_x, settings.editor.zoom_y)
             self.edit.snap.setCurrentIndex(max(0, self.edit.snap.findData(settings.editor.snap)))
             self.view.snap = self.edit.snap.currentData()
-            self.edit.division_beats.setChecked(settings.editor.division == "beats")
-            self.edit.division_seconds.setChecked(settings.editor.division == "seconds")
+            self.edit.division.setChecked(settings.editor.division == "beats")
             self.view.division = settings.editor.division
             self.view.refresh()
             self.mix.gain.set_value(settings.spectrum.gain)
@@ -345,11 +357,30 @@ class MainWindow(QMainWindow):
         self.player.gain = self.mix.midi_volume.value() / 100.0
         self.player.finished.connect(self._on_playback_finished)
         self.mix.midi_volume.slider.setToolTip(f"Volume of the note playback through {self.player_name}")
-        beats = self.view.seconds_per_beat
-        notes = tuple((note.pitch, note.start * beats, note.duration * beats) for note in self.view.notes())
-        self.player.set_program(notes, self.transport.speed.value())
+        self._send_program()
         if playing:
             self.player.play(position)
+
+    def _program(self) -> tuple[tuple, tuple]:
+        """The notes of every track that sounds, and each sounding track's channel, instrument, volume."""
+        beats = self.view.seconds_per_beat
+        audible = set(audible_tracks(self.view.tracks))
+        notes = tuple(
+            (note.pitch, note.start * beats, note.duration * beats, note.track)
+            for note in self.view.notes()
+            if note.track in audible
+        )
+        channels = tuple(
+            (channel_of(index), track.program, track.volume)
+            for index, track in enumerate(self.view.tracks)
+            if index in audible
+        )
+        return notes, channels
+
+    def _send_program(self) -> None:
+        """Hand the current notes and their tracks to the player, as playback speed leaves them."""
+        notes, channels = self._program()
+        self.player.set_program(notes, self.transport.speed.value(), channels)
 
     def _remember_configuration(self) -> None:
         """The bar values are the settings, so what is on screen is what comes back next time."""
@@ -478,7 +509,10 @@ class MainWindow(QMainWindow):
             self.project_dirty = False
             missing = self._open_audio(project.resolve_audio(self.project_path, opened.audio))
             per_beat = self.view.seconds_per_beat  # scene units are beats, the file keeps seconds
-            self.view.set_notes((note.pitch, note.start / per_beat, note.duration / per_beat) for note in opened.notes)
+            self.view.set_tracks(opened.tracks)
+            self.view.set_notes(
+                (note.pitch, note.start / per_beat, note.duration / per_beat, note.track) for note in opened.notes
+            )
             self.view.center_on(self.settings.session.center_x, self.settings.session.center_y)
         finally:
             self._loading = False
@@ -494,11 +528,15 @@ class MainWindow(QMainWindow):
         beats = self.view.seconds_per_beat
         # scene order is not a file's order: sorted notes keep a saved project stable to diff
         notes = tuple(
-            sorted(project.Note(note.start * beats, note.duration * beats, note.pitch) for note in self.view.notes())
+            sorted(
+                project.Note(note.start * beats, note.duration * beats, note.pitch, note.track)
+                for note in self.view.notes()
+            )
         )
         payload = project.Project(
             values=store.project_values(self.settings),
             audio=project.store_audio(target, self.audio_path),
+            tracks=tuple(self.view.tracks),
             notes=notes,
         )
         try:
@@ -585,19 +623,26 @@ class MainWindow(QMainWindow):
 
     def _apply_speed(self) -> None:
         """Take the settled speed for the note layer; the song already follows the slider."""
-        self._set_note_speed(self.transport.speed.value())
+        self._set_note_speed()
 
-    def _set_note_speed(self, speed: float) -> None:
-        """Hand the notes over at `speed`, carrying on from where they are playing."""
-        beats = self.view.seconds_per_beat  # scene units are beats, the players work in seconds
-        notes = tuple((note.pitch, note.start * beats, note.duration * beats) for note in self.view.notes())
-        if not notes:
+    def _set_note_speed(self) -> None:
+        """Hand the notes over at the settled speed, carrying on from where they are playing."""
+        if not self.view.notes():
             return
         playing = self.player.is_playing
         position = self._position()
-        self.player.set_program(notes, speed)
+        self._send_program()
         if playing:
             self.player.play(position)
+
+    def _on_tracks_changed(self, *_args) -> None:
+        """A track edit is a document change, and a mute or instrument lands in the running sound."""
+        self._mark_dirty()
+        if self._is_playing():
+            self._set_note_speed()
+
+    def _on_active_track_changed(self, index: int) -> None:
+        self.statusBar().showMessage(f"Drawing into {self.view.tracks[index].label}", 2000)
 
     def _start_tempo(self) -> None:
         """Estimate the tempo of the loaded audio in the background, as a suggestion only."""
@@ -645,8 +690,7 @@ class MainWindow(QMainWindow):
 
     def _play(self) -> None:
         """Send the notes to the synth and start the audio file, both from where the cursor sits."""
-        beats = self.view.seconds_per_beat  # scene units are beats, the players work in seconds
-        notes = tuple((note.pitch, note.start * beats, note.duration * beats) for note in self.view.notes())
+        notes, _channels = self._program()
         if not notes and not self.song.is_loaded:
             self.statusBar().showMessage("Nothing to play: load a file or draw some notes")
             return
@@ -657,7 +701,7 @@ class MainWindow(QMainWindow):
         if self.song.is_loaded:
             self.song.speed = speed
             self.song.play(seconds)
-        self.player.set_program(notes, speed)
+        self._send_program()
         self.player.play(seconds)
         self._show_position()
         if self._is_playing():

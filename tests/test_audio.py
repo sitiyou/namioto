@@ -9,7 +9,15 @@ from types import SimpleNamespace
 import numpy as np
 
 from namioto.playback import render_notes
-from namioto.ui.audio import NOTE_OFF, NOTE_ON, VELOCITY, MidiPortOut, MidiSink, open_player
+from namioto.ui.audio import (
+    NOTE_OFF,
+    NOTE_ON,
+    PROGRAM_CHANGE,
+    VELOCITY,
+    MidiPortOut,
+    MidiSink,
+    open_player,
+)
 
 
 class FakePort:
@@ -36,8 +44,8 @@ def test_a_preview_mixes_over_what_is_already_sounding() -> None:
 
 
 def note_messages(port) -> list[list[int]]:
-    """Just the note events: the player also opens with a channel volume control change."""
-    return [message for message in port.messages if message[0] in (NOTE_ON, NOTE_OFF)]
+    """Just the note events on any channel: the player also sends program and volume changes."""
+    return [message for message in port.messages if (message[0] & 0xF0) in (NOTE_ON, NOTE_OFF)]
 
 
 def test_clicking_the_same_note_again_restarts_it() -> None:
@@ -92,6 +100,35 @@ def test_the_midi_volume_becomes_a_control_change() -> None:
     player.gain = -1.0
     assert port.messages[-1] == [0xB0, 0x07, 0]
     assert player.gain == 0.0
+
+
+def test_each_channel_gets_its_program_and_volume() -> None:
+    port = FakePort()
+    player = MidiPortOut(port)
+
+    player.set_program([(60, 0.0, 1.0, 0), (43, 0.0, 1.0, 10)], 1.0, ((0, 0, 100), (10, 32, 50)))
+    changes = [message for message in port.messages if (message[0] & 0xF0) == PROGRAM_CHANGE]
+    volumes = [message for message in port.messages if (message[0] & 0xF0) == 0xB0 and message[1] == 7]
+    assert [message[0] & 0x0F for message in changes] == [0, 10]
+    assert [message[1] for message in changes] == [0, 32]
+    assert [message[2] for message in volumes][-2:] == [127, round(0.5 * 127)]
+
+
+def test_the_notes_are_played_on_their_own_channel() -> None:
+    port = FakePort()
+    player = MidiPortOut(port)
+    player.set_program([(60, 0.0, 0.2, 3), (67, 0.0, 0.2, 0)], 1.0, ((0, 0, 100), (3, 0, 100)))
+    port.messages.clear()
+    player.play()
+    time.sleep(0.3)
+    player.stop()
+
+    assert note_messages(port) == [
+        [NOTE_ON | 3, 60, VELOCITY],
+        [NOTE_ON | 0, 67, VELOCITY],
+        [NOTE_OFF | 3, 60, 0],
+        [NOTE_OFF | 0, 67, 0],
+    ]
 
 
 def test_the_external_synth_is_preferred_when_one_is_listening() -> None:
