@@ -249,6 +249,12 @@ class MainWindow(QMainWindow):
         self.play_shortcut.activated.connect(self._toggle_play)
         for keys, slot in (("Ctrl+O", self._on_open), ("Ctrl+S", self._on_save), ("Ctrl+Shift+S", self._on_save_as)):
             QShortcut(QKeySequence(keys), self).activated.connect(slot)
+        for standard, slot in (
+            (QKeySequence.StandardKey.Undo, self.view.undo),
+            (QKeySequence.StandardKey.Redo, self.view.redo),
+        ):
+            QShortcut(QKeySequence(standard), self).activated.connect(slot)
+        QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.view.redo)
         self.cursor_note = QLabel()
         self.cursor_note.setObjectName("cursorNote")
         self.statusBar().addPermanentWidget(self.cursor_note)
@@ -616,6 +622,7 @@ class MainWindow(QMainWindow):
                 (note.pitch, note.start / per_beat, note.duration / per_beat, note.channel) for note in opened.notes
             )
             self.view.center_on(self.settings.session.center_x, self.settings.session.center_y)
+            self.view.undo_stack.clear()  # another document starts its history over
         finally:
             self._loading = False
         self._update_status()
@@ -683,9 +690,10 @@ class MainWindow(QMainWindow):
             else:
                 self.transport.bpm.setValue(imported.bpm)  # scene units are beats, and the file sets them
                 beats = self.view.seconds_per_beat
-                self.view.set_channels(imported.channels)
-                self.view.set_notes(
-                    (note.pitch, note.start / beats, note.duration / beats, note.channel) for note in imported.notes
+                self.view.replace(
+                    imported.channels,
+                    [(note.pitch, note.start / beats, note.duration / beats, note.channel) for note in imported.notes],
+                    "Import MIDI",
                 )
         finally:
             self._loading = False
@@ -732,8 +740,7 @@ class MainWindow(QMainWindow):
         arriving = [
             (note.pitch, note.start / beats, note.duration / beats, landing[note.channel]) for note in imported.notes
         ]
-        self.view.set_channels(channels.values())
-        self.view.set_notes(kept + arriving)
+        self.view.replace(channels.values(), kept + arriving, "Merge MIDI")
 
     def export_midi(self, path: str | Path) -> bool:
         """Write every channel out as MIDI, on the project's own tempo."""
@@ -992,6 +999,7 @@ class MainWindow(QMainWindow):
             "space: play or pause  |  click (outside edit mode): move the playhead  |  "
             "pen: drag an empty row to draw  |  select: drag a box, ctrl-click to add  |  "
             "shift drag a note: trim its start (left half) or end (right half)  |  right click: delete  |  "
+            "ctrl Z: undo, ctrl shift Z: redo  |  "
             "middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y  |  gear: settings"
         )
 

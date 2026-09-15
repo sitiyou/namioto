@@ -4,9 +4,11 @@
 from __future__ import annotations
 
 import math
+from contextlib import contextmanager
+from dataclasses import dataclass
 
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QTransform
+from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QTransform, QUndoCommand, QUndoStack
 from PyQt6.QtWidgets import (
     QGraphicsItem,
     QGraphicsRectItem,
@@ -59,6 +61,7 @@ EDIT_DIM = 0.65  # the spectrum steps back while editing so the notes stand out 
 PLAYHEAD = _CANVAS.playhead
 MIN_GRID_SPACING = 9.0
 CLICK_SLOP_PX = 4
+HISTORY_LIMIT = 50  # snapshots of the whole document, so the depth trades memory for how far back undo goes
 RULER_TIME_ROW = 24
 RULER_HEIGHT = 46
 TIME_LABEL_SPACING = 84.0
@@ -91,6 +94,48 @@ def time_step(pixels_per_second: float, minimum: float) -> float:
         if step * pixels_per_second >= minimum:
             return step
     return TIME_STEPS[-1]
+
+
+@dataclass(frozen=True)
+class _RollState:
+    """A document snapshot as one undo step: channels, notes and what was selected.
+
+    Note times are seconds, not the beats the roll draws in: a tempo change rescales every beat
+    coordinate, so a snapshot in beats would restore a note at the beat it used to sit on rather
+    than the time it still sounds at.
+    """
+
+    channels: tuple[Channel, ...]
+    notes: tuple[tuple[int, float, float, int], ...]
+    selected: frozenset[int]
+    active_channel: int
+
+
+def _state_data(state: _RollState) -> tuple:
+    return (state.channels, state.notes)
+
+
+class _RollEdit(QUndoCommand):
+    """One undo step, holding the state before and after it and restoring either by rebuilding.
+
+    `push` runs `redo` once with the edit already applied, so the first call stays a no-op and only
+    a following undo/redo pair moves the document.
+    """
+
+    def __init__(self, view: PianoRollView, before: _RollState, after: _RollState, text: str):
+        super().__init__(text)
+        self._view = view
+        self._before = before
+        self._after = after
+        self._applied = False
+
+    def undo(self) -> None:
+        self._view._restore_state(self._before)
+
+    def redo(self) -> None:
+        if self._applied:
+            self._view._restore_state(self._after)
+        self._applied = True
 
 
 class NoteItem(QGraphicsRectItem):
@@ -211,6 +256,11 @@ class PianoRollView(QGraphicsView):
         self.document = Document(channels=[Channel(channel=0, color=theme.NOTE_PALETTE[0])])
         self._items: list[NoteItem] = []
         self.active_channel = 0
+        self._stack = QUndoStack(self)
+        self._stack.setUndoLimit(HISTORY_LIMIT)
+        self._gesture_before: _RollState | None = None
+        self._gesture_text = ""
+        self._history_depth = 0
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self.viewport().setMouseTracking(True)  # the row under the mouse is highlighted
@@ -263,10 +313,11 @@ class PianoRollView(QGraphicsView):
 
     def add_note(self, pitch: int, start: float, duration: float, channel: int | None = None) -> NoteItem:
         note = Note(pitch, start, duration, self.active_channel if channel is None else channel)
-        self.document.add_note(note)
-        item = self._add_item(note)
-        self._update_scene()
-        self.notes_changed.emit()
+        with self._edit("Draw note"):
+            self.document.add_note(note)
+            item = self._add_item(note)
+            self._update_scene()
+            self.notes_changed.emit()
         return item
 
     def set_notes(self, notes) -> None:
@@ -274,20 +325,30 @@ class PianoRollView(QGraphicsView):
 
         A note may carry a fourth element, the channel it plays on.
         """
-        self._drop_items()
-        self.document.replace_notes(Note(item[0], item[1], item[2], item[3] if len(item) > 3 else 0) for item in notes)
-        for note in self.document.notes:
-            self._add_item(note)
-        self._sync_channel_visuals()
-        self._update_scene()
-        self.notes_changed.emit()
+        with self._edit("Replace notes"):
+            self._drop_items()
+            self.document.replace_notes(
+                Note(item[0], item[1], item[2], item[3] if len(item) > 3 else 0) for item in notes
+            )
+            for note in self.document.notes:
+                self._add_item(note)
+            self._sync_channel_visuals()
+            self._update_scene()
+            self.notes_changed.emit()
+
+    def replace(self, channels, notes, text: str = "Replace notes") -> None:
+        """Put a whole document in over the running one - a MIDI import, say - as a single step."""
+        with self._edit(text):
+            self.set_channels(channels)
+            self.set_notes(notes)
 
     def clear_notes(self) -> None:
-        self._drop_items()
-        self.document.clear_notes()
-        self._update_scene()
-        self.notes_changed.emit()
-        self.view_changed.emit()
+        with self._edit("Clear notes"):
+            self._drop_items()
+            self.document.clear_notes()
+            self._update_scene()
+            self.notes_changed.emit()
+            self.view_changed.emit()
 
     def notes(self) -> list[NoteItem]:
         return list(self._items)
@@ -311,10 +372,84 @@ class PianoRollView(QGraphicsView):
         self._items.clear()
 
     def _remove_item(self, item: NoteItem) -> None:
-        self.document.remove_note(item.note)
-        self._drop_item(item)
-        self.notes_changed.emit()
-        self.view_changed.emit()
+        with self._edit("Delete note"):
+            self.document.remove_note(item.note)
+            self._drop_item(item)
+            self.notes_changed.emit()
+            self.view_changed.emit()
+
+    # --- history ----------------------------------------------------------
+
+    @property
+    def undo_stack(self) -> QUndoStack:
+        return self._stack
+
+    def undo(self) -> None:
+        self._stack.undo()
+
+    def redo(self) -> None:
+        self._stack.redo()
+
+    def _capture(self) -> _RollState:
+        per_beat = self.seconds_per_beat
+        return _RollState(
+            channels=tuple(self.channels),
+            notes=tuple(
+                (note.pitch, note.start * per_beat, note.duration * per_beat, note.channel) for note in self.notes()
+            ),
+            selected=frozenset(index for index, item in enumerate(self._items) if item.isSelected()),
+            active_channel=self.active_channel,
+        )
+
+    def _push(self, before: _RollState, after: _RollState, text: str) -> None:
+        if _state_data(before) != _state_data(after):
+            self._stack.push(_RollEdit(self, before, after, text))
+
+    @contextmanager
+    def _edit(self, text: str):
+        """Record one discrete edit as one step; nested edits join the outer one, and a gesture
+        records itself in `_commit_gesture`."""
+        if self._history_depth or self._gesture_before is not None:
+            yield
+            return
+        before = self._capture()
+        self._history_depth += 1
+        try:
+            yield
+        finally:
+            self._history_depth -= 1
+        self._push(before, self._capture(), text)
+
+    def _begin_gesture(self, text: str) -> None:
+        if self._gesture_before is None:
+            self._gesture_before = self._capture()
+            self._gesture_text = text
+
+    def _commit_gesture(self) -> None:
+        before, text = self._gesture_before, self._gesture_text
+        if before is None:
+            return
+        self._gesture_before = None
+        self._gesture_text = ""
+        self._push(before, self._capture(), text)
+
+    def _restore_state(self, state: _RollState) -> None:
+        """Put a snapshot back in one rebuild, selecting the same notes by position again."""
+        self._history_depth += 1
+        try:
+            per_beat = self.seconds_per_beat
+            self.set_channels(state.channels)
+            self.set_notes(
+                (pitch, start / per_beat, duration / per_beat, channel)
+                for pitch, start, duration, channel in state.notes
+            )
+            for index in state.selected:
+                if index < len(self._items):
+                    self._items[index].setSelected(True)
+            self.set_active_channel(state.active_channel)
+        finally:
+            self._history_depth -= 1
+        self.refresh()
 
     # --- channels ---------------------------------------------------------
 
@@ -355,47 +490,51 @@ class PianoRollView(QGraphicsView):
         A note whose channel is missing from the list gets a plain entry back rather than being
         dropped: a channel number is always a place a note can play on.
         """
-        self.document.set_channels(channels or [Channel(channel=0, color=theme.NOTE_PALETTE[0])])
-        for channel in list(self.channels):
-            if not channel.color:
-                self.document.set_channel_field(channel.channel, color=self._borrow_color())
-        if self.active_channel not in {channel.channel for channel in self.channels}:
-            self.active_channel = self.channels[0].channel
-        self._sync_channel_visuals()
-        self.channels_changed.emit()
-        self.active_channel_changed.emit(self.active_channel)
+        with self._edit("Set channels"):
+            self.document.set_channels(channels or [Channel(channel=0, color=theme.NOTE_PALETTE[0])])
+            for channel in list(self.channels):
+                if not channel.color:
+                    self.document.set_channel_field(channel.channel, color=self._borrow_color())
+            if self.active_channel not in {channel.channel for channel in self.channels}:
+                self.active_channel = self.channels[0].channel
+            self._sync_channel_visuals()
+            self.channels_changed.emit()
+            self.active_channel_changed.emit(self.active_channel)
 
     def add_channel(self, program: int = 0) -> Channel | None:
         number = free_channel(self.channels)
         if number is None:
             return None
         channel = Channel(channel=number, color=self._borrow_color(), program=program)
-        self.document.add_channel(channel)
-        self.channels_changed.emit()
+        with self._edit("Add channel"):
+            self.document.add_channel(channel)
+            self.channels_changed.emit()
         return channel
 
     def remove_channel(self, number: int) -> bool:
         """Drop a channel and the notes on it; the other numbers stay as they are. The last one stays."""
-        removed = self.document.remove_channel(number)
-        if removed is None:
+        if len(self.channels) <= 1:
             return False
-        gone = {id(note) for note in removed}
-        for item in list(self._items):
-            if id(item.note) in gone:
-                self._drop_item(item)
-        if self.active_channel not in {channel.channel for channel in self.channels}:
-            self.active_channel = self.channels[0].channel
-        self._sync_channel_visuals()
-        if removed:
-            self.notes_changed.emit()
-        self.channels_changed.emit()
-        self.active_channel_changed.emit(self.active_channel)
+        with self._edit("Delete channel"):
+            removed = self.document.remove_channel(number)
+            gone = {id(note) for note in removed or ()}
+            for item in list(self._items):
+                if id(item.note) in gone:
+                    self._drop_item(item)
+            if self.active_channel not in {channel.channel for channel in self.channels}:
+                self.active_channel = self.channels[0].channel
+            self._sync_channel_visuals()
+            if removed:
+                self.notes_changed.emit()
+            self.channels_changed.emit()
+            self.active_channel_changed.emit(self.active_channel)
         return True
 
     def set_channel_field(self, number: int, **fields) -> None:
-        self.document.set_channel_field(number, **fields)
-        self._sync_channel_visuals()
-        self.channels_changed.emit()
+        with self._edit("Edit channel"):
+            self.document.set_channel_field(number, **fields)
+            self._sync_channel_visuals()
+            self.channels_changed.emit()
 
     def set_active_channel(self, number: int) -> None:
         if number in {channel.channel for channel in self.channels} and number != self.active_channel:
@@ -718,6 +857,7 @@ class PianoRollView(QGraphicsView):
                 return
             pitch = self._pitch_at(scene_pos.y())
             start = max(0.0, self._snap_floor_beats(scene_pos.x()))
+            self._begin_gesture("Draw note")
             note = self.add_note(pitch, start, self._cell_beats())
             self._clear_selection()
             note.setSelected(True)
@@ -736,6 +876,7 @@ class PianoRollView(QGraphicsView):
             self._mode = "trim"
             self._trim_edge = "start" if scene_pos.x() < note.start + note.duration / 2 else "end"
             self._snapshot = {note: (note.start, note.pitch, note.duration)}
+            self._begin_gesture("Trim note")
             return
 
         if ctrl:
@@ -756,6 +897,7 @@ class PianoRollView(QGraphicsView):
         else:
             self._mode = "move"
         self._snapshot = {n: (n.start, n.pitch, n.duration) for n in self.selected_notes()}
+        self._begin_gesture("Trim note" if self._mode == "trim" else "Move notes")
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position().toPoint()
@@ -837,6 +979,7 @@ class PianoRollView(QGraphicsView):
             self.note_preview.emit(pitch)
 
     def mouseReleaseEvent(self, event) -> None:
+        self._commit_gesture()
         if self._rubber.isVisible():
             self._rubber.hide()
         self._mode = None
@@ -891,12 +1034,13 @@ class PianoRollView(QGraphicsView):
             return
         if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             selection = self.selected_notes()
-            for item in selection:
-                self.document.remove_note(item.note)
-                self._drop_item(item)
-            if selection:
-                self.notes_changed.emit()
-                self.view_changed.emit()
+            with self._edit("Delete notes"):
+                for item in selection:
+                    self.document.remove_note(item.note)
+                    self._drop_item(item)
+                if selection:
+                    self.notes_changed.emit()
+                    self.view_changed.emit()
             return
         if key == Qt.Key.Key_A and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             for note in self.notes():

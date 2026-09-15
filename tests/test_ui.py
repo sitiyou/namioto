@@ -1254,6 +1254,234 @@ def test_ctrl_click_is_what_adds_to_the_selection(window) -> None:
     window.view.clear_notes()
 
 
+def test_a_drawn_note_is_one_undo_step(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.undo_stack.clear()
+
+    draw_note(window, QPointF(2.0, 40.0), QPointF(3.0, 40.0))
+    assert len(window.view.notes()) == 1
+    assert window.view.undo_stack.count() == 1
+    window.view.undo()
+    assert window.view.notes() == []
+    assert window.view.undo_stack.canRedo()
+    window.view.redo()
+    assert len(window.view.notes()) == 1
+    window.view.clear_notes()
+
+
+def test_moving_notes_is_one_undo_step(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.add_note(69, 2.0, 2.0)
+    window.view.undo_stack.clear()
+
+    row = float(PITCH_MAX - 69) + 0.5
+    window.view.centerOn(QPointF(3.0, row))
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(3.0, row))
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(5.0, row - 2))
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(5.0, row - 2))
+    assert window.view.undo_stack.count() == 1
+    assert (window.view.notes()[0].start, window.view.notes()[0].pitch) == (4.0, 71)
+
+    window.view.undo()
+    assert (window.view.notes()[0].start, window.view.notes()[0].pitch) == (2.0, 69)
+    window.view.redo()
+    assert (window.view.notes()[0].start, window.view.notes()[0].pitch) == (4.0, 71)
+    window.view.clear_notes()
+
+
+def test_trimming_a_note_is_one_undo_step(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.add_note(69, 2.0, 2.0)  # spans 2.0 to 4.0
+    window.view.undo_stack.clear()
+
+    row = float(PITCH_MAX - 69) + 0.5
+    window.view.centerOn(QPointF(3.0, row))
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(3.95, row))  # within the right grab band
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(5.0, row))
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(5.0, row))
+    assert window.view.undo_stack.count() == 1
+    assert window.view.notes()[0].end == 5.0
+
+    window.view.undo()
+    assert window.view.notes()[0].end == 4.0
+    window.view.clear_notes()
+
+
+def test_deleting_the_selection_is_one_undo_step(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.add_note(60, 0.0, 1.0)
+    window.view.add_note(62, 1.0, 1.0)
+    window.view.undo_stack.clear()
+
+    for item in window.view.notes():
+        item.setSelected(True)
+    window.view.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Delete, Qt.KeyboardModifier.NoModifier))
+    assert window.view.notes() == []
+    assert window.view.undo_stack.count() == 1
+    window.view.undo()
+    assert [note.pitch for note in window.view.notes()] == [60, 62]
+    window.view.clear_notes()
+
+
+def test_a_right_click_delete_can_be_undone(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.add_note(69, 2.0, 2.0)
+    window.view.undo_stack.clear()
+
+    row = float(PITCH_MAX - 69) + 0.5
+    scene_pos = QPointF(3.0, row)
+    roll_mouse(window, QEvent.Type.MouseButtonPress, scene_pos, button=Qt.MouseButton.RightButton)
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, scene_pos, button=Qt.MouseButton.RightButton)
+    assert window.view.notes() == []
+    window.view.undo()
+    assert [note.pitch for note in window.view.notes()] == [69]
+    window.view.clear_notes()
+
+
+def test_clearing_every_note_can_be_undone(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.add_note(60, 0.0, 1.0)
+    window.view.add_note(62, 1.0, 1.0)
+    window.view.undo_stack.clear()
+
+    window.view.clear_notes()
+    assert window.view.notes() == []
+    window.view.undo()
+    assert [note.pitch for note in window.view.notes()] == [60, 62]
+    window.view.clear_notes()
+
+
+def test_selecting_a_note_is_not_an_undo_step(window) -> None:
+    window.edit.select.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    note = window.view.add_note(69, 2.0, 1.0)
+    window.view.undo_stack.clear()
+
+    row = float(PITCH_MAX - 69) + 0.5
+    window.view.centerOn(QPointF(2.5, row))
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(2.5, row))
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(2.5, row))
+    assert note.isSelected()
+    assert window.view.undo_stack.count() == 0
+    window.view.clear_notes()
+
+
+def test_a_new_edit_drops_the_redo_branch(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.undo_stack.clear()
+
+    draw_note(window, QPointF(2.0, 40.0), QPointF(3.0, 40.0))
+    window.view.undo()
+    assert window.view.undo_stack.canRedo()
+    draw_note(window, QPointF(6.0, 40.0), QPointF(7.0, 40.0))
+    assert not window.view.undo_stack.canRedo()
+    window.view.clear_notes()
+
+
+def test_channel_edits_and_a_removal_can_be_undone(window) -> None:
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.add_channel(program=4)
+    window.view.add_note(60, 0.0, 1.0, 0)
+    window.view.add_note(64, 1.0, 1.0, 1)
+    window.view.undo_stack.clear()
+
+    window.view.set_channel_field(1, mute=True)
+    assert window.view.channels[1].mute is True
+    window.view.undo()
+    assert window.view.channels[1].mute is False
+
+    assert window.view.remove_channel(0)
+    assert [note.pitch for note in window.view.notes()] == [64]
+    window.view.undo()
+    assert [(note.pitch, note.channel) for note in window.view.notes()] == [(60, 0), (64, 1)]
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+
+
+def test_a_whole_document_replacement_is_one_undo_step(window) -> None:
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.undo_stack.clear()
+
+    window.view.replace((Channel(channel=0),), [(60, 0.0, 1.0, 0), (64, 1.0, 1.0, 0)], "Import MIDI")
+    assert window.view.undo_stack.count() == 1
+    window.view.undo()
+    assert window.view.notes() == []
+
+
+def test_undo_keeps_a_note_on_the_audio_across_a_tempo_change(window) -> None:
+    window.edit.pen.click()
+    window.transport.bpm.setValue(120.0)
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.add_note(69, 2.0, 2.0)
+    window.view.undo_stack.clear()
+    seconds = 2.0 * window.view.seconds_per_beat
+
+    row = float(PITCH_MAX - 69) + 0.5
+    window.view.centerOn(QPointF(3.0, row))
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(3.0, row))
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(4.0, row))
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(4.0, row))
+
+    window.transport.bpm.setValue(60.0)  # beats halve, seconds do not
+    window.view.undo()
+    restored = window.view.notes()[0]
+    assert restored.start * window.view.seconds_per_beat == pytest.approx(seconds)
+    window.transport.bpm.setValue(120.0)
+    window.view.clear_notes()
+
+
+def test_ctrl_z_and_ctrl_shift_z_drive_the_history(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.undo_stack.clear()
+    draw_note(window, QPointF(2.0, 40.0), QPointF(3.0, 40.0))
+
+    QApplication.setActiveWindow(window)  # an offscreen window is never active on its own
+    QTest.keyClick(window, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert window.view.notes() == []
+    QTest.keyClick(window, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier)
+    assert len(window.view.notes()) == 1
+    QTest.keyClick(window, Qt.Key.Key_Z, Qt.KeyboardModifier.ControlModifier)
+    assert window.view.notes() == []
+    QTest.keyClick(window, Qt.Key.Key_Y, Qt.KeyboardModifier.ControlModifier)
+    assert len(window.view.notes()) == 1
+    window.view.clear_notes()
+
+
+def test_opening_a_project_starts_the_history_over(own_window, tmp_path) -> None:
+    own_window.view.set_channels((Channel(channel=0),))
+    own_window.view.add_note(60, 0.0, 1.0)
+    assert own_window.view.undo_stack.canUndo()
+
+    path = tmp_path / "song.nto"
+    project.save(
+        project.Project(values=store.project_values(store.Settings()), notes=(project.Note(1.0, 0.5, 62),)),
+        path,
+    )
+    assert own_window.load_project(path)
+    assert not own_window.view.undo_stack.canUndo()
+    assert not own_window.view.undo_stack.canRedo()
+
+
 def test_dragging_a_box_fills_the_selection_under_any_style(window) -> None:
     QApplication.setStyle("Windows")  # its own rubber band ignores a stylesheet, and the box is ours
     window.edit.select.click()
