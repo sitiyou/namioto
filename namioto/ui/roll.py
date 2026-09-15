@@ -425,15 +425,20 @@ class PianoRollView(QGraphicsView):
         self._push(before, self._capture(), text)
 
     def _restore_state(self, state: _RollState) -> None:
-        """Put a snapshot back in one rebuild, selecting the same notes by position again."""
+        """Put a snapshot back in one rebuild, selecting the same notes by position again.
+
+        The notes go in first: a channel list only holds the numbers its notes play on, so a channel
+        that is about to lose its notes would come straight back if it were set while they were
+        still there.
+        """
         self._history_depth += 1
         try:
             per_beat = self.seconds_per_beat
-            self.set_channels(state.channels)
             self.set_notes(
                 (pitch, start / per_beat, duration / per_beat, channel)
                 for pitch, start, duration, channel in state.notes
             )
+            self.set_channels(state.channels)
             for index in state.selected:
                 if index < len(self._items):
                     self._items[index].setSelected(True)

@@ -401,6 +401,7 @@ class TransportBar(_Group):
     open_requested = pyqtSignal()
     save_requested = pyqtSignal()
     export_midi_requested = pyqtSignal()
+    transcribe_requested = pyqtSignal()
     auto_page_toggled = pyqtSignal(bool)
     overtone_toggled = pyqtSignal(bool)
 
@@ -410,9 +411,12 @@ class TransportBar(_Group):
         self.open = icon_button("open", "Open a project (.nto) — Ctrl+O")
         self.save = icon_button("save", "Save the project — Ctrl+S, with Shift for Save As")
         self.export_midi = icon_button("export", "Export the notes as a MIDI file — every channel")
+        self.transcribe = icon_button("transcribe", "Transcribe the singing voice of the loaded audio with GAME")
+        self.transcribe.setEnabled(False)
         self.open.clicked.connect(self.open_requested)
         self.save.clicked.connect(self.save_requested)
         self.export_midi.clicked.connect(self.export_midi_requested)
+        self.transcribe.clicked.connect(self.transcribe_requested)
         self.rewind = icon_button("rewind", "Rewind to the beginning")
         self.stop = icon_button("stop", "Stop")
         self.play_from_start = icon_button("playstart", "Play from the beginning")
@@ -480,6 +484,7 @@ class TransportBar(_Group):
         project.add(self.open)
         project.add(self.save)
         project.add(self.export_midi)
+        project.add(self.transcribe)
         project.add(self.settings_button)
 
         playback = Cluster("playback")

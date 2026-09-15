@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import queue
 import time
 from pathlib import Path
 
@@ -24,7 +25,7 @@ from PyQt6.QtWidgets import (
     QToolButton,
 )
 
-from namioto import midi, project
+from namioto import midi, project, transcription
 from namioto import settings as store
 from namioto.beats import BeatTempo, LocalWindow
 from namioto.channels import Channel
@@ -60,6 +61,7 @@ from namioto.ui.roll import (
 )
 from namioto.ui.settings_dialog import SettingsDialog
 from namioto.ui.spectrogram import SpectrumImage, SpectrumLoader
+from namioto.ui.transcription_dialog import TranscriptionDialog
 
 DEMO_NOTES = (
     (60, 0.0, 1.0),
@@ -82,6 +84,14 @@ def qt_app():
     app.setStyle("Fusion")
     theme.apply(app)
     return app
+
+
+@pytest.fixture(autouse=True)
+def isolated_transcription(tmp_path, monkeypatch):
+    """The transcription dialog remembers its values in the config directory; no test may touch the
+    real one, and none may read a previous test's."""
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
 
 
 @pytest.fixture(scope="module")
@@ -2283,6 +2293,7 @@ def test_loading_a_file_hands_the_settings_to_the_analysers(own_window, monkeypa
     assert analysis == {"channels": "left", "t_num": 40.0, "fft_points": 4096, "a4": 441.0}
     assert tempo == {"window_seconds": 8.0, "window_hop_seconds": 6.0}
     assert store.get_value(own_window.settings, "paths", "last_audio_dir") == "/tmp"
+    assert own_window.transport.transcribe.isEnabled()
 
 
 def test_the_tempo_loader_follows_the_settings(own_window, monkeypatch) -> None:
@@ -2375,14 +2386,210 @@ def test_a_midi_port_is_matched_by_name() -> None:
 
 def test_the_transport_carries_the_project_buttons() -> None:
     bar = TransportBar()
+    bar.transcribe.setEnabled(True)
     seen: list[str] = []
     bar.open_requested.connect(lambda: seen.append("open"))
     bar.save_requested.connect(lambda: seen.append("save"))
     bar.export_midi_requested.connect(lambda: seen.append("export"))
+    bar.transcribe_requested.connect(lambda: seen.append("transcribe"))
     bar.open.click()
     bar.save.click()
     bar.export_midi.click()
-    assert seen == ["open", "save", "export"]
+    bar.transcribe.click()
+    assert seen == ["open", "save", "export", "transcribe"]
+
+
+class FakeProcess:
+    """A child that has already stopped, so the dialog sees what a real one leaves behind."""
+
+    def __init__(self, exitcode: int = 0):
+        self.exitcode = exitcode
+        self.terminated = False
+
+    def is_alive(self) -> bool:
+        return False
+
+    def terminate(self) -> None:
+        self.terminated = True
+
+    def join(self, timeout=None) -> None:
+        pass
+
+
+def fake_job(messages, exitcode: int = 0):
+    """The spawn seam replaced by a queue that is already full and a child that already stopped."""
+    channel: queue.Queue = queue.Queue()
+    for message in messages:
+        channel.put(message)
+    process = FakeProcess(exitcode)
+
+    def start_job(_audio, _parameters, _tempo):
+        return process, channel
+
+    return start_job
+
+
+def parameter_writer(dialog, name: str):
+    """The write half of one row of the transcription form, to change it the way a widget would."""
+    for field, _read, write in dialog._fields:
+        if field.name == name:
+            return write
+    raise AssertionError(f"the transcription dialog has no {name} field")
+
+
+def test_the_transcribe_button_needs_audio(own_window) -> None:
+    assert own_window.transport.transcribe.isEnabled() is False
+
+
+def test_the_transcribe_button_opens_the_dialog(own_window, monkeypatch) -> None:
+    own_window.audio_path = "/tmp/song.wav"
+    own_window.transport.transcribe.setEnabled(True)
+    opened: list[TranscriptionDialog] = []
+    monkeypatch.setattr(TranscriptionDialog, "exec", lambda self: opened.append(self) or QDialog.DialogCode.Rejected)
+
+    own_window.transport.transcribe.click()
+
+    assert len(opened) == 1
+    assert opened[0].parent() is own_window
+    assert opened[0].audio == "/tmp/song.wav"
+
+
+def test_the_transcription_dialog_offers_every_parameter(own_window) -> None:
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+    assert [field.name for field, _read, _write in dialog._fields] == [item.name for item in transcription.PARAMETERS]
+    dialog.close()
+
+
+def test_the_transcription_dialog_remembers_what_was_typed(own_window, monkeypatch) -> None:
+    monkeypatch.setattr("namioto.ui.transcription_dialog.start_job", fake_job([("done", [(0.0, 0.5, 60.0)])]))
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+    parameter_writer(dialog, "size")("large")
+    parameter_writer(dialog, "language")("zh")
+
+    dialog._start()
+    dialog._poll()
+
+    saved = transcription.load_parameters()
+    assert saved["size"] == "large"
+    assert saved["language"] == "zh"
+    assert dialog.insert_button.isEnabled()
+
+
+def test_the_transcription_run_shows_its_log_and_progress(own_window, monkeypatch) -> None:
+    messages = [
+        ("log", "GAME model small"),
+        ("progress", "parts", 1, 2),
+        ("progress", "parts", 2, 2),
+        ("done", [(0.0, 0.5, 60.0), (0.5, 1.0, 62.0)]),
+    ]
+    monkeypatch.setattr("namioto.ui.transcription_dialog.start_job", fake_job(messages))
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+
+    dialog._start()
+    dialog._poll()
+
+    assert "GAME model small" in dialog.log.toPlainText()
+    assert dialog.progress_label.text() == "2 notes"
+    assert dialog.notes() == [(0.0, 0.5, 60.0), (0.5, 1.0, 62.0)]
+    assert dialog.insert_button.isEnabled()
+
+
+def test_a_cached_run_is_offered_instead_of_running(own_window, monkeypatch) -> None:
+    transcription.save_run("/tmp/song.wav", transcription.default_parameters(), 120.0, [(0.0, 0.5, 60.0)])
+    asked: list[bool] = []
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *args, **kwargs: asked.append(True) or QMessageBox.StandardButton.Yes
+    )
+    monkeypatch.setattr("namioto.ui.transcription_dialog.start_job", lambda *args: pytest.fail("must not run"))
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+
+    dialog._start()
+
+    assert asked == [True]
+    assert dialog.notes() == [(0.0, 0.5, 60.0)]
+    assert "saved run reused" in dialog.log.toPlainText()
+    assert dialog.insert_button.isEnabled()
+
+
+def test_a_declined_cache_still_runs(own_window, monkeypatch) -> None:
+    transcription.save_run("/tmp/song.wav", transcription.default_parameters(), 120.0, [(0.0, 0.5, 60.0)])
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.StandardButton.No)
+    monkeypatch.setattr("namioto.ui.transcription_dialog.start_job", fake_job([("done", [(1.0, 1.5, 64.0)])]))
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+
+    dialog._start()
+    dialog._poll()
+
+    assert dialog.notes() == [(1.0, 1.5, 64.0)]
+
+
+def test_a_crashed_transcription_leaves_the_window_alone(own_window, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "namioto.ui.transcription_dialog.start_job", fake_job([("log", "GAME model small")], exitcode=1)
+    )
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+
+    dialog._start()
+    dialog._poll()
+
+    assert "exit code 1" in dialog.log.toPlainText()
+    assert dialog.run_button.isEnabled()
+    assert not dialog.insert_button.isEnabled()
+
+
+def test_a_failed_transcription_shows_the_traceback(own_window, monkeypatch) -> None:
+    monkeypatch.setattr(
+        "namioto.ui.transcription_dialog.start_job",
+        fake_job([("error", "Traceback\nRuntimeError: no model")]),
+    )
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+
+    dialog._start()
+    dialog._poll()
+
+    assert "RuntimeError: no model" in dialog.log.toPlainText()
+    assert dialog.run_button.isEnabled()
+
+
+def test_a_child_that_cannot_start_is_reported(own_window, monkeypatch) -> None:
+    def refuse(*args):
+        raise OSError("no processes left")
+
+    monkeypatch.setattr("namioto.ui.transcription_dialog.start_job", refuse)
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+
+    dialog._start()
+
+    assert "no processes left" in dialog.log.toPlainText()
+    assert dialog.run_button.isEnabled()
+
+
+def test_a_transcription_lands_on_a_channel_of_its_own(own_window) -> None:
+    before = len(own_window.view.channels)
+
+    own_window._adopt_transcription([(0.0, 0.5, 60.0), (0.5, 1.0, 62.0)], "new")
+
+    channels = own_window.view.channels
+    assert len(channels) == before + 1
+    assert channels[-1].name == "GAME"
+    assert [note.pitch for note in own_window.view.notes()] == [60, 62]
+    assert {note.channel for note in own_window.view.notes()} == {channels[-1].channel}
+
+    own_window.view.undo()
+    assert own_window.view.notes() == []
+    assert len(own_window.view.channels) == before
+
+
+def test_a_transcription_can_merge_or_replace(own_window) -> None:
+    own_window.view.add_note(60, 0.0, 1.0)
+    own_window.view.set_active_channel(own_window.view.channels[0].channel)
+
+    own_window._adopt_transcription([(1.0, 1.5, 64.0)], "active")
+    assert len(own_window.view.channels) == 1
+    assert len(own_window.view.notes()) == 2
+
+    own_window._adopt_transcription([(2.0, 2.5, 65.0)], "replace")
+    assert len(own_window.view.notes()) == 1
 
 
 def test_saving_a_project_takes_the_notes_and_the_values_with_it(own_window, tmp_path) -> None:
