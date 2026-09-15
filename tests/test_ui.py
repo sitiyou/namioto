@@ -314,12 +314,10 @@ def test_one_action_emits_one_state_and_the_bar_renders_it(window) -> None:
         window.edit.select.click()  # one click, one state - no edit-mode signal beside it
         assert seen == [Interaction.editing_with(Tool.SELECT)]
         assert window.edit.select.isChecked() and not window.edit.pen.isChecked()
-        assert window.edit.snap.isEnabled()
 
         window.edit.mode.click()
         assert seen == [Interaction.editing_with(Tool.SELECT), Interaction.viewing()]
         assert not (window.edit.pen.isChecked() or window.edit.select.isChecked())
-        assert not window.edit.snap.isEnabled()
     finally:
         window.edit.interaction_changed.disconnect(seen.append)
 
@@ -329,7 +327,7 @@ def test_mode_buttons_are_icons_not_text(window) -> None:
         window.edit.mode,
         window.edit.pen,
         window.edit.select,
-        window.edit.division,
+        window.transport.division,
         window.transport.play_pause,
     )
     for button in buttons:
@@ -366,7 +364,9 @@ def test_keyboard_rows_line_up_with_the_roll(window) -> None:
     window.view.clear_notes()
     keyboard, viewport = window.keyboard, window.view.viewport()
     keyboard_image, view_image = keyboard.grab().toImage(), window.view.grab().toImage()
-    column = viewport.mapTo(window.view, QPoint(viewport.width() // 2, 0)).x()
+    centre = viewport.mapTo(window.view, QPoint(viewport.width() // 2, 0)).x()
+    # a vertical grid line covers the whole height of the roll, so the column read has to miss it
+    column = next(x for x in range(centre, centre + 8) if view_image.pixelColor(x, 0).name() != GRID_LINE.name())
     white_keys = [y for y in range(keyboard_image.height()) if keyboard_image.pixelColor(2, y) == QColor("#d8dde6")]
     white_rows = [y for y in range(view_image.height()) if view_image.pixelColor(column, y) == QColor("#262b34")]
     offset = keyboard.mapToGlobal(QPoint(0, 0)).y() - window.view.mapToGlobal(QPoint(0, 0)).y()
@@ -375,12 +375,12 @@ def test_keyboard_rows_line_up_with_the_roll(window) -> None:
 
 
 def test_the_division_button_flips_between_beats_and_seconds(window) -> None:
-    assert window.edit.division.isChecked()  # beats by default
-    window.edit.division.click()
-    assert not window.edit.division.isChecked()
+    assert window.transport.division.isChecked()  # beats by default
+    window.transport.division.click()
+    assert not window.transport.division.isChecked()
     assert window.view.division == "seconds"
-    window.edit.division.click()
-    assert window.edit.division.isChecked()
+    window.transport.division.click()
+    assert window.transport.division.isChecked()
     assert window.view.division == "beats"
 
 
@@ -436,7 +436,7 @@ def test_defaults_of_the_control_bars(window) -> None:
     assert window.mix.contrast.value() == 1.0
     assert window.mix.audio_volume.value() == 80.0
     assert window.edit.snap.currentData() == 0.5 and window.view.snap == 0.5  # 1/8 by default
-    assert window.edit.division.isChecked()
+    assert window.transport.division.isChecked()
 
 
 def test_transport_position_is_a_clock(window) -> None:
@@ -637,7 +637,7 @@ def test_the_buttons_that_do_something_carry_a_frame(window) -> None:
 
 
 def test_the_switches_and_the_transport_stay_bare(window) -> None:
-    window.edit.channels.setChecked(True)  # the cards, and their switches, have to be drawn
+    window.transport.channels.setChecked(True)  # the cards, and their switches, have to be drawn
     image = window.grab().toImage()
     frame = QColor(theme.TOKENS["BUTTON_BG"])
     card_switches = tuple(
@@ -653,16 +653,16 @@ def test_the_switches_and_the_transport_stay_bare(window) -> None:
         window.transport.overtone,
         window.edit.mode,
         window.edit.select,
-        window.edit.channels,
-        window.edit.division,
+        window.transport.channels,
+        window.transport.division,
         *card_switches,
     )
     for button in bare:
         assert frame not in drawn_pixels(window, image, button), f"{button.toolTip()} wears a frame"
 
-    tinted = drawn_pixels(window, image, window.edit.division)
+    tinted = drawn_pixels(window, image, window.transport.division)
     assert max(colour.blue() - colour.red() for colour in tinted) > 40, "a switch that is on keeps the accent"
-    window.edit.channels.setChecked(False)
+    window.transport.channels.setChecked(False)
 
 
 def test_a_button_that_cannot_be_clicked_reads_as_off(window) -> None:
@@ -1470,6 +1470,98 @@ def test_copy_and_paste_need_edit_mode() -> None:
     assert not view.paste_notes()
 
 
+def test_quantize_puts_the_notes_on_the_snap_grid() -> None:
+    view = PianoRollView()
+    view.apply_interaction(Interaction.editing_with(Tool.PEN))
+    view.set_channels((Channel(channel=0),))
+    view.snap = 0.5
+    view.add_note(60, 0.6, 0.7)  # starts 0.5, ends 1.5
+    view.add_note(62, 1.9, 0.2)  # both ends round to the same cell, so one cell is the length
+    view.undo_stack.clear()
+
+    assert view.quantize_notes()
+    assert [(note.start, note.duration) for note in view.notes()] == [(0.5, 1.0), (2.0, 0.5)]
+    assert view.undo_stack.count() == 1
+    view.undo()
+    assert [(note.start, note.duration) for note in view.notes()] == [(0.6, 0.7), (1.9, 0.2)]
+
+
+def test_quantize_takes_only_the_selection_when_there_is_one() -> None:
+    view = PianoRollView()
+    view.apply_interaction(Interaction.editing_with(Tool.PEN))
+    view.set_channels((Channel(channel=0),))
+    view.snap = 0.5
+    view.add_note(60, 0.6, 1.0).setSelected(True)
+    view.add_note(62, 1.6, 1.0)
+
+    assert view.quantize_notes()
+    assert [(note.pitch, note.start) for note in view.notes()] == [(60, 0.5), (62, 1.6)]
+
+
+def test_quantize_leaves_a_locked_channel_where_it_is() -> None:
+    view = PianoRollView()
+    view.apply_interaction(Interaction.editing_with(Tool.PEN))
+    view.set_channels((Channel(channel=0, lock=True),))
+    view.snap = 0.5
+    view.add_note(60, 0.6, 1.0)
+
+    assert not view.quantize_notes()
+    assert view.notes()[0].start == 0.6
+
+
+def test_a_note_already_on_the_grid_is_not_an_edit() -> None:
+    view = PianoRollView()
+    view.apply_interaction(Interaction.editing_with(Tool.PEN))
+    view.set_channels((Channel(channel=0),))
+    view.snap = 0.5
+    view.add_note(60, 1.0, 1.0)
+    view.undo_stack.clear()
+
+    assert not view.quantize_notes()
+    assert view.undo_stack.count() == 0
+
+
+def test_quantize_works_outside_edit_mode() -> None:
+    view = PianoRollView()
+    view.set_channels((Channel(channel=0),))
+    view.snap = 0.5
+    view.add_note(60, 0.6, 1.0)
+
+    assert view.edit_mode is False
+    assert view.quantize_notes()
+    assert view.notes()[0].start == 0.5
+
+
+def test_the_quantize_button_quantizes_the_roll(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.snap = 0.5
+    window.view.add_note(60, 0.6, 1.0)
+    window.view.undo_stack.clear()
+
+    window.edit.quantize.click()
+    assert window.view.notes()[0].start == 0.5
+    assert window.view.undo_stack.count() == 1
+    window.view.undo()
+    window.view.clear_notes()
+
+
+def test_the_snap_grid_and_quantize_stay_usable_outside_edit_mode() -> None:
+    bar = EditBar(SNAP_CHOICES)
+    assert bar.snap.isEnabled() and bar.quantize.isEnabled()
+    bar.mode.click()
+    assert bar.snap.isEnabled() and bar.quantize.isEnabled()
+
+
+def test_the_quantize_button_asks_the_roll_to_quantize() -> None:
+    bar = EditBar(SNAP_CHOICES)
+    asked: list[bool] = []
+    bar.quantize_requested.connect(lambda: asked.append(True))
+    bar.quantize.click()
+    assert asked == [True]
+
+
 def test_ctrl_c_and_ctrl_v_carry_the_selection(window) -> None:
     window.edit.pen.click()
     window.view.set_channels((Channel(channel=0),))
@@ -1721,7 +1813,6 @@ def test_the_roll_only_edits_in_edit_mode(window) -> None:
     window.edit.mode.click()  # leaving edit mode
     assert not window.view.edit_mode
     assert window.view.tool is None
-    assert not window.edit.snap.isEnabled()
 
     draw_note(window, QPointF(8.3, row), QPointF(9.6, row))
     assert [n.pitch for n in window.view.notes()] == [69]  # the pen drew nothing
@@ -1734,7 +1825,6 @@ def test_the_roll_only_edits_in_edit_mode(window) -> None:
 
     window.edit.mode.click()  # back in
     assert window.view.edit_mode and window.view.tool is Tool.PEN
-    assert window.edit.snap.isEnabled()
     draw_note(window, QPointF(12.3, row), QPointF(13.6, row))  # elsewhere: the first row is taken
     assert len(window.view.notes()) == 2
     window.view.clear_notes()
@@ -2312,7 +2402,7 @@ def test_loading_a_file_hands_the_settings_to_the_analysers(own_window, monkeypa
     assert analysis == {"channels": "left", "t_num": 40.0, "fft_points": 4096, "a4": 441.0}
     assert tempo == {"algorithm": "wavetone", "window_seconds": 8.0, "window_hop_seconds": 6.0}
     assert store.get_value(own_window.settings, "paths", "last_audio_dir") == "/tmp"
-    assert own_window.transport.transcribe.isEnabled()
+    assert own_window.edit.transcribe.isEnabled()
 
 
 def test_the_tempo_loader_follows_the_settings(own_window, monkeypatch) -> None:
@@ -2407,17 +2497,23 @@ def test_a_midi_port_is_matched_by_name() -> None:
 
 def test_the_transport_carries_the_project_buttons() -> None:
     bar = TransportBar()
-    bar.transcribe.setEnabled(True)
     seen: list[str] = []
     bar.open_requested.connect(lambda: seen.append("open"))
     bar.save_requested.connect(lambda: seen.append("save"))
     bar.export_midi_requested.connect(lambda: seen.append("export"))
-    bar.transcribe_requested.connect(lambda: seen.append("transcribe"))
     bar.open.click()
     bar.save.click()
     bar.export_midi.click()
+    assert seen == ["open", "save", "export"]
+
+
+def test_the_edit_bar_carries_the_wand() -> None:
+    bar = EditBar(SNAP_CHOICES)
+    bar.transcribe.setEnabled(True)  # no audio in this bar, so it starts off
+    seen: list[str] = []
+    bar.transcribe_requested.connect(lambda: seen.append("transcribe"))
     bar.transcribe.click()
-    assert seen == ["open", "save", "export", "transcribe"]
+    assert seen == ["transcribe"]
 
 
 class FakeProcess:
@@ -2459,16 +2555,16 @@ def parameter_writer(dialog, name: str):
 
 
 def test_the_transcribe_button_needs_audio(own_window) -> None:
-    assert own_window.transport.transcribe.isEnabled() is False
+    assert own_window.edit.transcribe.isEnabled() is False
 
 
 def test_the_transcribe_button_opens_the_dialog(own_window, monkeypatch) -> None:
     own_window.audio_path = "/tmp/song.wav"
-    own_window.transport.transcribe.setEnabled(True)
+    own_window.edit.transcribe.setEnabled(True)
     opened: list[TranscriptionDialog] = []
     monkeypatch.setattr(TranscriptionDialog, "exec", lambda self: opened.append(self) or QDialog.DialogCode.Rejected)
 
-    own_window.transport.transcribe.click()
+    own_window.edit.transcribe.click()
 
     assert len(opened) == 1
     assert opened[0].parent() is own_window
@@ -2908,9 +3004,9 @@ def test_a_muted_channel_is_left_out_of_the_program(window) -> None:
 
 def test_the_channels_button_toggles_the_sidebar(window) -> None:
     window.channel_panel.setVisible(False)
-    window.edit.channels.click()
+    window.transport.channels.click()
     assert window.channel_panel.isVisible()
-    window.edit.channels.click()
+    window.transport.channels.click()
     assert not window.channel_panel.isVisible()
 
 

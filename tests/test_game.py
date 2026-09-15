@@ -4,12 +4,15 @@
 from __future__ import annotations
 
 import io
+import json
 import pathlib
 import zipfile
 
+import numpy as np
 import pytest
 
 from namioto.game import (
+    MODEL_FILES,
     OnnxBackend,
     asset_url,
     collect_notes,
@@ -23,6 +26,7 @@ from namioto.game import (
     merge_notes,
     model_dir,
     models_root,
+    parse_args,
     quantize_notes,
     resolve_model,
 )
@@ -38,6 +42,17 @@ def test_collect_notes_turns_boundaries_and_scores_into_notes() -> None:
         length=1.5,
     )
     assert notes == [(1.0, 1.5, 60.0)]  # the second note is absent, the third is past the chunk
+
+
+def test_collect_notes_keeps_python_numbers() -> None:
+    notes = collect_notes(
+        durations=np.array([0.5], dtype=np.float32),
+        scores=np.array([60.0], dtype=np.float32),
+        presence=np.array([True]),
+        offset=0.0,
+        length=1.0,
+    )
+    assert [type(value) for value in notes[0]] == [float, float, float]
 
 
 def test_merge_notes_sorts_and_drops_the_overlaps() -> None:
@@ -72,6 +87,35 @@ def test_the_grid_period_follows_a_slightly_wrong_tempo() -> None:
 def test_a_model_directory_without_a_config_is_refused(tmp_path) -> None:
     with pytest.raises(FileNotFoundError, match="config.json"):
         OnnxBackend(tmp_path)
+
+
+def test_an_unknown_provider_is_refused(tmp_path) -> None:
+    with pytest.raises(ValueError, match="unknown provider"):
+        OnnxBackend(tmp_path, provider="gpu")
+
+
+def test_the_backend_hands_its_provider_to_every_session(tmp_path, monkeypatch) -> None:
+    (tmp_path / "config.json").write_text(
+        json.dumps({"samplerate": 44100, "timestep": 0.01, "embedding_dim": 8}), encoding="utf8"
+    )
+    seen: list[list[str]] = []
+
+    class Session:
+        def __init__(self, path, options, providers):
+            seen.append(providers)
+
+    monkeypatch.setattr("namioto.game.ort.InferenceSession", Session)
+    backend = OnnxBackend(tmp_path, provider="cuda")
+
+    assert backend.providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
+    assert seen == [backend.providers] * len(MODEL_FILES)
+
+
+def test_the_cli_runs_on_the_cpu_unless_asked_otherwise() -> None:
+    assert parse_args(["song.wav"]).provider == "cpu"
+    assert parse_args(["song.wav", "--provider", "cuda"]).provider == "cuda"
+    with pytest.raises(SystemExit):
+        parse_args(["song.wav", "--provider", "gpu"])
 
 
 def test_extract_checks_the_language_against_the_config() -> None:

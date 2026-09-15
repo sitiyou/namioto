@@ -12,7 +12,7 @@ from collections.abc import Callable, Sequence
 from typing import Any
 
 from PyQt6.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices, QFont
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -25,6 +25,7 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QSpinBox,
     QTabWidget,
+    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -136,6 +137,26 @@ def combo_editor(entries: Sequence[tuple[str, Any]], value: Any):
     return widget, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
 
 
+def advanced_section(form: QFormLayout) -> QToolButton:
+    """The heading over a form of advanced rows, folded away until it is clicked."""
+    button = QToolButton()
+    button.setObjectName("sectionHeader")
+    button.setText("Advanced")
+    button.setCheckable(True)
+    button.setAutoRaise(True)
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+    button.setArrowType(Qt.ArrowType.RightArrow)
+
+    def reveal(open: bool) -> None:
+        button.setArrowType(Qt.ArrowType.DownArrow if open else Qt.ArrowType.RightArrow)
+        for row in range(form.rowCount()):
+            form.setRowVisible(row, open)
+
+    button.toggled.connect(reveal)
+    reveal(False)
+    return button
+
+
 def _pages() -> tuple[str, ...]:
     """The pages that still have a row: the rest of the spec is what the program remembers by itself."""
     return tuple(
@@ -212,15 +233,8 @@ class SettingsDialog(QDialog):
             ]
             if not rows:
                 continue
-            if advanced:
-                caption = QLabel("ADVANCED")
-                font = QFont()
-                font.setPixelSize(10)
-                font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.8)
-                caption.setFont(font)
-                layout.addWidget(caption)
             form = QFormLayout()
-            form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             for section, field in rows:
                 editor, read, write = self._editor(section.name, field)
                 editor.setMaximumWidth(EDITOR_WIDTH)
@@ -230,6 +244,8 @@ class SettingsDialog(QDialog):
                     label.setToolTip(field.tooltip)
                     editor.setToolTip(field.tooltip)
                 form.addRow(label, editor)
+            if advanced:
+                layout.addWidget(advanced_section(form))
             layout.addLayout(form)
         if page == "Analysis":
             layout.addWidget(self._analysis_hint(can_reanalyse))

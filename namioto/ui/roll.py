@@ -575,6 +575,30 @@ class PianoRollView(QGraphicsView):
             self.view_changed.emit()
         return True
 
+    def quantize_notes(self) -> bool:
+        """Put the starts and ends of the notes on the snap grid, so they sit on the current beats.
+
+        The selection when there is one and the whole roll otherwise; a locked channel is never
+        touched; a note that rounds away keeps one cell. The grid is a setting and this is the one
+        command that applies it, so both stay usable outside edit mode.
+        """
+        cell = self._cell_beats()
+        targets = [note for note in (self.selected_notes() or self.notes()) if not self._locked(note.channel)]
+        moved = False
+        with self._edit("Quantize notes"):
+            for note in targets:
+                start = self._snap_beats(note.start)
+                duration = max(self._snap_beats(note.end), start + cell) - start
+                if (start, duration) == (note.start, note.duration):
+                    continue
+                note.set_range(start, note.pitch)
+                note.set_duration(duration)
+                moved = True
+            if moved:
+                self.notes_changed.emit()
+                self.view_changed.emit()
+        return moved
+
     def set_spectrum(self, spectrum: NoteSpectrum | None) -> None:
         self.spectrum = SpectrumImage(spectrum) if spectrum is not None else None
         self._update_scene()

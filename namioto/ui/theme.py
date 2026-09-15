@@ -165,6 +165,10 @@ QToolButton[checkable="true"]:checked { background: %ACCENT_SOFT%; border: 1px s
 QToolButton:disabled { color: %DISABLED%; }
 QToolButton#textButton { padding: 1px 6px; }
 QToolButton:focus { outline: none; border: 1px solid %ACCENT%; }
+/* The advanced rows fold away under their own heading: bare, so the section reads as a heading, with
+   the disclosure arrow saying it opens. */
+QToolButton#sectionHeader { font-weight: 600; }
+QToolButton#sectionHeader:checked { background: transparent; border: 1px solid transparent; }
 QSlider::groove:horizontal { height: 4px; background: %GRID_LINE%; border-radius: 2px; }
 QSlider::sub-page:horizontal { background: %ACCENT%; border-radius: 2px; }
 QSlider::handle:horizontal {

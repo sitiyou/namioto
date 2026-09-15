@@ -39,7 +39,13 @@ import onnxruntime as ort
 GAME_VERSION = "1.0.3"
 GAME_RELEASE = f"v{GAME_VERSION}"
 MODEL_SIZES = ("small", "medium", "large")
-MODEL_FILES = ("encoder", "segmenter", "estimator", "dur2bd", "bd2dur")
+# the package also holds `dur2bd`, which the run has no use for: see `extract`
+MODEL_FILES = ("encoder", "segmenter", "estimator", "bd2dur")
+# `cuda` keeps the CPU in the list, so a machine whose CUDA provider cannot be set up still runs
+PROVIDERS = {
+    "cpu": ("CPUExecutionProvider",),
+    "cuda": ("CUDAExecutionProvider", "CPUExecutionProvider"),
+}
 SAMPLE_FORMATS = (".wav", ".flac", ".mp3", ".aac", ".ogg")
 Note = tuple[float, float, float]  # onset and offset in seconds, then the pitch
 
@@ -164,9 +170,12 @@ class Slicer:
 
 
 class OnnxBackend:
-    """The five ONNX modules, loaded once and driven through the pipeline they describe."""
+    """The ONNX modules the run needs, loaded once and driven through the pipeline they describe."""
 
-    def __init__(self, model_dir: pathlib.Path | str):
+    def __init__(self, model_dir: pathlib.Path | str, provider: str = "cpu"):
+        if provider not in PROVIDERS:
+            raise ValueError(f"unknown provider {provider!r}, expected one of {', '.join(PROVIDERS)}")
+        self.providers = list(PROVIDERS[provider])
         self.model_dir = pathlib.Path(model_dir)
         config_path = self.model_dir / "config.json"
         if not config_path.is_file():
@@ -188,7 +197,7 @@ class OnnxBackend:
         return ort.InferenceSession(
             str(self.model_dir / f"{name}.onnx"),
             self.session_options,
-            providers=["CPUExecutionProvider"],
+            providers=self.providers,
         )
 
     def _run(self, name, feeds):
@@ -198,10 +207,6 @@ class OnnxBackend:
     def encode(self, waveforms: np.ndarray, durations: np.ndarray):
         x_seg, x_est, mask_t = self._run("encoder", {"waveform": waveforms, "duration": durations})
         return x_seg, x_est, mask_t
-
-    def known_boundaries(self, durations, mask_t):
-        (boundaries,) = self._run("dur2bd", {"durations": durations, "maskT": mask_t})
-        return boundaries & mask_t
 
     def segment(self, x_seg, language, known_boundaries, prev_boundaries, t, mask_t, threshold, radius):
         feeds = {
@@ -238,7 +243,7 @@ def collect_notes(durations, scores, presence, offset, length) -> list[Note]:
         # the estimator answers for the notes it kept, so its two arrays are the short ones
         if oset - onset <= 0 or not valid:
             continue
-        notes.append((onset, oset, float(score)))
+        notes.append((float(onset), float(oset), float(score)))
     return notes
 
 
@@ -500,7 +505,10 @@ def extract(
             waveforms[index, : chunk["waveform"].shape[0]] = chunk["waveform"]
             durations[index] = chunk["waveform"].shape[0] / backend.sr
         x_seg, x_est, mask_t = backend.encode(waveforms, durations)
-        known = backend.known_boundaries(durations[:, None], mask_t)
+        # This program knows no region durations: `dur2bd` would drop the only one it is handed and
+        # answer "no known boundaries" (upstream `modules/functional.py:44`), by way of an empty
+        # reduction that ONNX Runtime's CUDA provider refuses to run. So the answer is written here.
+        known = np.zeros_like(mask_t)
         language_batch = np.full((len(batch),), language_id, dtype=np.int64)
         if backend.loop:
             boundaries = known
@@ -564,6 +572,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="model size to use, downloaded into the data directory when it is not there yet",
     )
     parser.add_argument("-l", "--language", help="language code from config.json, if the model has any")
+    parser.add_argument(
+        "--provider",
+        choices=tuple(PROVIDERS),
+        default="cpu",
+        help="where the models run: cuda needs ONNX Runtime's GPU build, CUDA 12 and cuDNN 9",
+    )
     parser.add_argument("--batch-size", type=int, default=4, help="chunks per inference batch")
     parser.add_argument("--seg-threshold", type=float, default=0.2, help="boundary decoding threshold")
     parser.add_argument("--seg-radius", type=float, default=0.02, help="boundary decoding radius, in seconds")
@@ -603,7 +617,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.audio is None:
         print(f"{args.size} model in {model_dir}")
         return 0
-    backend = OnnxBackend(model_dir)
+    backend = OnnxBackend(model_dir, provider=args.provider)
     notes = extract(
         backend,
         args.audio,

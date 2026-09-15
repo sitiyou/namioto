@@ -176,15 +176,15 @@ The window has three control bars, each split into captioned blocks of related c
 
 | Bar | Blocks |
 | --- | --- |
-| Transport | **Project** (open, save, export MIDI), **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout, auto page turn, overtone highlight), **Speed** (0.10x-2.00x in 5% steps, pitch unchanged, with a reset icon back to 1.00x), **Tempo** (BPM, the estimated tempo of the audio, and the latency in ms) |
-| Edit | **Tools** (edit mode, channel sidebar, pen, select, snap grid), **Division** (the metronome icon: checked, the grid follows the beats of the tempo map; unchecked, it follows seconds) |
+| Transport | **Project** (open, save, export MIDI), **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout, and the four display switches: auto page turn, overtone highlight, the channel sidebar, and the time division - the metronome icon checked means the time axis follows the beats of the tempo map, unchecked the seconds), **Speed** (0.10x-2.00x in 5% steps, pitch unchanged, with a reset icon back to 1.00x), **Tempo** (BPM, the estimated tempo of the audio, and the latency in ms) |
+| Edit | **Tools** (edit mode, pen, select, snap grid, quantize, the GAME transcription) |
 | Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window (the analysis parameters and the few options the bars do not hold) |
 
 **Volume** has a slider for each layer: the audio file is streamed at the level of the first one, and
 the second is the note playback - a scale factor for the built-in synth, and control change 7 (channel
 volume) for an external one, which does its own mixing.
 
-**Channels** are toggled by the layers icon in the tools: a sidebar with one card per MIDI channel.
+**Channels** are toggled by the layers icon among the playback switches: a sidebar with one card per MIDI channel.
 The notes of each channel are painted in its colour, and the card holds the name (double-click to
 rename), the GM instrument the channel plays, and the lock, show and mute switches. Clicking a card
 makes it the drawing channel; the context menu adds a channel, sets its volume or deletes it (the
@@ -196,7 +196,7 @@ the real GM program on the channel's own number.
 
 | Action | Input |
 | --- | --- |
-| Edit mode | The button in front of the tools: notes are drawn only while it is on (WaveTone keeps its graph to the spectrum outside note edit mode), and only then can they be drawn, moved, resized and selected; the spectrum behind them fades so that they stand out over it (WaveTone does the same), and picking the pen or the select tool turns the mode on as well - entering it starts on the pen, and the snap grid is only usable inside it. The window opens with it off, so a click in the roll moves the playhead until a tool is picked. Hovering marks the row under the mouse, and the piano key with it, in either mode; with **Overtone highlight** on, the overtones of that row - `f`, `2f`, `3f` and `4f` - are marked the same way, in either mode, as WaveTone does |
+| Edit mode | The button in front of the tools: notes are drawn only while it is on (WaveTone keeps its graph to the spectrum outside note edit mode), and only then can they be drawn, moved, resized and selected; the spectrum behind them fades so that they stand out over it (WaveTone does the same), and picking the pen or the select tool turns the mode on as well - entering it starts on the pen. The snap grid and the quantize button are the two that work in either mode: they set the grid and apply it, and the notes they move are drawn once the mode is on. The window opens with it off, so a click in the roll moves the playhead until a tool is picked. Hovering marks the row under the mouse, and the piano key with it, in either mode; with **Overtone highlight** on, the overtones of that row - `f`, `2f`, `3f` and `4f` - are marked the same way, in either mode, as WaveTone does |
 | Draw note | Pen tool: left drag on the empty grid. Horizontal movement sets the length, vertical movement sets the pitch, so the note follows the pointer |
 | Move note(s) | Left drag a note |
 | Resize note | Left drag either edge of a note, or Shift + left drag anywhere on it: its left half moves the start, its right half the end |
@@ -207,6 +207,7 @@ the real GM program on the channel's own number.
 | Delete | Right click a note, or Delete / Backspace for the selection |
 | Copy notes | `Ctrl+C` takes the selected notes as one block, timed from their earliest note |
 | Paste notes | `Ctrl+V` drops that block at the playhead, its first note on the snap grid and the spacing between them quantised to the same cell, and selects what it pasted |
+| Quantize notes | The grid icon beside the Snap combo, in edit mode: the starts and ends of the notes land on the snap grid, so they sit on the beats of the current tempo. The selection when there is one, the whole roll otherwise; a locked channel is never touched, and a note shorter than one cell is left one cell long |
 | Cancel a drag | Escape |
 | Play or pause | `Space` or the play/pause button |
 | Open a project | `Ctrl+O`, or `Open` in the Project block |
@@ -242,12 +243,13 @@ only) make it a poor fit for stems, where beat tracking wins.
 ```bash
 uv run namioto-game song.wav --language zh          # fetches the small model on first use
 uv run namioto-game song.wav --size medium          # one of small, medium, large
+uv run namioto-game song.wav --provider cuda        # on an NVIDIA GPU, with ONNX Runtime's GPU build
 uv run namioto-game song.wav --quantize 4 --tempo 93 --midi out.mid
 uv run namioto-game                                 # only fetch a model, do not transcribe
 ```
 
-The editor can do the same over the file it has open: the wand button in the transport bar opens a
-window with GAME's options (model size, language, the quantisation grid and its inference
+The editor can do the same over the file it has open: the wand button in the tools opens a
+window with GAME's options (model size, backend, language, the quantisation grid and its inference
 parameters), runs the model in a process of its own so a crash cannot take the editor down, and
 watches it there with a progress bar and a log. The notes arrive on a channel of their own, which
 the window's **Target** can also point at the active channel or at the whole roll (replacing what is
@@ -267,7 +269,11 @@ is.
 | large | 362 MB | 7.1 s, 47 notes |
 
 The notes come back as floating-point pitches with the onsets the model found; `--quantize` snaps
-them to a beat grid first, and `--midi` writes them out. The code is MIT (Team OpenVPI, like GAME
+them to a beat grid first, and `--midi` writes them out. The **Backend** option (the dialog's own
+field, `--provider` on the command line) picks where the models run: `cpu` by default, or `cuda` for
+an NVIDIA GPU, which needs ONNX Runtime's GPU build together with CUDA 12 and cuDNN 9. A CUDA
+provider that cannot be created is not an error - ONNX Runtime says so on stderr and the run carries
+on the CPU. The code is MIT (Team OpenVPI, like GAME
 itself); the models are CC BY-NC-SA 4.0, so anything produced with them is non-commercial, and they
 are downloaded rather than redistributed here - see NOTICE.
 
@@ -302,6 +308,6 @@ tints the overtones of that row - `f`, `2f`, `3f` and `4f` - while editing or no
 name and frequency next to the status bar; the notes are drawn only while edit mode is on, so outside it
 the roll is a plain view of the spectrum.
 
-The **Snap** combo sets the quantisation applied when drawing, moving, and resizing notes. The **Division** icon changes how the time axis is divided — into
+The **Snap** combo sets the quantisation applied when drawing, moving, and resizing notes; the grid icon beside it quantises the notes already on the roll onto that same grid, which is how an imported MIDI or a transcription made with another tempo is brought onto the beats here. The **Division** icon changes how the time axis is divided — into
 beats and bars of the tempo map, or into a 1-2-5 ladder of seconds — and nothing else: the ruler
 shows the clock above the measure numbers under either of them.

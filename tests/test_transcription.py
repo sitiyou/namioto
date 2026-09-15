@@ -36,12 +36,16 @@ def fake_game(monkeypatch):
         progress(2, 2)
         return [(0.0, 0.5, 60.0), (0.5, 1.0, 62.0)]
 
-    def quantized(notes, tempo, subdivisions, fit_tempo=False):
-        calls["quantized"] = {"tempo": tempo, "subdivisions": subdivisions, "fit_tempo": fit_tempo}
+    def quantized(notes, tempo, subdivisions):
+        calls["quantized"] = {"tempo": tempo, "subdivisions": subdivisions}
         return [(0.0, 0.5, 60.0)], 0.25, 0.0
 
+    def backend(model, provider="cpu"):
+        calls["backend"] = provider
+        return object()
+
     monkeypatch.setattr(game, "resolve_model", resolve_model)
-    monkeypatch.setattr(game, "OnnxBackend", lambda model: object())
+    monkeypatch.setattr(game, "OnnxBackend", backend)
     monkeypatch.setattr(game, "extract", extract)
     monkeypatch.setattr(game, "quantized", quantized)
     return calls
@@ -58,6 +62,10 @@ def drain(channel) -> list[tuple]:
 
 def test_the_model_sizes_are_the_ones_game_publishes() -> None:
     assert transcription.GAME_SIZES == game.MODEL_SIZES
+
+
+def test_the_providers_are_the_ones_game_supports() -> None:
+    assert tuple(game.PROVIDERS) == transcription.GAME_PROVIDERS
 
 
 def test_every_parameter_is_a_usable_field() -> None:
@@ -160,11 +168,25 @@ def test_transcribe_reports_progress_and_the_result(fake_game) -> None:
 
 def test_transcribe_quantises_when_asked(fake_game) -> None:
     channel = queue.Queue()
-    transcription.transcribe(AUDIO, {"quantize": 4, "fit_tempo": True}, 93.0, channel)
+    transcription.transcribe(AUDIO, {"quantize": 4}, 93.0, channel)
     messages = drain(channel)
 
-    assert fake_game["quantized"] == {"tempo": 93.0, "subdivisions": 4, "fit_tempo": True}
+    assert fake_game["quantized"] == {"tempo": 93.0, "subdivisions": 4}
     assert messages[-1] == ("done", [(0.0, 0.5, 60.0)])
+
+
+def test_transcribe_runs_on_the_provider_it_was_given(fake_game) -> None:
+    channel = queue.Queue()
+    transcription.transcribe(AUDIO, {"provider": "cuda"}, 120.0, channel)
+
+    assert fake_game["backend"] == "cuda"
+
+
+def test_transcribe_falls_back_to_the_cpu_for_a_provider_nobody_offers(fake_game) -> None:
+    channel = queue.Queue()
+    transcription.transcribe(AUDIO, {"provider": "gpu"}, 120.0, channel)
+
+    assert fake_game["backend"] == "cpu"
 
 
 def test_transcribe_reports_a_failure_instead_of_raising(monkeypatch) -> None:

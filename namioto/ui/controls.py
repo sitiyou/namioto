@@ -32,11 +32,6 @@ ICON_SIZE = 17
 BUTTON_HEIGHT = 24
 FIELD_HEIGHT = 24
 
-# Every block sits in one of these columns and every row is laid out on them, so the blocks line up
-# down the window. They are widths, not weights: nothing stretches, and the room a wider window has
-# left over stays to the right of the last block.
-COLUMN_WIDTH = (110, 175, 192, 203, 188, 231)
-
 
 class Cluster(QWidget):
     """A block of related controls, the WaveTone grouping, with a rule where kinds of control meet."""
@@ -205,17 +200,6 @@ def field_label(caption: str) -> QLabel:
     return QLabel(caption)
 
 
-def icon_label(kind: str, tooltip: str = "") -> QLabel:
-    """A glyph standing where a word would, for what an icon says better."""
-    label = QLabel()
-    ratio = label.devicePixelRatioF()
-    pixmap = icons.icon(kind).pixmap(round(ICON_SIZE * ratio), round(ICON_SIZE * ratio))
-    pixmap.setDevicePixelRatio(ratio)
-    label.setPixmap(pixmap)
-    label.setToolTip(tooltip)
-    return label
-
-
 def icon_button(kind: str, tooltip: str, checkable: bool = False) -> QToolButton:
     button = QToolButton()
     button.setIcon(icons.icon(kind))
@@ -375,7 +359,13 @@ class _Group(QObject):
 
 
 class ControlArea(QWidget):
-    """Every block of every group, on one grid."""
+    """Every block of every group, on one grid whose columns are as wide as what stands on them.
+
+    The columns are what makes the blocks line up down the window: every block stands on them, so
+    two blocks that share a column start and end on the same lines. Nothing stretches - the room a
+    wider window has left over stays to the right of the last block - and a block narrower than the
+    columns it covers leaves that room inside itself rather than pushing the next block along.
+    """
 
     def __init__(self, groups: Sequence[_Group], parent=None):
         super().__init__(parent)
@@ -384,16 +374,38 @@ class ControlArea(QWidget):
         self.grid.setContentsMargins(6, 3, 6, 3)
         self.grid.setHorizontalSpacing(6)
         self.grid.setVerticalSpacing(3)
-        for column, width in enumerate(COLUMN_WIDTH):
+        placements = [placement for group in groups for placement in group.placements()]
+        widths = self._column_widths(placements)
+        for column, width in enumerate(widths):
             self.grid.setColumnMinimumWidth(column, width)
-        self.grid.setColumnStretch(len(COLUMN_WIDTH), 1)  # the room left over stays at the right
-        for group in groups:
-            for cluster, row, column, span, rows in group.placements():
-                self.grid.addWidget(cluster, row, column, rows, span)
+        self.grid.setColumnStretch(len(widths), 1)  # the room left over stays at the right
+        for cluster, row, column, span, rows in placements:
+            self.grid.addWidget(cluster, row, column, rows, span)
+
+    def _column_widths(self, placements: Sequence[tuple]) -> list[int]:
+        """What every column needs, so that no block is wider than the columns it stands on.
+
+        The blocks of one column settle their own column first; a block spanning more than one then
+        claims what is left of its width from the narrowest column it covers, since a column that
+        already holds a block of its own is as wide as that block needs. A shared column can still
+        be wider than a block that spans it - the block under it needs that room - and all a block
+        can do about it is leave the difference at its right.
+        """
+        columns = max((column + span for _cluster, _row, column, span, _rows in placements), default=0)
+        widths = [0] * columns
+        spacing = self.grid.horizontalSpacing()
+        for cluster, _row, column, span, _rows in sorted(placements, key=lambda placement: placement[3]):
+            covered = sum(widths[column : column + span]) + spacing * (span - 1)
+            if (missing := cluster.sizeHint().width() - covered) > 0:
+                # the narrowest column of the span takes it: the wider ones carry a block of their
+                # own, and widening one of those would leave that block's room inside its own card
+                target = min(range(column, column + span), key=lambda index: widths[index])
+                widths[target] += missing
+        return widths
 
 
 class TransportBar(_Group):
-    """Playback transport, position, playback speed, tempo and latency."""
+    """Playback transport, position, the view toggles, playback speed, tempo and latency."""
 
     rewind_requested = pyqtSignal()
     play_from_start_requested = pyqtSignal()
@@ -403,9 +415,9 @@ class TransportBar(_Group):
     open_requested = pyqtSignal()
     save_requested = pyqtSignal()
     export_midi_requested = pyqtSignal()
-    transcribe_requested = pyqtSignal()
     auto_page_toggled = pyqtSignal(bool)
     overtone_toggled = pyqtSignal(bool)
+    division_changed = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -413,12 +425,9 @@ class TransportBar(_Group):
         self.open = icon_button("open", "Open a project (.nto) — Ctrl+O")
         self.save = icon_button("save", "Save the project — Ctrl+S, with Shift for Save As")
         self.export_midi = icon_button("export", "Export the notes as a MIDI file — every channel")
-        self.transcribe = icon_button("transcribe", "Transcribe the singing voice of the loaded audio with GAME")
-        self.transcribe.setEnabled(False)
         self.open.clicked.connect(self.open_requested)
         self.save.clicked.connect(self.save_requested)
         self.export_midi.clicked.connect(self.export_midi_requested)
-        self.transcribe.clicked.connect(self.transcribe_requested)
         self.rewind = icon_button("rewind", "Rewind to the beginning")
         self.stop = icon_button("stop", "Stop")
         self.play_from_start = icon_button("playstart", "Play from the beginning")
@@ -481,12 +490,21 @@ class TransportBar(_Group):
         )
         self.auto_page.toggled.connect(self.auto_page_toggled)
         self.overtone.toggled.connect(self.overtone_toggled)
+        self.channels = icon_button(
+            "channels", "Channels: colours, mute and instruments, one card per channel", checkable=True
+        )
+        self.division = icon_button(
+            "beat",
+            "Time division: checked follows the beats of the tempo map, unchecked follows seconds",
+            checkable=True,
+        )
+        self.division.setChecked(True)  # beats by default; a click flips it to seconds
+        self.division.toggled.connect(lambda checked: self.division_changed.emit("beats" if checked else "seconds"))
 
         project = Cluster("project")
         project.add(self.open)
         project.add(self.save)
         project.add(self.export_midi)
-        project.add(self.transcribe)
         project.add(self.settings_button)
 
         playback = Cluster("playback")
@@ -497,6 +515,8 @@ class TransportBar(_Group):
         playback.add(separator())
         playback.add(self.auto_page)
         playback.add(self.overtone)
+        playback.add(self.channels)
+        playback.add(self.division)
 
         bpm = Cluster("bpm")
         bpm.add(self.bpm)
@@ -526,11 +546,12 @@ class TransportBar(_Group):
 
 
 class EditBar(_Group):
-    """Tools, time-axis division and snapping. The mode and the tool are one value, and this bar is
-    only its input and its display: every button and the snap field are rendered from it."""
+    """Tools, snapping and the transcription button. The mode and the tool are one value, and this
+    bar is only its input and its display."""
 
     interaction_changed = pyqtSignal(object)
-    division_changed = pyqtSignal(str)
+    quantize_requested = pyqtSignal()
+    transcribe_requested = pyqtSignal()
 
     def __init__(self, snap_choices, parent=None):
         super().__init__(parent)
@@ -542,9 +563,6 @@ class EditBar(_Group):
             checkable=True,
         )
         self.mode.clicked.connect(self._toggle_mode)
-        self.channels = icon_button(
-            "channels", "Channels: colours, mute and instruments, one card per channel", checkable=True
-        )
         self.pen = icon_button("pen", "Pen: click or drag an empty row to draw a note", checkable=True)
         self.select = icon_button(
             "select", "Select: drag a box, ctrl-click a note to add, drag a note to move", checkable=True
@@ -557,33 +575,31 @@ class EditBar(_Group):
         self.select.clicked.connect(lambda: self._pick_tool(Tool.SELECT))
 
         self.snap = QComboBox()
+        glyph = icons.icon("snap")
         for label, beats in snap_choices:
-            self.snap.addItem(label, beats)
+            self.snap.addItem(glyph, label, beats)
         self.snap.setCurrentIndex(self.snap.findText("1/8"))
-        self.snap.setToolTip("Snap grid for the pen tool")
+        self.snap.setToolTip("Snap grid for the pen tool: the note the grid is divided by")
         self.snap.setFixedWidth(self.snap.sizeHint().width())
         self.snap.setFixedHeight(FIELD_HEIGHT)
+
+        self.quantize = icon_button(
+            "quantize",
+            "Quantize: put the starts and ends of the notes on the snap grid, the selection if there is one",
+        )
+        self.quantize.clicked.connect(self.quantize_requested)
+        self.transcribe = icon_button("transcribe", "Transcribe the singing voice of the loaded audio with GAME")
+        self.transcribe.setEnabled(False)
+        self.transcribe.clicked.connect(self.transcribe_requested)
 
         tools = Cluster("tools")
         tools.add(self.mode)
         tools.add(self.pen)
         tools.add(self.select)
         tools.add(separator())
-        tools.add(icon_label("snap", "Snap grid for the pen tool: the note the grid is divided by"))
         tools.add(self.snap)
-
-        self.division = icon_button(
-            "beat",
-            "Time division: checked follows the beats of the tempo map, unchecked follows seconds",
-            checkable=True,
-        )
-        self.division.setChecked(True)  # beats by default; a click flips it to seconds
-        self.division.toggled.connect(lambda checked: self.division_changed.emit("beats" if checked else "seconds"))
-
-        # the editing tools stay one group; the channel sidebar and the time division sit beside them
-        tools.add(separator())
-        tools.add(self.channels)
-        tools.add(self.division)
+        tools.add(self.quantize)
+        tools.add(self.transcribe)
 
         self.place(tools, 1, 0, 2)
         self._render()
@@ -597,7 +613,6 @@ class EditBar(_Group):
     def _render(self) -> None:
         editing = self._interaction.editing
         self.mode.setChecked(editing)
-        self.snap.setEnabled(editing)
         if not editing:
             self.tools.setExclusive(False)  # an exclusive group keeps its last button checked
             self.pen.setChecked(False)

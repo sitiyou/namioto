@@ -22,6 +22,10 @@ from namioto import settings as store
 from namioto.settings import Field
 
 GAME_SIZES = ("small", "medium", "large")
+GAME_PROVIDERS = ("cpu", "cuda")
+# the codes GAME's own config.json maps for the segmenter; 0, and so the empty code, is universal
+LANGUAGE_CODES = ("", "en", "ja", "yue", "zh")
+LANGUAGE_LABELS = ("Universal", "English", "Japanese", "Cantonese", "Mandarin")
 TARGETS = ("new", "active", "replace")
 PARAMETER_FILE = "transcription.json"
 STORE_VERSION = 1
@@ -36,11 +40,22 @@ PARAMETERS: tuple[Field, ...] = (
         choices=GAME_SIZES,
     ),
     Field(
+        "provider",
+        "choice",
+        "cpu",
+        "Backend",
+        "Where the models run; CUDA falls back to the CPU when it cannot be set up",
+        choices=GAME_PROVIDERS,
+        labels=tuple(name.upper() for name in GAME_PROVIDERS),
+    ),
+    Field(
         "language",
-        "text",
+        "choice",
         "",
         "Language",
-        "Language code the model knows (zh, ja, ...); empty uses the model's own default",
+        "Singing language among the ones the model knows; Universal leaves it to the model",
+        choices=LANGUAGE_CODES,
+        labels=LANGUAGE_LABELS,
     ),
     Field(
         "quantize",
@@ -51,7 +66,6 @@ PARAMETERS: tuple[Field, ...] = (
         choices=(0, 1, 2, 4, 8, 16, 32),
         labels=("Off", "1/4", "1/8", "1/16", "1/32", "1/64", "1/128"),
     ),
-    Field("fit_tempo", "bool", False, "Fit tempo", "Refine the grid period from the detected onsets"),
     Field(
         "target",
         "choice",
@@ -256,7 +270,7 @@ def transcribe(path: str, parameters: dict, tempo: float, queue) -> None:
             progress=lambda done, total: queue.put(("progress", "download", done, total)),
         )
         queue.put(("log", f"model at {model}"))
-        backend = game.OnnxBackend(model)
+        backend = game.OnnxBackend(model, provider=values["provider"])
         notes = game.extract(
             backend,
             path,
@@ -271,7 +285,7 @@ def transcribe(path: str, parameters: dict, tempo: float, queue) -> None:
             progress=lambda done, total: queue.put(("progress", "parts", done, total)),
         )
         if values["quantize"]:
-            notes, unit, phase = game.quantized(notes, tempo, values["quantize"], fit_tempo=values["fit_tempo"])
+            notes, unit, phase = game.quantized(notes, tempo, values["quantize"])
             queue.put(("log", f"grid {unit * 1000:.1f} ms, phase {phase * 1000:.1f} ms"))
         queue.put(("log", f"{len(notes)} notes"))
         queue.put(("done", notes))

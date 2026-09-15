@@ -14,7 +14,6 @@ import shutil
 from collections.abc import Callable
 
 from PyQt6.QtCore import Qt, QTimer
-from PyQt6.QtGui import QFont
 from PyQt6.QtWidgets import (
     QDialog,
     QFormLayout,
@@ -30,7 +29,7 @@ from PyQt6.QtWidgets import (
 
 from namioto import transcription
 from namioto.settings import Field
-from namioto.ui.settings_dialog import field_editor
+from namioto.ui.settings_dialog import advanced_section, field_editor
 
 POLL_MS = 100
 FIELD_WIDTH = 300
@@ -117,11 +116,12 @@ class TranscriptionDialog(QDialog):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         for advanced in (False, True):
-            if advanced:
-                layout.addWidget(self._advanced_caption())
+            items = [item for item in transcription.PARAMETERS if item.advanced is advanced]
+            if not items:
+                continue
             form = QFormLayout()
-            form.setLabelAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-            for item in (field for field in transcription.PARAMETERS if field.advanced is advanced):
+            form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+            for item in items:
                 editor, read, write = field_editor(self._parameters[item.name], item)
                 editor.setMaximumWidth(FIELD_WIDTH)
                 label = QLabel(item.caption)
@@ -130,17 +130,11 @@ class TranscriptionDialog(QDialog):
                     editor.setToolTip(item.tooltip)
                 form.addRow(label, editor)
                 self._fields.append((item, read, write))
+            if advanced:
+                layout.addWidget(advanced_section(form))
             layout.addLayout(form)
         layout.addStretch(1)
         return widget
-
-    def _advanced_caption(self) -> QLabel:
-        caption = QLabel("ADVANCED")
-        font = QFont()
-        font.setPixelSize(10)
-        font.setLetterSpacing(QFont.SpacingType.AbsoluteSpacing, 0.8)
-        caption.setFont(font)
-        return caption
 
     def _start(self) -> None:
         self._parameters = self.parameters()

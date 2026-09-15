@@ -189,7 +189,7 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central)
 
         self.edit.snap.setCurrentIndex(max(0, self.edit.snap.findData(editor.snap)))
-        self.edit.division.setChecked(editor.division == "beats")
+        self.transport.division.setChecked(editor.division == "beats")
         self.transport.auto_page.setChecked(editor.auto_page)
         self.transport.overtone.setChecked(editor.overtone_highlight)
         self.view.snap = self.edit.snap.currentData()
@@ -217,7 +217,7 @@ class MainWindow(QMainWindow):
         self.transport.open_requested.connect(self._on_open)
         self.transport.save_requested.connect(self._on_save)
         self.transport.export_midi_requested.connect(self._on_export_midi)
-        self.transport.transcribe_requested.connect(self._open_transcription)
+        self.edit.transcribe_requested.connect(self._open_transcription)
         self.player.finished.connect(self._on_playback_finished)
         self.song.finished.connect(self._on_playback_finished)
         self.view.seek_requested.connect(self._seek)
@@ -234,7 +234,8 @@ class MainWindow(QMainWindow):
         self.view.notes_changed.connect(self._mark_dirty)
         self.view.channels_changed.connect(self._on_channels_changed)
         self.view.active_channel_changed.connect(self._on_active_channel_changed)
-        self.edit.channels.toggled.connect(self.channel_panel.setVisible)
+        self.transport.channels.toggled.connect(self.channel_panel.setVisible)
+        self.edit.quantize_requested.connect(self.view.quantize_notes)
         self.transport.bpm.valueChanged.connect(self._mark_dirty)
         self.play_shortcut = QShortcut(QKeySequence("Space"), self)
         self.play_shortcut.activated.connect(self._toggle_play)
@@ -377,7 +378,7 @@ class MainWindow(QMainWindow):
                 "division",
                 self._division_value,
                 self._set_division,
-                self.edit.division_changed,
+                self.transport.division_changed,
                 self._on_division_changed,
             ),
             _Binding(
@@ -404,10 +405,10 @@ class MainWindow(QMainWindow):
         self.edit.snap.setCurrentIndex(max(0, self.edit.snap.findData(value)))
 
     def _division_value(self) -> str:
-        return "beats" if self.edit.division.isChecked() else "seconds"
+        return "beats" if self.transport.division.isChecked() else "seconds"
 
     def _set_division(self, value: str) -> None:
-        self.edit.division.setChecked(value == "beats")
+        self.transport.division.setChecked(value == "beats")
 
     def _binding_changed(self, binding: _Binding, *_args) -> None:
         """A bar value the user moved: it reaches the roll, and it is what the program remembers."""
@@ -810,7 +811,7 @@ class MainWindow(QMainWindow):
         self.song.unload()
         self.player.stop()
         self.transport.detect.setEnabled(False)
-        self.transport.transcribe.setEnabled(False)
+        self.edit.transcribe.setEnabled(False)
         self.transport.suggestion.hide()
         self._show_position()
 
@@ -846,7 +847,7 @@ class MainWindow(QMainWindow):
             self.transport.bpm.setValue(store.FIELD_SPECS[("tempo", "bpm")].default)
             self.transport.latency.setValue(store.FIELD_SPECS[("playback", "latency_ms")].default)
         self.audio_path = path
-        self.transport.transcribe.setEnabled(True)
+        self.edit.transcribe.setEnabled(True)
         self._mark_dirty()
         store.set_value(self.settings, "paths", "last_audio_dir", str(Path(path).parent))
         self.settings_store.touch()
