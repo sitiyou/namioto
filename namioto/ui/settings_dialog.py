@@ -81,6 +81,8 @@ def _read(widget: QWidget) -> Any:
         return widget.value()
     if isinstance(widget, QSpinBox):
         return widget.value()
+    if isinstance(widget, QLineEdit):
+        return widget.text()
     if isinstance(widget, QComboBox):
         return widget.currentData()
     raise TypeError(f"no way to read a {type(widget).__name__}")
@@ -91,10 +93,47 @@ def _write(widget: QWidget, value: Any) -> None:
         widget.setChecked(bool(value))
     elif isinstance(widget, (QDoubleSpinBox, QSpinBox)):
         widget.setValue(value)
+    elif isinstance(widget, QLineEdit):
+        widget.setText(str(value))
     elif isinstance(widget, QComboBox):
         widget.setCurrentIndex(max(0, widget.findData(value)))
     else:
         raise TypeError(f"no way to fill a {type(widget).__name__}")
+
+
+def field_editor(value: Any, field: Field) -> tuple[QWidget, Callable[[], Any], Callable[[Any], None]]:
+    """The widget one setting is edited with, plus how to read it back and how to fill it in."""
+    if field.kind == "bool":
+        widget = QCheckBox()
+    elif field.kind == "choice":
+        labels = field.labels or tuple(str(choice) for choice in field.choices)
+        return combo_editor(list(zip(labels, field.choices, strict=True)), value)
+    elif field.kind == "int":
+        widget = QSpinBox()
+        widget.setRange(int(field.low), int(field.high))
+        widget.setSingleStep(max(1, int(field.step) or 1))
+        widget.setSuffix(field.suffix)
+    elif field.kind == "float":
+        widget = QDoubleSpinBox()
+        widget.setRange(field.low, field.high)
+        widget.setDecimals(field.decimals)
+        widget.setSingleStep(field.step or 0.1)
+        widget.setSuffix(field.suffix)
+        widget.setKeyboardTracking(False)
+    elif field.kind == "text":
+        widget = QLineEdit()
+    else:
+        raise TypeError(f"no editor for a {field.kind} field")
+    _write(widget, value)
+    return widget, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
+
+
+def combo_editor(entries: Sequence[tuple[str, Any]], value: Any):
+    widget = QComboBox()
+    for caption, data in entries:
+        widget.addItem(caption, data)
+    _write(widget, value)
+    return widget, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
 
 
 def _pages() -> tuple[str, ...]:
@@ -226,32 +265,4 @@ class SettingsDialog(QDialog):
         return widget
 
     def _editor(self, section: str, field: Field) -> tuple[QWidget, Callable[[], Any], Callable[[Any], None]]:
-        value = store.get_value(self._settings, section, field.name)
-        if field.kind == "bool":
-            widget = QCheckBox()
-        elif field.kind == "choice":
-            labels = field.labels or tuple(str(choice) for choice in field.choices)
-            return self._combo(list(zip(labels, field.choices, strict=True)), value)
-        elif field.kind == "int":
-            widget = QSpinBox()
-            widget.setRange(int(field.low), int(field.high))
-            widget.setSingleStep(max(1, int(field.step) or 1))
-            widget.setSuffix(field.suffix)
-        elif field.kind == "float":
-            widget = QDoubleSpinBox()
-            widget.setRange(field.low, field.high)
-            widget.setDecimals(field.decimals)
-            widget.setSingleStep(field.step or 0.1)
-            widget.setSuffix(field.suffix)
-            widget.setKeyboardTracking(False)
-        else:
-            raise TypeError(f"no editor for a {field.kind} field")
-        _write(widget, value)
-        return widget, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
-
-    def _combo(self, entries: Sequence[tuple[str, Any]], value: Any):
-        widget = QComboBox()
-        for caption, data in entries:
-            widget.addItem(caption, data)
-        _write(widget, value)
-        return widget, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
+        return field_editor(store.get_value(self._settings, section, field.name), field)

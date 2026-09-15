@@ -576,6 +576,8 @@ def coerce(spec: Field, value: Any) -> Any:
         number = min(spec.high, max(spec.low, float(value)))
         number = round(number / spec.step) * spec.step if spec.step else number
         return int(round(number)) if spec.kind == "int" else round(number, spec.decimals)
+    if value is None:  # a null is a missing text, not the word "None"
+        return spec.default
     text = str(value).strip()[:TEXT_LIMIT]
     return text
 

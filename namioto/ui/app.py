@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import multiprocessing
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -43,6 +44,7 @@ from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, Timeline
 from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
 from namioto.ui.song import SongPlayer, load_song
 from namioto.ui.spectrogram import SpectrumLoader
+from namioto.ui.transcription_dialog import TranscriptionDialog
 
 POSITION_INTERVAL_MS = 40
 SPEED_SETTLE_MS = 100
@@ -227,6 +229,7 @@ class MainWindow(QMainWindow):
         self.transport.open_requested.connect(self._on_open)
         self.transport.save_requested.connect(self._on_save)
         self.transport.export_midi_requested.connect(self._on_export_midi)
+        self.transport.transcribe_requested.connect(self._open_transcription)
         self.player.finished.connect(self._on_playback_finished)
         self.song.finished.connect(self._on_playback_finished)
         self.view.seek_requested.connect(self._seek)
@@ -769,6 +772,40 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Exported {Path(path).name} — {len(notes)} notes")
         return True
 
+    def _open_transcription(self) -> None:
+        """Ask GAME for the singing voice's notes, over the audio the session is already listening to."""
+        if self.audio_path is None:
+            return
+        dialog = TranscriptionDialog(self.audio_path, self.transport.bpm.value(), self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self._adopt_transcription(dialog.notes(), dialog.target())
+
+    def _adopt_transcription(self, notes, target: str) -> None:
+        """Put a run's notes in the roll, on a channel of their own unless the dialog says otherwise."""
+        if not notes:
+            self.statusBar().showMessage("GAME found no notes in the loaded audio")
+            return
+        beats = self.view.seconds_per_beat
+        arriving = [
+            (round(pitch), max(0.0, onset) / beats, max(0.0, offset - onset) / beats) for onset, offset, pitch in notes
+        ]
+        channels = list(self.view.channels)
+        number = self.view.active_channel
+        kept = (
+            []
+            if target == "replace"
+            else [(note.pitch, note.start, note.duration, note.channel) for note in self.view.notes()]
+        )
+        if target == "new":
+            free = free_channel(channels)
+            if free is None:
+                self.statusBar().showMessage("All 16 channels are in use; the notes went to the active channel")
+            else:
+                number = free
+                channels.append(Channel(name="GAME", channel=number, program=53))
+        self.view.replace(channels, kept + [(*note, number) for note in arriving], "Transcribe with GAME")
+        self.statusBar().showMessage(f"GAME found {len(arriving)} notes on channel {number + 1}")
+
     def _open_audio(self, target: Path | None) -> str:
         """Load the audio a project names, or say why there is none: its notes are worth having either way."""
         if target is not None and target.exists():
@@ -785,6 +822,7 @@ class MainWindow(QMainWindow):
         self.song.unload()
         self.player.stop()
         self.transport.detect.setEnabled(False)
+        self.transport.transcribe.setEnabled(False)
         self.transport.suggestion.hide()
         self._show_position()
 
@@ -820,6 +858,7 @@ class MainWindow(QMainWindow):
             self.transport.bpm.setValue(store.FIELD_SPECS[("tempo", "bpm")].default)
             self.transport.latency.setValue(store.FIELD_SPECS[("playback", "latency_ms")].default)
         self.audio_path = path
+        self.transport.transcribe.setEnabled(True)
         self._mark_dirty()
         store.set_value(self.settings, "paths", "last_audio_dir", str(Path(path).parent))
         self.settings_store.touch()
@@ -1055,6 +1094,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main() -> int:
+    multiprocessing.freeze_support()  # a frozen build has to hand the child back the same bootstrap
     args = parse_args()
     app = QApplication(sys.argv)
     theme.apply(app)

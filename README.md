@@ -246,6 +246,14 @@ uv run namioto-game song.wav --quantize 4 --tempo 93 --midi out.mid
 uv run namioto-game                                 # only fetch a model, do not transcribe
 ```
 
+The editor can do the same over the file it has open: the wand button in the transport bar opens a
+window with GAME's options (model size, language, the quantisation grid and its inference
+parameters), runs the model in a process of its own so a crash cannot take the editor down, and
+watches it there with a progress bar and a log. The notes arrive on a channel of their own, which
+the window's **Target** can also point at the active channel or at the whole roll (replacing what is
+there). The options are remembered for the next run, and so is the result: asking for exactly the
+same run again offers the saved notes instead of loading the model a second time.
+
 GAME is a PyTorch project and ships its models separately, in three sizes, so they are not packaged
 here: `--size` picks one and it is downloaded from GAME's GitHub release into the data directory
 (`~/.local/share/namioto/models/game/<size>`, via `platformdirs`), unpacked, and reused from then

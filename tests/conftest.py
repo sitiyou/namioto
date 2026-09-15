@@ -27,6 +27,16 @@ def isolated_settings(tmp_path_factory):
 
 
 @pytest.fixture(scope="session", autouse=True)
+def isolated_directories(tmp_path_factory):
+    """No test reads the machine's config or data directory: GAME's models and the transcription
+    store live there, and a suite that touched them would use - and rewrite - the developer's own."""
+    root = tmp_path_factory.mktemp("xdg")
+    os.environ["XDG_CONFIG_HOME"] = str(root / "config")
+    os.environ["XDG_DATA_HOME"] = str(root / "data")
+    return root
+
+
+@pytest.fixture(scope="session", autouse=True)
 def no_blocking_dialogs():
     """A modal dialog nothing answers hangs the whole run, so one that slips through fails instead.
 

@@ -147,6 +147,9 @@ def test_text_is_trimmed_and_bounded(settings_file) -> None:
     loaded = store.load()
     assert len(store.get_value(loaded, "paths", "last_audio_dir")) == store.TEXT_LIMIT
 
+    settings_file.write_text(json.dumps({"paths": {"last_audio_dir": None}}))
+    assert store.get_value(store.load(), "paths", "last_audio_dir") == ""
+
 
 def test_saving_leaves_nothing_half_written(settings_file) -> None:
     store.save(store.Settings())
