@@ -163,7 +163,8 @@ QToolButton[checkable="true"], QToolButton#playbackButton {
     background: transparent;
     border: 1px solid transparent;
 }
-QToolButton:checked { background: %ACCENT_SOFT%; border: 1px solid %ACCENT%; }
+QToolButton[checkable="true"]:hover, QToolButton#playbackButton:hover { background: %BUTTON_HOVER%; }
+QToolButton[checkable="true"]:checked { background: %ACCENT_SOFT%; border: 1px solid %ACCENT%; }
 QToolButton:disabled { color: %DISABLED%; }
 QToolButton#textButton { padding: 1px 6px; }
 QToolButton#textButton:checked { background: %ACCENT_SOFT%; border: 1px solid %ACCENT%; }
