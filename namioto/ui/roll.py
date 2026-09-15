@@ -255,6 +255,7 @@ class PianoRollView(QGraphicsView):
         self._snapshot: dict[NoteItem, tuple[float, int, float]] = {}
         self.document = Document(channels=[Channel(channel=0, color=theme.NOTE_PALETTE[0])])
         self._items: list[NoteItem] = []
+        self._clipboard: tuple[tuple[int, float, float, int], ...] = ()
         self.active_channel = 0
         self._stack = QUndoStack(self)
         self._stack.setUndoLimit(HISTORY_LIMIT)
@@ -547,6 +548,37 @@ class PianoRollView(QGraphicsView):
 
     def selected_notes(self) -> list[NoteItem]:
         return [note for note in self.notes() if note.isSelected()]
+
+    def copy_selection(self) -> bool:
+        """Take the selected notes as one block, timed from the earliest of them."""
+        if not self.edit_mode:
+            return False
+        selection = sorted(self.selected_notes(), key=lambda note: note.start)
+        if not selection:
+            return False
+        anchor = selection[0].start
+        self._clipboard = tuple((note.pitch, note.start - anchor, note.duration, note.channel) for note in selection)
+        return True
+
+    def paste_notes(self) -> bool:
+        """Drop the copied block at the playhead, its earliest note on the snapped grid and the
+        spacing between them quantised to the same cell, so the block arrives on the current snap.
+        """
+        if not self.edit_mode or not self._clipboard:
+            return False
+        known = {channel.channel for channel in self.channels}
+        anchor = self._snap_beats((self.playhead or 0.0) * self.bpm / 60.0)
+        with self._edit("Paste notes"):
+            self._clear_selection()
+            for pitch, offset, duration, channel in self._clipboard:
+                place = channel if channel in known else self.active_channel
+                note = Note(pitch, anchor + self._snap_beats(offset), duration, place)
+                self.document.add_note(note)
+                self._add_item(note).setSelected(True)
+            self._update_scene()
+            self.notes_changed.emit()
+            self.view_changed.emit()
+        return True
 
     def set_spectrum(self, spectrum: NoteSpectrum | None) -> None:
         self.spectrum = SpectrumImage(spectrum) if spectrum is not None else None

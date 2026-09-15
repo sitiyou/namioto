@@ -1379,6 +1379,78 @@ def test_selecting_a_note_is_not_an_undo_step(window) -> None:
     window.view.clear_notes()
 
 
+def test_copy_and_paste_drops_the_selection_at_the_playhead() -> None:
+    view = PianoRollView()
+    view.apply_interaction(Interaction.editing_with(Tool.PEN))
+    view.set_channels((Channel(channel=0),))
+    view.add_note(60, 2.0, 1.0)
+    view.add_note(64, 3.0, 0.5)
+    for note in view.notes():
+        note.setSelected(True)
+    view.set_playhead(3.0)  # six beats at 120 BPM
+    view.undo_stack.clear()
+
+    assert view.copy_selection()
+    assert view.paste_notes()
+    assert [(note.pitch, note.start, note.duration) for note in view.notes()] == [
+        (60, 2.0, 1.0),
+        (64, 3.0, 0.5),
+        (60, 6.0, 1.0),
+        (64, 7.0, 0.5),
+    ]
+    assert [note.pitch for note in view.selected_notes()] == [60, 64]  # the paste is what is selected
+    assert view.undo_stack.count() == 1
+    view.undo()
+    assert len(view.notes()) == 2
+
+
+def test_paste_snaps_the_anchor_and_the_spacing() -> None:
+    view = PianoRollView()
+    view.apply_interaction(Interaction.editing_with(Tool.PEN))
+    view.set_channels((Channel(channel=0),))
+    view.snap = 0.5  # the 1/8 default
+    view.add_note(60, 2.0, 1.0)
+    view.add_note(62, 3.3, 0.5)  # off the grid, so the paste has to align it
+    for note in view.notes():
+        note.setSelected(True)
+    view.set_playhead(1.05)  # 2.1 beats, which snap to 2.0
+
+    assert view.copy_selection()
+    assert view.paste_notes()
+    assert [(note.pitch, note.start) for note in view.notes()[2:]] == [(60, 2.0), (62, 3.5)]
+
+
+def test_paste_without_a_copy_does_nothing() -> None:
+    view = PianoRollView()
+    view.apply_interaction(Interaction.editing_with(Tool.PEN))
+    view.set_playhead(1.0)
+    assert not view.paste_notes()
+    assert view.notes() == []
+
+
+def test_copy_and_paste_need_edit_mode() -> None:
+    view = PianoRollView()
+    view.set_channels((Channel(channel=0),))
+    view.add_note(60, 2.0, 1.0).setSelected(True)
+    assert not view.copy_selection()
+    assert not view.paste_notes()
+
+
+def test_ctrl_c_and_ctrl_v_carry_the_selection(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.add_note(69, 2.0, 1.0).setSelected(True)
+    window.view.set_playhead(2.0)  # four beats at 120 BPM
+
+    QApplication.setActiveWindow(window)  # an offscreen window is never active on its own
+    QTest.keyClick(window, Qt.Key.Key_C, Qt.KeyboardModifier.ControlModifier)
+    QTest.keyClick(window, Qt.Key.Key_V, Qt.KeyboardModifier.ControlModifier)
+    assert [(note.pitch, note.start) for note in window.view.notes()] == [(69, 2.0), (69, 4.0)]
+    window.view.set_playhead(None)
+    window.view.clear_notes()
+
+
 def test_a_new_edit_drops_the_redo_branch(window) -> None:
     window.edit.pen.click()
     window.view.set_channels((Channel(channel=0),))

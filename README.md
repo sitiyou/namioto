@@ -205,6 +205,8 @@ the real GM program on the channel's own number.
 | Box select | Select tool: left drag on the grid, or Ctrl + left drag with either tool |
 | Select all | Ctrl + A |
 | Delete | Right click a note, or Delete / Backspace for the selection |
+| Copy notes | `Ctrl+C` takes the selected notes as one block, timed from their earliest note |
+| Paste notes | `Ctrl+V` drops that block at the playhead, its first note on the snap grid and the spacing between them quantised to the same cell, and selects what it pasted |
 | Cancel a drag | Escape |
 | Play or pause | `Space` or the play/pause button |
 | Open a project | `Ctrl+O`, or `Open` in the Project block |

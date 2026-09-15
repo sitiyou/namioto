@@ -247,7 +247,13 @@ class MainWindow(QMainWindow):
         self.transport.bpm.valueChanged.connect(self._mark_dirty)
         self.play_shortcut = QShortcut(QKeySequence("Space"), self)
         self.play_shortcut.activated.connect(self._toggle_play)
-        for keys, slot in (("Ctrl+O", self._on_open), ("Ctrl+S", self._on_save), ("Ctrl+Shift+S", self._on_save_as)):
+        for keys, slot in (
+            ("Ctrl+O", self._on_open),
+            ("Ctrl+S", self._on_save),
+            ("Ctrl+Shift+S", self._on_save_as),
+            ("Ctrl+C", self.view.copy_selection),
+            ("Ctrl+V", self.view.paste_notes),
+        ):
             QShortcut(QKeySequence(keys), self).activated.connect(slot)
         for standard, slot in (
             (QKeySequence.StandardKey.Undo, self.view.undo),
@@ -999,6 +1005,7 @@ class MainWindow(QMainWindow):
             "space: play or pause  |  click (outside edit mode): move the playhead  |  "
             "pen: drag an empty row to draw  |  select: drag a box, ctrl-click to add  |  "
             "shift drag a note: trim its start (left half) or end (right half)  |  right click: delete  |  "
+            "ctrl C: copy the selection, ctrl V: paste it at the playhead  |  "
             "ctrl Z: undo, ctrl shift Z: redo  |  "
             "middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y  |  gear: settings"
         )
