@@ -38,13 +38,11 @@ def test_the_file_is_text_with_a_name_and_a_version(tmp_path) -> None:
 
 def test_only_the_values_that_belong_to_the_document_are_written() -> None:
     settings = store.Settings()
-    settings.playback.backend = "external"  # the machine's business
-    settings.playback.midi_port = "TiMidity:0"
-    settings.tempo.estimator = "tempocnn"
-    settings.extraction.model_size = "large"
-    settings.editor.start_in_edit_mode = True
+    settings.paths.last_audio_dir = "/tmp"  # the machine's business
+    settings.midi.wavetone = False
     written = project.to_dict(project.Project(values=store.project_values(settings)))
-    assert "backend" not in json.dumps(written)
+    assert "last_audio_dir" not in json.dumps(written)
+    assert "wavetone" not in json.dumps(written)
     assert set(written) == {
         "format",
         "version",
@@ -58,7 +56,7 @@ def test_only_the_values_that_belong_to_the_document_are_written() -> None:
         "tempo",
         "session",
     }
-    assert set(written["playback"]) == {"velocity", "program", "audio_volume", "midi_volume", "speed"}
+    assert set(written["playback"]) == {"audio_volume", "midi_volume", "speed", "latency_ms"}
     assert set(written["session"]) == {"center_x", "center_y"}
 
 
@@ -68,17 +66,18 @@ def test_the_machine_values_in_a_file_are_ignored(tmp_path) -> None:
         json.dumps(
             {
                 "format": "namioto",
-                "version": 1,
-                "playback": {"backend": "external", "midi_port": "TiMidity:0", "velocity": 64},
-                "extraction": {"model_size": "large"},
+                "playback": {"latency_ms": 120, "speed": 0.75},
+                "midi": {"wavetone": False},
+                "paths": {"last_audio_dir": "/tmp"},
                 "notes": [],
             }
         )
     )
     opened = project.load(path)
-    assert opened.values["playback"]["velocity"] == 64
-    assert "backend" not in opened.values["playback"]
-    assert "extraction" not in opened.values
+    assert opened.values["playback"]["speed"] == 0.75
+    assert opened.values["playback"]["latency_ms"] == 120
+    assert "midi" not in opened.values
+    assert "paths" not in opened.values
 
 
 def test_an_empty_or_partial_file_still_gives_every_value(tmp_path) -> None:
@@ -98,7 +97,7 @@ def test_a_value_out_of_range_is_brought_back_in_line(tmp_path) -> None:
                 "format": "namioto",
                 "tempo": {"bpm": 9999.0},
                 "analysis": {"channels": "middle", "a4": "high"},
-                "playback": {"program": True, "velocity": 1000},
+                "playback": {"speed": "fast"},
             }
         )
     )
@@ -106,8 +105,7 @@ def test_a_value_out_of_range_is_brought_back_in_line(tmp_path) -> None:
     assert opened.values["tempo"]["bpm"] == 300.0
     assert opened.values["analysis"]["channels"] == "mono"
     assert opened.values["analysis"]["a4"] == 440.0
-    assert opened.values["playback"]["program"] == 0
-    assert opened.values["playback"]["velocity"] == 127
+    assert opened.values["playback"]["speed"] == 1.0
 
 
 def test_another_json_file_is_refused() -> None:

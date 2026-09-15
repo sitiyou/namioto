@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
-DRUM_CHANNEL = 9
-TRACK_LIMIT = 15  # one melodic MIDI channel per track: 0-15 without the drum channel
+TRACK_LIMIT = 16  # one MIDI channel per track
 COLOR_HEX = 7
 
 
@@ -21,6 +20,7 @@ class Track:
 
     name: str = ""
     color: str = ""
+    channel: int = 0
     program: int = 0
     volume: int = 100  # 0-127, 100 being unity
     mute: bool = False
@@ -33,16 +33,17 @@ class Track:
 
 
 def default_track(index: int, program: int = 0) -> Track:
-    return Track(name=f"Track {index + 1}", program=program)
+    return Track(name=f"Track {index + 1}", channel=index, program=program)
 
 
 def set_field(track: Track, **fields) -> Track:
     return replace(track, **fields)
 
 
-def channel_of(track: int) -> int:
-    """The MIDI channel a track plays on: the drum channel is skipped for melodic instruments."""
-    return track if track < DRUM_CHANNEL else track + 1
+def free_channel(tracks) -> int | None:
+    """The lowest channel no track plays on, or None when all sixteen are taken."""
+    used = {track.channel for track in tracks}
+    return next((channel for channel in range(TRACK_LIMIT) if channel not in used), None)
 
 
 def audible(tracks) -> list[int]:

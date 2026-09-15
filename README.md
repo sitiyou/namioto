@@ -18,6 +18,7 @@ with them.
 uv run namioto                            # the editor
 uv run namioto song.mp3                   # the editor with the audio analysed into a spectrum
 uv run namioto song.nto                   # open a project
+uv run namioto song.mid                   # open a MIDI file (or import one over an audio file)
 uv run namioto song.mp3 --channels both --gain 300   # analysis options
 uv run namioto-tempo song.mp3             # estimate the tempo of a file (beat tracking + fit)
 uv run namioto-tempo song.mp3 --local     # per-window estimates, 12 s wide, 6 s apart
@@ -65,27 +66,53 @@ opening another project, asks before they are lost. Moving the view, or turning 
 written when you save but does not count as a change, so looking around never nags. A roll that has
 not been saved under a name yet is treated as a sketch and closes without asking.
 
-Settings and projects stay apart: what the settings window holds is the default for the next file,
-while the values inside a project belong to that project and never overwrite those defaults.
+Settings and projects stay apart: the values inside a project belong to that project and never
+overwrite the program's own defaults, which are what the next file starts from.
+
+## MIDI files
+
+`Open` (`Ctrl+O`) takes a `.mid`/`.midi` file as well as a project, and Save As offers a MIDI file
+next to the `.nto` format, so a roll can be written out for a DAW, a score program or a synth. A
+MIDI is read by track: every MIDI channel with notes in it becomes one track here, named after the
+file's track when it has one and carrying its instrument and channel volume. Importing into a
+window that already has audio loaded keeps the audio, the view and the snap grid, which is how a
+transcription made elsewhere is checked against the sound it came from; what it cannot use (a note
+that never ends, a channel past the sixteen tracks, a tempo change after the first, since the grid
+holds one tempo) is counted in the status bar rather than dropped silently. An import over a roll that
+already has notes asks first, and along with **Replace** it offers **Merge**: each of the file's
+tracks is pointed at an existing track or at a new one (by channel to start with, and the mapping is
+edited in the same dialog), the notes arrive beside the ones already there, and the tempo stays where
+the audio put it.
+
+Save As writes MIDI in one of two ways, picked in the small dialog it opens: on the beat grid, where
+the notes land on the project's own tempo (optionally snapped to the current snap grid first, for a
+score), or in exact time, where the file carries a tempo of 60 BPM and a tick per 0.1 ms so that what
+came out of the audio plays back unchanged. A checkbox leaves the hidden tracks out. **WaveTone
+compatibility**, in the settings, is on by default: WaveTone's own MIDI export starts every note one
+bar late, so a file it wrote is read back with that bar removed, and a file written here carries it
+again - which is what its own tools expect. Turn it off to exchange plain MIDI with anything else,
+since a file whose notes start before that bar was never WaveTone's and is read as it stands.
 
 ## Settings
 
-The gear at the right end of the Mix row opens the settings window. It holds the advanced options,
-one page per group: the spectrum analysis parameters (channels, frames per second, FFT size, A4), the
-spectrum's starting display, the playback backend, instrument and buffer, the editor defaults, the tempo
-estimator, the GAME extraction parameters, and the directory the file chooser starts in. Each page
-puts its advanced rows under an `ADVANCED` heading; `Restore defaults` puts everything back, and
-`Apply` lets the change go live without closing the window. Analysis parameters reach the spectrum
-the next time a file is loaded, and the Analysis page has a `Re-analyse now` button for jumping the
-gun.
+The gear at the right end of the Mix row opens the settings window, and it is short on purpose: it
+holds only what has no control in the bars - the analysis parameters (channels, frames per second,
+FFT size, A4), the two windows the beat tracker fits, and **WaveTone compatibility** - a page per
+group, with the beat tracker's tuning under an `ADVANCED` heading. `Restore defaults` puts everything
+back, and `Apply` lets the change go live without closing the window. Analysis parameters reach the
+spectrum the next time a file is loaded, and the Analysis page has a `Re-analyse now` button for
+jumping the gun.
 
 ![settings](docs/settings.png)
 
-What is in that window is also what the program remembers. The settings are written to
-`~/.config/namioto/settings.json` (`$NAMIOTO_SETTINGS` points somewhere else) whenever they settle
-and when the window closes, together with the window geometry, the toolbars and the last view
-position. They are plain JSON, so they can be edited by hand - and a hand-mangled or half-written
-file falls back to the defaults field by field instead of refusing to start.
+Everything else is remembered rather than configured. The gain, the contrast, the audio and MIDI
+volumes, the speed, the snap grid, the division, the zoom, the two switches beside the transport
+readout and the window's own size and position are written to `~/.config/namioto/settings.json`
+(`$NAMIOTO_SETTINGS` points somewhere else) as they change on screen, and are back the way they were
+next time. The tempo and the latency are not among them: they describe one song, so they start from
+their defaults (120 BPM, 0 ms) whenever another file is loaded, and a project carries them - opening
+it puts its own back. The file is plain JSON, so it can be edited by hand - and a hand-mangled or
+half-written one falls back to the defaults field by field instead of refusing to start.
 
 The command line still wins for one run: `--channels`, `--t-num`, `--gain` and `--contrast` shape
 this run alone and are never written back into the file.
@@ -112,6 +139,8 @@ namioto/beats.py      tempo estimation by beat tracking (librosa) + least-square
 namioto/tempo.py      TempoCNN tempo estimation (ONNX Runtime) + tempo map helpers, no Qt
 namioto/spectrum.py   note-domain spectrum analysis (STFT → 84 note bands), no Qt
 namioto/playback.py   note synthesis: pitches rendered into one audio buffer, no Qt
+namioto/tracks.py     the tracks a note belongs to, and the values they play with, no Qt
+namioto/midi.py       reading and writing MIDI files (mido), no Qt
 namioto/models/       bundled ONNX models
 namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars, roll.py: widgets,
                       spectrogram.py: spectrum colour map, image cache and loader,
@@ -141,9 +170,9 @@ The window has three control bars, each split into captioned blocks of related c
 
 | Bar | Blocks |
 | --- | --- |
-| Transport | **Project** (open, save), **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout), **Speed** (0.10x-2.00x in 5% steps with a `1.0` reset, pitch unchanged), **Tempo** (BPM, plus the estimated tempo of the audio), **Latency** (ms) |
-| Edit | **Tools** (edit mode, track sidebar, pen, select, snap grid, clear), **Division** (the metronome icon: checked, the grid follows the beats of the tempo map; unchecked, it follows seconds) |
-| Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window |
+| Transport | **Project** (open, save), **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout, auto page turn, overtone highlight), **Speed** (0.10x-2.00x in 5% steps, pitch unchanged, with a reset icon back to 1.00x), **Tempo** (BPM, the estimated tempo of the audio, and the latency in ms) |
+| Edit | **Tools** (edit mode, track sidebar, pen, select, snap grid), **Division** (the metronome icon: checked, the grid follows the beats of the tempo map; unchecked, it follows seconds) |
+| Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window (the analysis parameters and the few options the bars do not hold) |
 
 **Volume** has a slider for each layer: the audio file is streamed at the level of the first one, and
 the second is the note playback - a scale factor for the built-in synth, and control change 7 (channel
@@ -153,13 +182,14 @@ volume) for an external one, which does its own mixing.
 of each track are painted in its colour, and the card holds the name (double-click to rename), the
 GM instrument the track plays, and the lock, show and mute switches. Clicking a card makes it the
 drawing track; the context menu adds a track, sets its volume or deletes it (the last one stays).
+Each track owns its MIDI channel, so it can be given any of the sixteen, percussion included.
 A locked track cannot be edited, a hidden one is not drawn, and a muted one stays silent - the
 built-in synth plays each track with the voice of its instrument family, an external one receives
-the real GM program on the track's own MIDI channel.
+the real GM program on the track's own channel.
 
 | Action | Input |
 | --- | --- |
-| Edit mode | The button in front of the tools: notes can only be drawn, moved, resized and selected while it is on, the spectrum behind them fades so that they stand out over it (WaveTone does the same), and picking the pen or the select tool turns the mode on as well - entering it starts on the pen, and the snap grid and the clear button are only usable inside it. The window opens with it off, so a click in the roll moves the playhead until a tool is picked. Hovering marks the row under the mouse, and the piano key with it, in either mode; editing adds the octave and the twelfth to both |
+| Edit mode | The button in front of the tools: notes are drawn only while it is on (WaveTone keeps its graph to the spectrum outside note edit mode), and only then can they be drawn, moved, resized and selected; the spectrum behind them fades so that they stand out over it (WaveTone does the same), and picking the pen or the select tool turns the mode on as well - entering it starts on the pen, and the snap grid is only usable inside it. The window opens with it off, so a click in the roll moves the playhead until a tool is picked. Hovering marks the row under the mouse, and the piano key with it, in either mode; with **Overtone highlight** on, the overtones of that row - `f`, `2f`, `3f` and `4f` - are marked the same way, in either mode, as WaveTone does |
 | Draw note | Pen tool: left drag on the empty grid. Horizontal movement sets the length, vertical movement sets the pitch, so the note follows the pointer |
 | Move note(s) | Left drag a note |
 | Resize note | Left drag either edge of a note, or Shift + left drag anywhere on it: its left half moves the start, its right half the end |
@@ -185,14 +215,16 @@ and step with the wheel, one notch to a step, turning the value down as the whee
 Loading an audio file also estimates its tempo in the background (beat tracking plus a
 least-squares fit over the beats, ~1 s for a whole song). It never changes the tempo by itself:
 when it is done, the **Tempo** block shows a suggestion such as `≈93 BPM` next to the BPM field,
-dimmed while few of its 12 s windows agree, with a tick to use it and a cross to drop it. Typing a
-tempo, dropping the suggestion or loading another file discards it; the round arrow estimates again.
+dimmed while few of its 12 s windows agree, with a tick to use it and a cross to drop it. The balloon
+floats inside the window, so it takes neither the keyboard nor the click: drawing, selecting or
+playing underneath it goes on, and typing a tempo, dropping the suggestion or loading another file
+discards it; the round arrow estimates again.
 Changing the tempo never re-times the notes: they are timed against the audio, so only the beat
 grid re-divides underneath them (and the roll keeps the audio at the same scale on screen, which is
 how the notes stay where they are relative to the spectrum and to the time ruler).
-The TempoCNN model (`namioto/tempo.py`, `namioto-tempocnn`) is kept as the runner-up: it is strong on
-full mixes but its 256 integer-BPM classes and its training data (full mixes only) make it a poor
-fit for stems, where beat tracking wins.
+The TempoCNN model (`namioto/tempo.py`, `namioto-tempocnn`) is the runner-up, on its own command
+line: it is strong on full mixes but its 256 integer-BPM classes and its training data (full mixes
+only) make it a poor fit for stems, where beat tracking wins.
 
 **Extracting notes with GAME.** A singing voice can be transcribed in one pass with
 [GAME](https://github.com/openvpi/GAME)'s ONNX models:
@@ -247,11 +279,11 @@ same row again releases that note and starts it over - one note-off before the n
 synth, a 40 ms release ramp over the note still ringing inside - instead of stacking on it or waiting
 for it to finish, so fast clicking on one row sounds every time. Hovering the roll tints the
 row under the mouse and paints that piano key red, in
-either mode, white or black; while editing it also tints the octave and the twelfth, and shows
-the note name and frequency next to the status bar; outside edit mode the roll is a plain view of the
-spectrum and the notes.
+either mode, white or black; with **Overtone highlight** (the wave icon, off by default) on it also
+tints the overtones of that row - `f`, `2f`, `3f` and `4f` - while editing or not, and shows the note
+name and frequency next to the status bar; the notes are drawn only while edit mode is on, so outside it
+the roll is a plain view of the spectrum.
 
-The **Snap** combo sets the quantisation applied when drawing, moving, and resizing notes, and
-**Clear** removes every note. The **Division** buttons change how the time axis is divided — into
+The **Snap** combo sets the quantisation applied when drawing, moving, and resizing notes. The **Division** icon changes how the time axis is divided — into
 beats and bars of the tempo map, or into a 1-2-5 ladder of seconds — and nothing else: the ruler
 shows the clock above the measure numbers under either of them.

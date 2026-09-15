@@ -78,5 +78,7 @@ Third-party code and assets
 | onnxruntime | MIT |
 | numpy, scipy, scikit-learn, joblib, pooch, soundfile | BSD-3-Clause |
 | qtawesome, qtpy | MIT |
+| mido | MIT |
+| packaging | Apache-2.0 OR BSD-2-Clause |
 | soxr | LGPL-2.1-or-later |
 | pytest (development only) | MIT |

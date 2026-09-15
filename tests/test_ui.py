@@ -12,17 +12,28 @@ import pytest
 from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
 from PyQt6.QtGui import QColor, QFocusEvent, QFont, QImage, QKeyEvent, QMouseEvent, QWheelEvent
 from PyQt6.QtTest import QTest
-from PyQt6.QtWidgets import QApplication, QComboBox, QFileDialog, QLabel, QMessageBox, QSlider, QSpinBox
+from PyQt6.QtWidgets import (
+    QApplication,
+    QComboBox,
+    QDialog,
+    QFileDialog,
+    QLabel,
+    QMessageBox,
+    QSlider,
+    QTabWidget,
+    QToolButton,
+)
 
-from namioto import project
+from namioto import midi, project
 from namioto import settings as store
 from namioto.beats import BeatTempo, LocalWindow
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.tracks import Track
 from namioto.ui import theme
-from namioto.ui.app import MainWindow, TempoLoader
+from namioto.ui.app import MIDI_FILTER, MainWindow, TempoLoader
 from namioto.ui.audio import MidiPortOut, MidiSink, find_port, find_synth_port
 from namioto.ui.controls import Cluster, EditBar, TransportBar, ValueSlider
+from namioto.ui.midi_dialog import MidiExportDialog, MidiImportDialog
 from namioto.ui.roll import (
     CONTENT_MARGIN,
     GRID_BAR,
@@ -265,7 +276,7 @@ def test_control_widths_grow_with_the_theme_font(qt_app) -> None:
         slider = ValueSlider("Speed", 0.1, 2.0, 1.0, suffix="x", scale=100)
         bar = TransportBar()
         edit = EditBar(SNAP_CHOICES)
-        for field in (bar.bpm, bar.latency, bar.speed_reset, edit.snap):
+        for field in (bar.bpm, bar.latency, edit.snap):
             assert field.width() >= field.sizeHint().width(), f"{type(field).__name__} is narrower than its text"
         metrics = slider.value_label.fontMetrics()
         for value in (slider.slider.minimum(), slider.slider.maximum()):
@@ -485,9 +496,16 @@ def test_tempo_estimate_is_only_a_suggestion(window) -> None:
 
 
 def test_tempo_already_in_the_field_is_not_offered_again(window) -> None:
-    window.transport.bpm.setValue(96.0)
-    window._on_tempo_loaded(fake_estimate(bpm=96.0, agree=10))
+    window.transport.bpm.setValue(120.0)
+    window._on_tempo_loaded(fake_estimate(bpm=120.0, agree=10))
     assert not window.transport.suggestion.isVisible()
+
+
+def test_a_tempo_of_its_own_keeps_the_suggestion_away(window) -> None:
+    window.transport.bpm.setValue(96.0)  # the user typed one, or took an earlier estimate
+    window._on_tempo_loaded(fake_estimate(bpm=140.0))
+    assert not window.transport.suggestion.isVisible()
+    assert window.transport.bpm.value() == 96.0
     window.transport.bpm.setValue(120.0)
 
 
@@ -514,6 +532,92 @@ def test_the_tempo_suggestion_floats_without_widening_the_bar(window) -> None:
     window.transport.suggestion.hide()
 
 
+def test_the_tempo_suggestion_does_not_take_the_keyboard(window) -> None:
+    suggestion = window.transport.suggestion
+    QApplication.setActiveWindow(window)
+    window.view.setFocus()
+    window._on_tempo_loaded(fake_estimate())
+
+    assert suggestion.isVisible()
+    assert not suggestion.isWindow(), "a window of its own takes the keyboard and closes on a click"
+    assert suggestion.parentWidget() is window
+    assert QApplication.activeWindow() is window
+    assert window.view.hasFocus(), "the roll keeps the keyboard the bar gave it"
+    suggestion.hide()
+
+
+def test_working_in_the_roll_leaves_the_suggestion_up(window) -> None:
+    window._on_tempo_loaded(fake_estimate())
+    assert window.transport.suggestion.isVisible()
+
+    window.view.edit_mode = True  # a drawing gesture: press, drag, release, in the spectrum
+    draw_note(window, QPointF(4.0, 60.0), QPointF(8.0, 60.0))
+    window.view.edit_mode = False
+    draw_note(window, QPointF(4.0, 60.0))  # and a plain click, which moves the playhead
+    assert window.transport.suggestion.isVisible()
+
+    window.view.set_notes(())
+    window.transport.suggestion.dismiss_button.click()
+    assert not window.transport.suggestion.isVisible()
+
+
+def drawn_pixels(window, image: QImage, button: QToolButton) -> list[QColor]:
+    """The pixels one button draws, read out of the window's own grab."""
+    top = button.mapTo(window, QPoint(0, 0))
+    return [image.pixelColor(top.x() + x, top.y() + y) for x in range(button.width()) for y in range(button.height())]
+
+
+def test_the_buttons_that_do_something_carry_a_frame(window) -> None:
+    window.edit.tracks.setChecked(True)  # the cards, and the buttons on them, have to be drawn
+    window._on_tempo_loaded(fake_estimate())
+    assert window.transport.suggestion.isVisible()
+
+    image = window.grab().toImage()
+    frame = QColor(theme.TOKENS["dark"]["BUTTON_BG"])
+    lock = next(button for button in window.findChildren(QToolButton) if button.toolTip().startswith("Lock:"))
+    commands = (
+        window.transport.open,
+        window.transport.save,
+        window.transport.settings_button,
+        window.transport.detect,
+        window.transport.speed_reset,
+        window.transport.suggestion.dismiss_button,
+        lock,
+    )
+    for button in commands:
+        assert frame in drawn_pixels(window, image, button), f"{button.toolTip()} wears no frame"
+    window.edit.tracks.setChecked(False)
+    window.transport.suggestion.hide()
+
+
+def test_the_switches_and_the_transport_stay_bare(window) -> None:
+    image = window.grab().toImage()
+    frame = QColor(theme.TOKENS["dark"]["BUTTON_BG"])
+    bare = (
+        window.transport.rewind,
+        window.transport.play_pause,
+        window.transport.auto_page,
+        window.transport.overtone,
+        window.edit.mode,
+        window.edit.select,
+        window.edit.tracks,
+        window.edit.division,
+    )
+    for button in bare:
+        assert frame not in drawn_pixels(window, image, button), f"{button.toolTip()} wears a frame"
+
+    tinted = drawn_pixels(window, image, window.edit.division)
+    assert max(colour.blue() - colour.red() for colour in tinted) > 40, "a switch that is on keeps the accent"
+
+
+def test_a_button_that_cannot_be_clicked_reads_as_off(window) -> None:
+    button = window.transport.detect
+    button.setEnabled(True)
+    lit = drawn_pixels(window, window.grab().toImage(), button)
+    button.setEnabled(False)
+    assert drawn_pixels(window, window.grab().toImage(), button) != lit, "it has to look unclickable"
+
+
 def test_tempo_loader_reports_a_bad_file(window, tmp_path) -> None:
     broken = tmp_path / "broken.wav"
     broken.write_text("not audio")
@@ -525,28 +629,29 @@ def test_tempo_loader_reports_a_bad_file(window, tmp_path) -> None:
 
 
 def test_hover_marks_the_row_and_its_overtones(window) -> None:
-    if not window.view.edit_mode:
-        window.edit.pen.click()
+    window.view.overtone_highlight = True  # in either mode, editing or not
     window.view.clear_notes()
-    window.view.centerOn(QPointF(8.0, float(PITCH_MAX - 65)))  # both G3 and its twelfth in view
+    window.view.centerOn(QPointF(8.0, float(PITCH_MAX - 66)))  # G3 and its overtones in view
     window.view.set_hover_pitch(55)  # G3
-    assert window.view.highlight_pitches() == [55, 67, 74]  # its octave and its twelfth
+    assert window.view.highlight_pitches() == [55, 67, 74, 79]  # 2f, 3f and 4f above it
     assert window.cursor_note.text() == "G3   196.00 Hz"
 
     def row_brightness(pitch: int) -> int:
         return pixel_at(window.view, window.view.grab().toImage(), 8.0, PITCH_MAX - pitch + 0.5).lightness()
 
-    rows = (54, 55, 67, 74)
+    rows = (54, 55, 67, 74, 79)
     marked = {pitch: row_brightness(pitch) for pitch in rows}
     window.view.set_hover_pitch(None)
     plain = {pitch: row_brightness(pitch) for pitch in rows}
-    assert all(marked[pitch] > plain[pitch] for pitch in (55, 67, 74))
+    assert all(marked[pitch] > plain[pitch] for pitch in (55, 67, 74, 79))
     assert marked[54] == plain[54]  # the row above stays as it was
     assert window.cursor_note.text() == ""
+    window.view.overtone_highlight = False
 
 
 def test_hover_turns_the_key_of_that_row_red_in_either_mode(window) -> None:
     window.view.centerOn(QPointF(8.0, float(PITCH_MAX - 65)))
+    window.view.overtone_highlight = True
 
     def red_rows(pitch: int) -> set[int]:
         window.view.set_hover_pitch(pitch)
@@ -558,6 +663,7 @@ def test_hover_turns_the_key_of_that_row_red_in_either_mode(window) -> None:
         rows = sorted(red_rows(pitch))
         return sum(1 for index, y in enumerate(rows) if index == 0 or y != rows[index - 1] + 1)
 
+    window.view.overtone_highlight = False
     if window.view.edit_mode:
         window.edit.mode.click()
     assert red_bands(55) == 1 and red_bands(54) == 1  # G3 is a white key, F#3 a black one: both mark
@@ -566,9 +672,12 @@ def test_hover_turns_the_key_of_that_row_red_in_either_mode(window) -> None:
     plain = window.keyboard.grab().toImage()
     assert not {y for y in range(plain.height()) if plain.pixelColor(2, y) == HOVER_KEY}
 
-    window.edit.pen.click()  # editing adds the octave and the twelfth, on the keyboard as well
-    assert red_bands(55) == 3
+    window.view.overtone_highlight = True  # the overtones mark the keyboard as well, in either mode
+    assert red_bands(55) == 4
+    window.edit.pen.click()
+    assert red_bands(55) == 4  # and the same while editing
     window.edit.mode.click()
+    window.view.overtone_highlight = False
 
 
 def test_playhead_is_drawn_at_the_play_position(window) -> None:
@@ -1124,6 +1233,28 @@ def test_ctrl_click_is_what_adds_to_the_selection(window) -> None:
     window.view.clear_notes()
 
 
+def test_dragging_a_box_fills_the_selection_under_any_style(window) -> None:
+    QApplication.setStyle("Windows")  # its own rubber band ignores a stylesheet, and the box is ours
+    window.edit.select.click()
+    window.view.centerOn(QPointF(5.0, 63.0))
+    try:
+        roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(2.0, 60.0))
+        roll_mouse(window, QEvent.Type.MouseMove, QPointF(8.0, 66.0))
+        rubber = window.view._rubber
+        assert rubber.isVisible()
+        area = rubber.geometry().intersected(window.view.viewport().rect())
+        image = window.view.viewport().grab().toImage()
+        inside = image.pixelColor(area.center())
+        outside = image.pixelColor(area.left() - 20, area.center().y())
+        assert inside.blue() - inside.red() > outside.blue() - outside.red(), "the region is tinted"
+        border = image.pixelColor(area.topLeft())
+        assert border.blue() > border.red(), "the outline is the accent, not the style's own"
+        roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(8.0, 66.0))
+    finally:
+        QApplication.setStyle("Fusion")
+        window.edit.mode.click()
+
+
 def roll_wheel(window, delta: int, modifiers=Qt.KeyboardModifier.NoModifier) -> None:
     view = window.view
     position = QPointF(view.viewport().rect().center())
@@ -1534,8 +1665,7 @@ def test_editing_fades_the_spectrum_behind_the_notes(window) -> None:
 
 
 def test_notes_are_drawn_over_the_spectrum(window) -> None:
-    if window.view.edit_mode:
-        window.edit.mode.click()
+    window.edit.pen.click()  # notes are only drawn while editing, and the spectrum fades then
     window.view.clear_notes()
     window.view.set_spectrum(make_spectrum(frames=400, value=9.0))
     note = window.view.add_note(60, 1.0, 4.0)
@@ -1543,12 +1673,15 @@ def test_notes_are_drawn_over_the_spectrum(window) -> None:
     window.view.centerOn(QPointF(*middle))
     image = window.view.grab().toImage()
     assert pixel_at(window.view, image, *middle) == note.fill
-    assert pixel_at(window.view, image, note.start - 0.5, middle[1]) == QColor(255, 0, 0)  # the spectrum beside it
+    beside = pixel_at(window.view, image, note.start - 0.5, middle[1])
+    assert beside != note.fill and beside.red() > 0  # the spectrum is behind the note, dimmed by the mode
     window.view.clear_notes()
     window.view.set_spectrum(None)
+    window.edit.mode.click()
 
 
 def test_notes_are_flat_red_with_a_bevel(window) -> None:
+    window.edit.pen.click()  # a note is only on screen while editing
     window.view.clear_notes()
     window.view.set_spectrum(make_spectrum(frames=400, value=0.0))  # black cells, nothing else is red
     note = window.view.add_note(60, 2.0, 2.0)
@@ -1569,9 +1702,11 @@ def test_notes_are_flat_red_with_a_bevel(window) -> None:
     assert note.edge_light in row[:2]  # and light on the left, dark on the right
     assert note.edge_dark in row[-2:]
     assert {colour.name() for colour in row[2:-2]} == {note.fill.name()}
+    window.edit.mode.click()
 
 
 def test_selected_notes_use_the_wavetone_highlight(window) -> None:
+    window.edit.pen.click()  # a note is only on screen while editing
     window.view.clear_notes()
     note = window.view.add_note(60, 2.0, 2.0)
     top = PITCH_MAX - note.pitch + NOTE_INSET
@@ -1586,6 +1721,22 @@ def test_selected_notes_use_the_wavetone_highlight(window) -> None:
     mid_x = (top_left.x() + bottom_right.x()) // 2
     column = [image.pixelColor(mid_x, y) for y in range(top_left.y(), bottom_right.y())]
     assert {colour.name() for colour in column} == {NOTE_SELECTED.name(), NOTE_SELECTED_EDGE.name()}
+    window.edit.mode.click()
+
+
+def test_notes_are_drawn_only_in_edit_mode(window) -> None:
+    if window.view.edit_mode:
+        window.edit.mode.click()
+    window.view.clear_notes()
+    note = window.view.add_note(60, 1.0, 2.0)
+    assert not note.isVisible()  # outside it the roll is the graph, the way WaveTone keeps it
+
+    window.edit.pen.click()
+    assert note.isVisible()
+
+    window.edit.mode.click()
+    assert not note.isVisible()
+    window.view.clear_notes()
 
 
 def test_spectrum_loader_reports_a_bad_file(window, tmp_path) -> None:
@@ -1632,64 +1783,50 @@ def test_the_settings_window_lists_every_visible_field(own_window) -> None:
         (section.name, field.name) for section in store.SECTIONS for field in section.fields if not field.hidden
     }
     assert names == expected
+    pages = [dialog.findChild(QTabWidget).tabText(index) for index in range(dialog.findChild(QTabWidget).count())]
+    assert pages == ["Analysis", "Tempo", "Advanced"]  # the rest of the spec is what the program remembers
     dialog.close()
 
 
 def test_applying_the_settings_window_reaches_the_window_and_the_file(own_window) -> None:
     dialog = SettingsDialog(own_window.settings, parent=own_window)
     dialog.applied.connect(own_window.settings_store.apply)  # the window wires this up when it opens it
-    row_writer(dialog, "spectrum", "gain")(300.0)
-    row_writer(dialog, "playback", "midi_volume")(40)
-    row_writer(dialog, "editor", "zoom_x")(120.0)
-    row_writer(dialog, "editor", "division")("seconds")
-    row_writer(dialog, "editor", "overtone_highlight")(False)
+    row_writer(dialog, "analysis", "t_num")(25.0)
+    row_writer(dialog, "tempo", "window_seconds")(20.0)
+    row_writer(dialog, "midi", "wavetone")(False)
     dialog.apply()
 
-    assert own_window.view.gain == 300.0
-    assert own_window.mix.midi_volume.value() == 40
-    assert own_window.view.zoom[0] == 120.0
-    assert own_window.view.division == "seconds"
-    assert own_window.edit.division.isChecked() is False
-    assert own_window.view.overtone_highlight is False
+    assert own_window.settings.analysis.t_num == 25.0
+    assert own_window.settings.tempo.window_seconds == 20.0
+    assert own_window.settings.midi.wavetone is False
     saved = json.loads(store.default_path().read_text())
-    assert saved["spectrum"]["gain"] == 300.0
-    assert saved["editor"]["overtone_highlight"] is False
+    assert saved["analysis"]["t_num"] == 25.0
+    assert saved["tempo"]["window_seconds"] == 20.0
+    assert saved["midi"]["wavetone"] is False
     dialog.close()
 
 
-def test_the_program_row_offers_the_general_midi_presets(own_window) -> None:
+def test_the_channels_row_offers_the_analysis_modes(own_window) -> None:
     dialog = SettingsDialog(own_window.settings, parent=own_window)
-    combos = [combo for combo in dialog.findChildren(QComboBox) if combo.count() == len(store.GM_PROGRAMS)]
+    combos = [combo for combo in dialog.findChildren(QComboBox) if combo.findData("side") >= 0]
     assert len(combos) == 1
-    program = combos[0]
-    assert program.currentData() == 0
-    assert program.itemText(0) == "0: Acoustic Grand Piano"
-    assert program.itemText(40) == "40: Violin"
-    assert program.itemData(40) == 40
-
-    program.setCurrentIndex(40)
-    assert store.get_value(dialog.values(), "playback", "program") == 40
-    dialog.close()
-
-
-def test_the_latency_field_does_not_say_ms_twice(own_window) -> None:
-    dialog = SettingsDialog(own_window.settings, parent=own_window)
-    boxes = [box for box in dialog.findChildren(QSpinBox) if (box.minimum(), box.maximum()) == (-500, 500)]
-    assert len(boxes) == 1
-    assert boxes[0].suffix() == ""  # the caption already says (ms)
+    combos[0].setCurrentIndex(combos[0].findData("side"))
+    assert store.get_value(dialog.values(), "analysis", "channels") == "side"
     dialog.close()
 
 
 def test_restoring_defaults_puts_every_widget_back(own_window) -> None:
     dialog = SettingsDialog(own_window.settings, parent=own_window)
     row_writer(dialog, "analysis", "t_num")(12.0)
-    row_writer(dialog, "extraction", "model_size")("large")
-    assert store.get_value(dialog.values(), "extraction", "model_size") == "large"
+    row_writer(dialog, "tempo", "window_seconds")(8.0)
+    row_writer(dialog, "midi", "wavetone")(False)
+    assert store.get_value(dialog.values(), "midi", "wavetone") is False
 
     dialog.restore_defaults()
     values = dialog.values()
-    assert store.get_value(values, "extraction", "model_size") == "small"
+    assert store.get_value(values, "midi", "wavetone") is True
     assert store.get_value(values, "analysis", "t_num") == 40.0
+    assert store.get_value(values, "tempo", "window_seconds") == 12.0
     dialog.close()
 
 
@@ -1713,7 +1850,7 @@ def test_the_settings_are_read_when_the_window_starts(tmp_path, monkeypatch) -> 
     store.set_value(saved, "editor", "zoom_y", 24.0)
     store.set_value(saved, "tempo", "bpm", 84.0)
     store.set_value(saved, "playback", "speed", 1.25)
-    store.set_value(saved, "playback", "backend", "builtin")
+    store.set_value(saved, "editor", "auto_page", True)
     store.save(saved)
 
     opened = MainWindow()
@@ -1722,7 +1859,7 @@ def test_the_settings_are_read_when_the_window_starts(tmp_path, monkeypatch) -> 
     assert opened.view.zoom[1] == 24.0
     assert opened.transport.bpm.value() == 84.0
     assert opened.transport.speed.value() == 1.25
-    assert opened.player_name == "the built-in synth"
+    assert opened.transport.auto_page.isChecked() is True
     opened.close()
 
 
@@ -1754,62 +1891,107 @@ def test_the_spectrum_loader_takes_every_analysis_parameter(tmp_path) -> None:
     assert loader.path == tmp_path / "song.wav"
 
 
-def test_loading_a_file_hands_the_settings_to_the_analysers(own_window, monkeypatch) -> None:
-    class Signal:
-        def connect(self, *_args) -> None:
-            pass
+class _Signal:
+    """A signal nothing is connected to: the loaders a file starts are faked in the tests below."""
+
+    def connect(self, *_args) -> None:
+        pass
+
+
+def fake_loaders(monkeypatch) -> list[dict]:
+    """Replace the loaders a file starts with ones that only record what they were asked to run."""
+    captured: list[dict] = []
 
     class FakeLoader:
-        def __init__(self, *args, **kwargs):
-            self.progress = self.loaded = self.failed = Signal()
+        def __init__(self, *args, parent=None, **kwargs):
+            self.progress = self.loaded = self.failed = _Signal()
             captured.append(kwargs)
 
         def start(self) -> None:
             pass
 
-    captured: list[dict] = []
+    for name in ("SpectrumLoader", "SongLoader", "TempoLoader"):
+        monkeypatch.setattr(f"namioto.ui.app.{name}", FakeLoader)
+    return captured
 
-    class FakeLoaderWithParent(FakeLoader):
-        def __init__(self, *args, parent=None, **kwargs):
-            super().__init__(**kwargs)
 
-    monkeypatch.setattr("namioto.ui.app.SpectrumLoader", FakeLoaderWithParent)
-    monkeypatch.setattr("namioto.ui.app.SongLoader", FakeLoaderWithParent)
-    monkeypatch.setattr("namioto.ui.app.TempoLoader", FakeLoaderWithParent)
+def test_loading_a_file_hands_the_settings_to_the_analysers(own_window, monkeypatch) -> None:
+    captured = fake_loaders(monkeypatch)
     store.set_value(own_window.settings, "analysis", "fft_points", 4096)
     store.set_value(own_window.settings, "analysis", "a4", 441.0)
-    store.set_value(own_window.settings, "tempo", "estimator", "tempocnn")
+    store.set_value(own_window.settings, "tempo", "window_seconds", 8.0)
     own_window.overrides["channels"] = "left"
 
     own_window.load_audio("/tmp/song.wav")
 
     analysis, _song, tempo = captured
     assert analysis == {"channels": "left", "t_num": 40.0, "fft_points": 4096, "a4": 441.0}
-    assert tempo == {"estimator": "tempocnn", "window_seconds": 12.0, "window_hop_seconds": 6.0}
+    assert tempo == {"window_seconds": 8.0, "window_hop_seconds": 6.0}
     assert store.get_value(own_window.settings, "paths", "last_audio_dir") == "/tmp"
 
 
 def test_the_tempo_loader_follows_the_settings(own_window, monkeypatch) -> None:
     own_window.audio_path = "song.wav"
-    store.set_value(own_window.settings, "tempo", "estimator", "tempocnn")
     store.set_value(own_window.settings, "tempo", "window_seconds", 8.0)
+    store.set_value(own_window.settings, "tempo", "window_hop_seconds", 3.0)
     monkeypatch.setattr(TempoLoader, "start", lambda self: None)
     own_window._start_tempo()
-    assert own_window.tempo_loader.estimator == "tempocnn"
     assert own_window.tempo_loader.window_seconds == 8.0
+    assert own_window.tempo_loader.window_hop_seconds == 3.0
+
+
+def test_the_tempo_and_the_latency_are_not_remembered_between_runs(own_window) -> None:
+    own_window.transport.bpm.setValue(93.0)
+    own_window.transport.latency.setValue(120)
+    own_window.close()
+
+    saved = store.load()
+    assert saved.tempo.bpm == 120.0  # what a new song starts from
+    assert saved.playback.latency_ms == 0
+
+
+def test_another_song_starts_from_the_default_tempo_and_latency(own_window, monkeypatch) -> None:
+    fake_loaders(monkeypatch)
+    own_window.transport.bpm.setValue(93.0)
+    own_window.transport.latency.setValue(120)
+
+    own_window.load_audio("/tmp/other.wav")
+    assert own_window.transport.bpm.value() == 120.0
+    assert own_window.transport.latency.value() == 0
+
+    own_window.transport.bpm.setValue(93.0)
+    own_window.load_audio("/tmp/other.wav")  # the same file again: a re-analysis keeps what was typed
+    assert own_window.transport.bpm.value() == 93.0
+
+
+def test_a_project_brings_its_tempo_and_latency_back(own_window, tmp_path) -> None:
+    other = store.Settings()
+    other.tempo.bpm = 93.0
+    other.playback.latency_ms = 120
+    path = tmp_path / "song.nto"
+    project.save(project.Project(values=store.project_values(other)), path)
+
+    assert own_window.load_project(path) is True
+    assert own_window.transport.bpm.value() == 93.0
+    assert own_window.transport.latency.value() == 120
+    own_window.settings_store.flush()
+    saved = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert saved["tempo"]["bpm"] == 120.0  # the song's tempo stays in the document
+    assert saved["playback"]["latency_ms"] == 0
 
 
 def test_the_overtone_highlight_can_be_turned_off(window) -> None:
-    window.view.edit_mode = True
+    window.view.edit_mode = False
+    window.view.overtone_highlight = True
     window.view.set_hover_pitch(60)
-    assert window.view.highlight_pitches() == [60, 72, 79]
+    assert window.view.highlight_pitches() == [60, 72, 79, 84]  # no edit mode needed
 
     window.view.overtone_highlight = False
     assert window.view.highlight_pitches() == [60]
 
+    window.view.edit_mode = True
+    assert window.view.highlight_pitches() == [60]  # and the switch still governs it while editing
     window.view.edit_mode = False
-    assert window.view.highlight_pitches() == [60]
-    window.view.overtone_highlight = True
     window.view.set_hover_pitch(None)
 
 
@@ -1940,7 +2122,7 @@ def test_opening_a_project_does_not_rewrite_the_app_defaults(own_window, tmp_pat
     written = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
     assert written["spectrum"]["gain"] == store.Settings().spectrum.gain
     assert written["analysis"]["a4"] == store.Settings().analysis.a4
-    assert written["playback"]["backend"] == store.Settings().playback.backend
+    assert written["playback"]["speed"] == store.Settings().playback.speed
 
 
 def test_a_change_made_with_a_project_open_still_leaves_the_default_alone(own_window, tmp_path) -> None:
@@ -2004,6 +2186,53 @@ def test_saving_as_adds_the_suffix_when_it_is_missing(own_window, monkeypatch, t
     assert own_window._on_save() is True
     assert own_window.project_path == tmp_path / "mysong.nto"
     assert (tmp_path / "mysong.nto").exists()
+
+
+def test_saving_as_suggests_the_name_of_the_audio_file(own_window, monkeypatch, tmp_path) -> None:
+    own_window.audio_path = str(tmp_path / "vocal.wav")
+    store.set_value(own_window.settings, "paths", "last_audio_dir", str(tmp_path))
+    asked: list[str] = []
+
+    def choose(_parent, _caption, suggested, *_filters):
+        asked.append(suggested)
+        return (str(tmp_path / "vocal.nto"), "")
+
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", choose)
+    assert own_window._on_save_as() is True
+    assert Path(asked[0]) == tmp_path / "vocal.nto"
+
+
+def test_a_project_beside_the_audio_is_opened_instead(own_window, monkeypatch, tmp_path) -> None:
+    audio = tmp_path / "song.wav"
+    audio.write_bytes(b"")
+    project.save(
+        project.Project(
+            values=store.project_values(store.Settings()),
+            audio="song.wav",
+            notes=(project.Note(1.0, 0.5, 62),),
+        ),
+        tmp_path / "song.nto",
+    )
+    fake_loaders(monkeypatch)  # the project's own audio is analysed, not the file handed in
+
+    own_window.load_audio(str(audio))
+
+    assert own_window.project_path == tmp_path / "song.nto"
+    assert [note.pitch for note in own_window.view.notes()] == [62]
+    assert own_window.audio_path == str(audio)
+
+
+def test_a_broken_project_beside_the_audio_does_not_hide_it(own_window, monkeypatch, tmp_path) -> None:
+    audio = tmp_path / "song.wav"
+    audio.write_bytes(b"")
+    (tmp_path / "song.nto").write_text("{}")
+    captured = fake_loaders(monkeypatch)
+
+    own_window.load_audio(str(audio))
+
+    assert own_window.project_path is None
+    assert own_window.audio_path == str(audio)
+    assert captured  # the audio is loaded all the same
 
 
 def test_a_project_is_picked_up_from_the_command_line(qt_app, tmp_path) -> None:
@@ -2099,3 +2328,219 @@ def test_the_tracks_button_toggles_the_sidebar(window) -> None:
     assert window.track_panel.isVisible()
     window.edit.tracks.click()
     assert not window.track_panel.isVisible()
+
+
+def test_the_auto_page_and_overtone_toggles_start_off_and_reach_the_settings(own_window) -> None:
+    assert own_window.transport.auto_page.isChecked() is False
+    assert own_window.transport.overtone.isChecked() is False
+    assert own_window.view.overtone_highlight is False
+
+    own_window.transport.overtone.click()
+    assert own_window.view.overtone_highlight is True
+    own_window.transport.auto_page.click()
+    assert store.get_value(own_window.settings, "editor", "overtone_highlight") is True
+    assert store.get_value(own_window.settings, "editor", "auto_page") is True
+
+
+def test_the_auto_page_turn_follows_the_playhead(own_window, monkeypatch) -> None:
+    own_window.show()
+    QApplication.processEvents()
+    view = own_window.view
+    view.set_zoom(48.0, 16.0)
+    view.clear_notes()
+    view.add_note(60, 0.0, 900.0)  # the page can only turn as far as the sound goes
+    monkeypatch.setattr(own_window, "_is_playing", lambda: True)
+    own_window.transport.auto_page.setChecked(True)
+
+    def page() -> tuple[float, float]:
+        rect = view.mapToScene(view.viewport().rect()).boundingRect()
+        return rect.left(), rect.right()
+
+    monkeypatch.setattr(own_window, "_position", lambda: 1.0)
+    own_window._show_position()
+    left, right = page()
+    assert left <= 1.0 * view.bpm / 60.0 <= right
+
+    monkeypatch.setattr(own_window, "_position", lambda: 300.0)
+    own_window._show_position()
+    left, right = page()
+    playhead = 300.0 * view.bpm / 60.0
+    assert left <= playhead <= right
+    assert playhead - left < (right - left) * 0.5  # the playhead lands near the left of the fresh page
+
+    own_window.transport.auto_page.setChecked(False)
+    monkeypatch.setattr(own_window, "_position", lambda: 500.0)
+    own_window._show_position()
+    assert page() == pytest.approx((left, right))  # with the toggle off nobody turns the page
+
+
+def accept_import(monkeypatch, mode: str, mapping=()) -> None:
+    """Answer the import dialog without one: the flow under test is the import, not the widget."""
+    monkeypatch.setattr(MidiImportDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+    monkeypatch.setattr(MidiImportDialog, "mode", lambda self: mode)
+    monkeypatch.setattr(MidiImportDialog, "mapping", lambda self: list(mapping))
+
+
+def test_importing_a_midi_brings_in_its_notes_and_tracks(own_window, tmp_path) -> None:
+    path = tmp_path / "song.mid"
+    midi.write(
+        path,
+        (Track(name="Vocal", channel=0, program=52), Track(name="Piano", channel=1, program=0)),
+        (project.Note(1.0, 0.5, 60, 0), project.Note(1.0, 0.5, 48, 1)),
+        120.0,
+    )
+    assert own_window.import_midi(path) is True
+
+    assert [track.name for track in own_window.view.tracks] == ["Vocal", "Piano"]
+    assert sorted((note.pitch, note.track) for note in own_window.view.notes()) == [(48, 1), (60, 0)]
+    assert own_window.transport.bpm.value() == 120.0
+    assert own_window.project_dirty is True
+    assert own_window.project_path is None  # an import is a sketch until it is saved
+    assert "Imported 2 notes" in own_window.statusBar().currentMessage()
+
+
+def test_importing_over_notes_asks_before_replacing(own_window, monkeypatch, tmp_path) -> None:
+    own_window.view.set_notes([(60, 0.0, 1.0)])
+    path = tmp_path / "song.mid"
+    midi.write(path, (Track(name="Lead", channel=0),), (project.Note(1.0, 0.5, 62, 0),), 120.0)
+    monkeypatch.setattr(MidiImportDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
+
+    assert own_window.import_midi(path) is False
+    assert [note.pitch for note in own_window.view.notes()] == [60]  # nothing was touched
+
+
+def test_replacing_is_what_the_dialog_can_choose(own_window, monkeypatch, tmp_path) -> None:
+    own_window.view.set_tracks((Track(name="Old", channel=0),))
+    own_window.view.set_notes([(60, 0.0, 1.0, 0)])
+    path = tmp_path / "song.mid"
+    midi.write(path, (Track(name="Lead", channel=0),), (project.Note(1.0, 0.5, 62, 0),), 120.0)
+    accept_import(monkeypatch, "replace")
+
+    assert own_window.import_midi(path) is True
+    assert [track.name for track in own_window.view.tracks] == ["Lead"]
+    assert [note.pitch for note in own_window.view.notes()] == [62]
+
+
+def test_merging_adds_the_file_tracks_to_the_roll(own_window, monkeypatch, tmp_path) -> None:
+    own_window.view.set_tracks((Track(name="Voice", channel=0),))
+    own_window.view.set_notes([(60, 0.0, 1.0, 0)])
+    path = tmp_path / "song.mid"
+    midi.write(
+        path,
+        (Track(name="Lead", channel=0), Track(name="Bass", channel=2, program=33, volume=90)),
+        (project.Note(1.0, 0.5, 64, 0), project.Note(1.0, 0.5, 40, 1)),
+        140.0,
+    )
+    accept_import(monkeypatch, "merge", [0, -1])
+
+    assert own_window.import_midi(path) is True
+    assert [track.name for track in own_window.view.tracks] == ["Voice", "Bass"]
+    assert (own_window.view.tracks[1].program, own_window.view.tracks[1].volume) == (33, 90)
+    assert own_window.view.tracks[1].channel == 2  # the file's channel, which was free
+    assert sorted((note.pitch, note.track) for note in own_window.view.notes()) == [(40, 1), (60, 0), (64, 0)]
+    # the file's 140 BPM does not touch the grid: a second stays a second on the audio (120 BPM here)
+    assert sorted((note.pitch, round(note.start, 3)) for note in own_window.view.notes()) == [
+        (40, 2.0),
+        (60, 0.0),
+        (64, 2.0),
+    ]
+    assert own_window.transport.bpm.value() == 120.0  # the grid stays on the audio, not on the file
+
+
+def test_the_import_dialog_prefills_the_mapping_by_channel() -> None:
+    imported = midi.Imported(tracks=(Track(name="Lead", channel=2), Track(name="Pad", channel=7)), notes=(), bpm=120.0)
+    dialog = MidiImportDialog(imported, (Track(name="Voice", channel=2), Track(name="Bass", channel=0)), "song.mid")
+    assert dialog.mapping() == [0, -1]  # channel 2 is the roll's first track; the pad has nowhere yet
+    assert dialog.mode() == "merge"  # the additive choice is what a bare accept takes
+    dialog.close()
+
+
+def test_the_import_dialog_keeps_the_roll_within_sixteen_tracks() -> None:
+    imported = midi.Imported(tracks=(Track(name="Extra", channel=15),), notes=(), bpm=120.0)
+    # sixteen tracks, but channel 15 is free, so the default mapping reaches for a new track
+    tracks = tuple(Track(name=f"T{index}", channel=channel) for index, channel in enumerate([0, *range(15)]))
+    dialog = MidiImportDialog(imported, tracks, "song.mid")
+    assert dialog.mapping() == [-1]
+    assert dialog.merge_button.isEnabled() is False  # a new track would be the seventeenth
+    dialog._targets[0].setCurrentIndex(0)  # pointed at an existing track instead
+    assert dialog.merge_button.isEnabled() is True
+    dialog.close()
+
+
+def test_a_wavetone_file_loses_its_lead_in_only_when_the_setting_says_so(own_window, monkeypatch, tmp_path) -> None:
+    path = tmp_path / "wavetone.mid"
+    midi.write(path, (Track(channel=0),), (project.Note(1.0, 0.5, 60, 0),), 120.0, wavetone=True)
+
+    own_window.import_midi(path)
+    assert [round(note.start, 3) for note in own_window.view.notes()] == [2.0]
+
+    store.set_value(own_window.settings, "midi", "wavetone", False)
+    accept_import(monkeypatch, "replace")  # the roll holds a note now, so the dialog would stand in the way
+    own_window.import_midi(path)
+    assert [round(note.start, 3) for note in own_window.view.notes()] == [6.0]
+
+
+def test_a_midi_that_cannot_be_read_says_so(own_window, tmp_path) -> None:
+    broken = tmp_path / "broken.mid"
+    broken.write_bytes(b"not a MIDI file at all")
+    assert own_window.import_midi(broken) is False
+    assert "could not be read" in own_window.statusBar().currentMessage()
+
+
+def test_exporting_writes_the_roll_out_as_midi(own_window, tmp_path) -> None:
+    own_window.view.set_tracks((Track(name="Lead", channel=2, program=81),))
+    own_window.view.set_notes(((60, 0.0, 1.0, 0), (64, 1.0, 0.5, 0)))
+    path = tmp_path / "out.mid"
+    assert own_window.export_midi(path) is True
+
+    imported = midi.read(path, wavetone=True)  # the WaveTone compatibility the settings start with
+    assert [(note.pitch, round(note.start, 3)) for note in imported.notes] == [(60, 0.0), (64, 0.5)]
+    assert [(track.name, track.channel, track.program) for track in imported.tracks] == [("Lead", 2, 81)]
+    assert [round(note.start, 3) for note in midi.read(path).notes] == [2.0, 2.5]  # the same, a bar late
+    assert own_window.project_path is None  # exporting is not saving
+    assert "Exported out.mid" in own_window.statusBar().currentMessage()
+
+
+def test_only_the_visible_tracks_are_exported_when_asked(own_window, tmp_path) -> None:
+    own_window.view.set_tracks((Track(name="A", channel=0), Track(name="B", channel=1, visible=False)))
+    own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 0.0, 1.0, 1)))
+    path = tmp_path / "visible.mid"
+    own_window.export_midi(path, visible_only=True)
+
+    assert [note.pitch for note in midi.read(path).notes] == [60]
+
+
+def test_the_midi_export_dialog_asks_its_questions() -> None:
+    dialog = MidiExportDialog("1/8")
+    assert dialog.options() == {"exact": False, "quantize": False, "visible_only": False}
+
+    dialog.exact.setChecked(True)
+    assert dialog.quantize.isEnabled() is False
+    assert dialog.options()["exact"] is True
+
+    dialog.visible_only.setChecked(True)
+    assert dialog.options()["visible_only"] is True
+    dialog.close()
+
+
+def test_opening_a_midi_file_imports_it(own_window, monkeypatch, tmp_path) -> None:
+    path = tmp_path / "song.mid"
+    midi.write(path, (Track(name="Lead", channel=0),), (project.Note(0.5, 0.5, 60, 0),), 120.0)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(path), ""))
+
+    own_window._on_open()
+    assert [note.pitch for note in own_window.view.notes()] == [60]
+    assert [track.name for track in own_window.view.tracks] == ["Lead"]
+
+
+def test_saving_as_a_midi_file_exports_instead(own_window, monkeypatch, tmp_path) -> None:
+    own_window.view.set_tracks((Track(channel=0),))
+    own_window.view.set_notes(((60, 0.0, 1.0, 0),))
+    target = tmp_path / "exported.mid"
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), MIDI_FILTER))
+    monkeypatch.setattr(MidiExportDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+
+    assert own_window._on_save_as() is True
+    assert target.exists()
+    assert [note.pitch for note in midi.read(target, wavetone=True).notes] == [60]
+    assert own_window.project_path is None  # an export leaves the document where it was

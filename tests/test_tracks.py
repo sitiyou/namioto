@@ -8,11 +8,11 @@ import json
 from namioto import project
 from namioto import settings as store
 from namioto.tracks import (
-    DRUM_CHANNEL,
     TRACK_LIMIT,
     Track,
     audible,
-    channel_of,
+    default_track,
+    free_channel,
     set_field,
     valid_color,
 )
@@ -22,12 +22,23 @@ def make(**values) -> project.Project:
     return project.Project(values=store.project_values(store.Settings()), **values)
 
 
-def test_the_channel_of_a_track_skips_the_drum_channel() -> None:
-    assert channel_of(0) == 0
-    assert channel_of(8) == 8
-    assert channel_of(9) == 10
-    assert channel_of(TRACK_LIMIT - 1) == 15
-    assert DRUM_CHANNEL not in {channel_of(index) for index in range(TRACK_LIMIT)}
+def test_a_track_keeps_the_channel_it_was_given() -> None:
+    assert Track().channel == 0
+    assert Track(channel=9).channel == 9  # the percussion channel is not special
+    assert [default.channel for default in (default_track(0), default_track(15))] == [0, 15]
+
+
+def test_a_free_channel_is_the_lowest_one_nobody_plays_on() -> None:
+    assert free_channel(()) == 0
+    assert free_channel((Track(channel=0), Track(channel=2))) == 1
+    assert free_channel(tuple(Track(channel=channel) for channel in range(TRACK_LIMIT))) is None
+
+
+def test_a_track_round_trips_through_the_project_file() -> None:
+    track = Track(name="Drums", channel=9, program=0, volume=80)
+    stored = project.to_dict(project.Project(tracks=(track,), notes=()))["tracks"][0]
+    assert stored["channel"] == 9
+    assert project.from_dict({"format": "namioto", "tracks": [stored]}).tracks[0] == track
 
 
 def test_audible_leaves_out_the_muted_tracks() -> None:
@@ -49,15 +60,10 @@ def test_a_colour_must_be_a_six_digit_hex() -> None:
         assert valid_color(broken) == ""
 
 
-def test_a_v1_file_without_tracks_gets_one_default_track() -> None:
-    data = {
-        "format": "namioto",
-        "version": 1,
-        "notes": [{"start": 0.0, "duration": 1.0, "pitch": 60}],
-    }
+def test_a_file_without_tracks_gets_one_default_track() -> None:
+    data = {"format": "namioto", "notes": [{"start": 0.0, "duration": 1.0, "pitch": 60}]}
     opened = project.from_dict(data)
-    assert len(opened.tracks) == 1
-    assert opened.tracks[0].program == 0
+    assert opened.tracks == (Track(name="Track 1"),)
     assert opened.notes == (project.Note(0.0, 1.0, 60, 0),)
 
 
@@ -104,6 +110,7 @@ def test_the_written_file_carries_the_tracks(tmp_path) -> None:
         {
             "name": "Vocal",
             "color": "#ff2f2f",
+            "channel": 0,
             "program": 4,
             "volume": 100,
             "mute": False,

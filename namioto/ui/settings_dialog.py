@@ -2,7 +2,8 @@
 """The settings window, and the store that keeps the file in step with what is running.
 
 The window is built from `namioto.settings`: one row per field of the spec, so a new setting is a
-line in that table and nothing here.
+line in that table and nothing here. A field the spec marks `hidden` is what the program remembers
+by itself - a bar value, the session - and never a row.
 """
 
 from __future__ import annotations
@@ -18,7 +19,6 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
-    QFileDialog,
     QFormLayout,
     QHBoxLayout,
     QLabel,
@@ -32,10 +32,8 @@ from PyQt6.QtWidgets import (
 from namioto import settings as store
 from namioto.settings import Field
 from namioto.ui.controls import text_button
-from namioto.ui.roll import SNAP_CHOICES
 
 SAVE_DELAY_MS = 1000
-BROWSE_CAPTION = "Browse…"
 EDITOR_WIDTH = 300  # a form of numbers that stretch across the page is hard to read
 
 
@@ -85,8 +83,6 @@ def _read(widget: QWidget) -> Any:
         return widget.value()
     if isinstance(widget, QComboBox):
         return widget.currentData()
-    if isinstance(widget, QLineEdit):
-        return widget.text()
     raise TypeError(f"no way to read a {type(widget).__name__}")
 
 
@@ -97,10 +93,15 @@ def _write(widget: QWidget, value: Any) -> None:
         widget.setValue(value)
     elif isinstance(widget, QComboBox):
         widget.setCurrentIndex(max(0, widget.findData(value)))
-    elif isinstance(widget, QLineEdit):
-        widget.setText(str(value))
     else:
         raise TypeError(f"no way to fill a {type(widget).__name__}")
+
+
+def _pages() -> tuple[str, ...]:
+    """The pages that still have a row: the rest of the spec is what the program remembers by itself."""
+    return tuple(
+        dict.fromkeys(section.page for section in store.SECTIONS if any(not item.hidden for item in section.fields))
+    )
 
 
 class SettingsDialog(QDialog):
@@ -113,7 +114,6 @@ class SettingsDialog(QDialog):
         self,
         settings,
         *,
-        ports: Callable[[], Sequence[str]] | None = None,
         can_reanalyse: bool = False,
         parent=None,
     ):
@@ -121,11 +121,10 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("Settings")
         self.resize(560, 460)
         self._settings = store.clone(settings)
-        self._ports = ports
         self._rows: list[tuple[str, Field, Callable[[], Any], Callable[[Any], None]]] = []
 
         pages = QTabWidget()
-        for page in dict.fromkeys(section.page for section in store.SECTIONS):
+        for page in _pages():
             pages.addTab(self._page(page, can_reanalyse), page)
 
         buttons = QDialogButtonBox(
@@ -228,12 +227,6 @@ class SettingsDialog(QDialog):
 
     def _editor(self, section: str, field: Field) -> tuple[QWidget, Callable[[], Any], Callable[[Any], None]]:
         value = store.get_value(self._settings, section, field.name)
-        if field.name == "snap":
-            return self._combo([(label, beats) for label, beats in SNAP_CHOICES], value)
-        if field.name == "midi_port":
-            return self._port_combo(value)
-        if field.kind == "path":
-            return self._path_editor(value)
         if field.kind == "bool":
             widget = QCheckBox()
         elif field.kind == "choice":
@@ -252,7 +245,7 @@ class SettingsDialog(QDialog):
             widget.setSuffix(field.suffix)
             widget.setKeyboardTracking(False)
         else:
-            widget = QLineEdit()
+            raise TypeError(f"no editor for a {field.kind} field")
         _write(widget, value)
         return widget, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
 
@@ -262,44 +255,3 @@ class SettingsDialog(QDialog):
             widget.addItem(caption, data)
         _write(widget, value)
         return widget, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
-
-    def _port_combo(self, value: Any):
-        widget = QComboBox()
-
-        def fill() -> None:
-            current = widget.currentData()
-            widget.clear()
-            widget.addItem("Auto", "")
-            for name in self._ports() if self._ports else ():
-                widget.addItem(name, name)
-            widget.setCurrentIndex(max(0, widget.findData(current)))
-
-        fill()
-        _write(widget, value)
-        refresh = text_button("Refresh", "Look for MIDI ports again")
-        refresh.clicked.connect(fill)
-
-        holder = QWidget()
-        layout = QHBoxLayout(holder)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(widget, 1)
-        layout.addWidget(refresh)
-        return holder, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
-
-    def _path_editor(self, value: Any):
-        widget = QLineEdit()
-        _write(widget, value)
-        browse = text_button(BROWSE_CAPTION, "Choose a directory")
-
-        def choose() -> None:
-            chosen = QFileDialog.getExistingDirectory(self, "Choose a directory", widget.text())
-            if chosen:
-                widget.setText(chosen)
-
-        browse.clicked.connect(choose)
-        holder = QWidget()
-        layout = QHBoxLayout(holder)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(widget, 1)
-        layout.addWidget(browse)
-        return holder, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)

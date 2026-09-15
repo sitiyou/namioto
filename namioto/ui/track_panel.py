@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from namioto import settings as store
-from namioto.tracks import TRACK_LIMIT
+from namioto.tracks import free_channel
 from namioto.ui import icons, theme
 from namioto.ui.controls import BUTTON_HEIGHT
 from namioto.ui.roll import PianoRollView
@@ -195,6 +195,6 @@ class TrackPanel(QWidget):
     def contextMenuEvent(self, event) -> None:
         menu = QMenu(self)
         add = menu.addAction("Add track")
-        add.setEnabled(len(self.view.tracks) < TRACK_LIMIT)
+        add.setEnabled(free_channel(self.view.tracks) is not None)
         if menu.exec(event.globalPos()) is add:
             self.view.add_track(program=self.default_program)

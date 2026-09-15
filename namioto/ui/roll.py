@@ -12,12 +12,11 @@ from PyQt6.QtWidgets import (
     QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsView,
-    QRubberBand,
     QWidget,
 )
 
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
-from namioto.tracks import TRACK_LIMIT, Track
+from namioto.tracks import TRACK_LIMIT, Track, free_channel
 from namioto.tracks import set_field as track_set_field
 from namioto.ui import theme
 from namioto.ui.spectrogram import SpectrumImage
@@ -30,6 +29,8 @@ CONTENT_MARGIN = 4.0
 NOTE_INSET = 0.06
 MIN_DURATION = 0.0625
 BAR_BEATS = 4.0
+PAGE_TURN_MARGIN = 0.15  # how close to the right edge the playhead may get before the page turns
+PAGE_TURN_LEAD = 0.2  # where on the fresh page the playhead then sits
 
 SNAP_CHOICES = (("1/1", 4.0), ("1/2", 2.0), ("1/4", 1.0), ("1/8", 0.5), ("1/16", 0.25), ("1/32", 0.125))
 
@@ -54,7 +55,7 @@ SPECTRUM_BEAT = _CANVAS.spectrum_beat
 SPECTRUM_BAR = _CANVAS.spectrum_bar
 SPECTRUM_TOP = PITCH_MAX - (MIDI_OFFSET + NOTE_COUNT - 1)
 MIN_LINE_SPACING = 16.0
-OVERTONES = (2, 3)  # the partials WaveTone marks over the row under the mouse
+OVERTONES = (2, 3, 4)  # f, 2f, 3f and 4f: the four partials WaveTone marks over the row under the mouse
 HOVER_BAND = _CANVAS.hover_band
 HOVER_KEY = _CANVAS.hover_key
 EDIT_DIM = 0.65  # the spectrum steps back while editing so the notes stand out over it
@@ -179,7 +180,7 @@ class PianoRollView(QGraphicsView):
         self._scene = scene
         self.snap = 0.25
         self.tool = "pen"
-        self.edit_mode = False
+        self._edit_mode = False
         self.overtone_highlight = True
         self.playing = False
         self.division = "beats"
@@ -211,8 +212,10 @@ class PianoRollView(QGraphicsView):
         self.setMouseTracking(True)
         self.setTransform(QTransform.fromScale(self._zoom_x, self._zoom_y))
 
-        self._rubber = QRubberBand(QRubberBand.Shape.Rectangle, self.viewport())
-        self._rubber.setStyleSheet("background: rgba(90,150,255,50); border: 1px solid #5a96ff;")
+        self._rubber = QWidget(self.viewport())
+        self._rubber.setObjectName("rubber")
+        self._rubber.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._rubber.hide()
         self._rubber_origin = QPoint()
         self._initialized = False
 
@@ -252,6 +255,7 @@ class PianoRollView(QGraphicsView):
     def add_note(self, pitch: int, start: float, duration: float, track: int | None = None) -> NoteItem:
         note = NoteItem(pitch, start, duration, self.active_track if track is None else track)
         note.fill, note.edge_light, note.edge_dark = theme.note_shades(self._track_color(note.track))
+        note.setVisible(self._edit_mode and self.tracks[note.track].visible)
         self._scene.addItem(note)
         self._update_scene()
         self.notes_changed.emit()
@@ -298,10 +302,11 @@ class PianoRollView(QGraphicsView):
         return color
 
     def _sync_track_visuals(self) -> None:
-        """Body colour, bevel and visibility all come from the track list."""
+        """Body colour, bevel and visibility all come from the track list; the notes only show while
+        editing, the way WaveTone keeps its graph to the spectrum outside note edit mode."""
         for note in self.notes():
             note.fill, note.edge_light, note.edge_dark = theme.note_shades(self._track_color(note.track))
-            note.setVisible(self.tracks[note.track].visible)
+            note.setVisible(self._edit_mode and self.tracks[note.track].visible)
 
     def set_tracks(self, tracks) -> None:
         """Replace the track list in one go, the way a project hands it over.
@@ -321,9 +326,12 @@ class PianoRollView(QGraphicsView):
         self.active_track_changed.emit(self.active_track)
 
     def add_track(self, name: str = "", program: int = 0) -> Track | None:
-        if len(self.tracks) >= TRACK_LIMIT:
+        channel = free_channel(self.tracks)
+        if channel is None:
             return None
-        track = Track(name=name or f"Track {len(self.tracks) + 1}", color=self._borrow_color(), program=program)
+        track = Track(
+            name=name or f"Track {len(self.tracks) + 1}", color=self._borrow_color(), channel=channel, program=program
+        )
         self.tracks.append(track)
         self.tracks_changed.emit()
         return track
@@ -374,16 +382,26 @@ class PianoRollView(QGraphicsView):
         self.viewport().update()
         self.view_changed.emit()
 
+    @property
+    def edit_mode(self) -> bool:
+        return self._edit_mode
+
+    @edit_mode.setter
+    def edit_mode(self, editing: bool) -> None:
+        self._edit_mode = bool(editing)
+        self._sync_track_visuals()
+        self.viewport().update()
+
     def frame_width(self) -> float:
         """Scene width of one spectrum frame, in beats."""
         return self.spectrum.spectrum.frame_ms / 1000.0 * self.bpm / 60.0
 
     def highlight_pitches(self) -> list[int]:
-        """The rows to tint behind the notes: the row under the mouse, and while editing also the
-        rows of its overtones, which is the WaveTone hint about where a note would double it."""
+        """The rows to tint behind the notes: the row under the mouse, and - with the overtone
+        highlight on - f, 2f, 3f and 4f above it, the WaveTone hint about where a note would double."""
         if self.hover_pitch is None:
             return []
-        if not self.edit_mode or not self.overtone_highlight:
+        if not self.overtone_highlight:
             return [self.hover_pitch]
         pitches = [self.hover_pitch]
         for harmonic in OVERTONES:
@@ -423,6 +441,14 @@ class PianoRollView(QGraphicsView):
         self.initial_center = (x, y)
         self.centerOn(x, y)
         self.refresh()
+
+    def follow_playhead(self, seconds: float) -> None:
+        """Leave the page alone until the playhead reaches its right edge, then turn it."""
+        x = seconds * self.bpm / 60.0
+        page = self.mapToScene(self.viewport().rect()).boundingRect()
+        if page.left() <= x <= page.right() - page.width() * PAGE_TURN_MARGIN:
+            return
+        self.centerOn(x + page.width() * PAGE_TURN_LEAD, page.center().y())
 
     @property
     def seconds_per_beat(self) -> float:

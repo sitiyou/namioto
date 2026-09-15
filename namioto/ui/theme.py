@@ -143,21 +143,29 @@ QWidget#trackPanel { background: %PANEL%; border-right: 1px solid %CARD_BORDER%;
 QWidget#trackCard { background: %CARD%; border: 1px solid %CARD_BORDER%; border-radius: 6px; }
 QWidget#trackCard[active="true"] { background: %ACCENT_SOFT%; border-color: %ACCENT%; }
 QWidget#corner { background: %PANEL%; }
+QWidget#rubber { background: %ACCENT_SOFT%; border: 1px solid %ACCENT%; }
 QLabel { color: %TEXT_DIM%; background: transparent; }
 QLabel#sliderValue, QLabel#cursorNote { color: %TEXT%; }
 QLabel#position { color: %POSITION%; font-size: 13px; }
+/* A button that does something carries a frame, the one the dialogs' own buttons wear. The switches
+   stay bare - a frame would compete with the fill they take when on - and so does the transport,
+   where five frames in a row weigh more than the playback they stand for. */
 QToolButton {
     color: %TEXT%;
-    background: transparent;
-    border: 1px solid transparent;
+    background: %BUTTON_BG%;
+    border: 1px solid %FIELD_BORDER%;
     border-radius: 4px;
     padding: 2px;
 }
 QToolButton:hover { background: %BUTTON_HOVER%; }
 QToolButton:pressed { background: %BUTTON_PRESSED%; }
+QToolButton[checkable="true"], QToolButton#playbackButton {
+    background: transparent;
+    border: 1px solid transparent;
+}
 QToolButton:checked { background: %ACCENT_SOFT%; border: 1px solid %ACCENT%; }
 QToolButton:disabled { color: %DISABLED%; }
-QToolButton#textButton { border: 1px solid %FIELD_BORDER%; padding: 1px 6px; }
+QToolButton#textButton { padding: 1px 6px; }
 QToolButton#textButton:checked { background: %ACCENT_SOFT%; border: 1px solid %ACCENT%; }
 QToolButton:focus { outline: none; border: 1px solid %ACCENT%; }
 QSlider::groove:horizontal { height: 4px; background: %GRID_LINE%; border-radius: 2px; }

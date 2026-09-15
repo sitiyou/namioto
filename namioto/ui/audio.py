@@ -395,16 +395,6 @@ class MidiPortOut(NotePlayer):
             self._sounding.discard((channel, pitch))
 
 
-def port_names() -> tuple[str, ...]:
-    """What MIDI ports this machine has to offer, for the settings window."""
-    try:
-        import rtmidi
-
-        return tuple(rtmidi.MidiOut().get_ports())
-    except Exception:  # no MIDI backend, or none to list
-        return ()
-
-
 def open_player(
     parent=None,
     backend: str = "auto",

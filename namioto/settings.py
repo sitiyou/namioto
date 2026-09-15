@@ -21,14 +21,9 @@ import platformdirs
 
 from namioto.spectrum import CHANNEL_MODES
 
-VERSION = 1
+VERSION = 2
 TEXT_LIMIT = 4096
 DIVISIONS = ("beats", "seconds")
-BACKENDS = ("auto", "external", "builtin")
-ESTIMATORS = ("beats", "tempocnn")
-MODEL_SIZES = ("small", "medium", "large")
-LANGUAGES = ("en", "ja", "zh")
-SUBDIVISIONS = (1, 2, 4, 8, 16, 32)
 # the General MIDI program list, in the order the program change is meant to select them in
 GM_PROGRAMS = (
     "Acoustic Grand Piano",
@@ -160,7 +155,6 @@ GM_PROGRAMS = (
     "Applause",
     "Gunshot",
 )
-PROGRAMS = tuple(range(len(GM_PROGRAMS)))
 PROGRAM_LABELS = tuple(f"{index}: {name}" for index, name in enumerate(GM_PROGRAMS))
 
 
@@ -169,7 +163,7 @@ class Field:
     """One setting: its default, how to read it back, and how the dialog shows it."""
 
     name: str
-    kind: str  # bool, int, float, choice, text or path
+    kind: str  # bool, int, float, choice or text
     default: Any
     caption: str
     tooltip: str = ""
@@ -181,7 +175,8 @@ class Field:
     labels: tuple[str, ...] = ()  # what to show for each choice, the choices themselves when empty
     suffix: str = ""
     advanced: bool = False
-    hidden: bool = False
+    hidden: bool = False  # the program fills it in itself, so it never gets a row
+    remembered: bool = True  # False: it belongs to one song, so the file keeps the default
     scope: str = "app"  # "project": the value describes a document, so the project file owns it
 
 
@@ -255,6 +250,7 @@ SECTIONS: tuple[Section, ...] = (
                 240.0,
                 "Gain",
                 "Energy it takes for the spectrum to reach full red",
+                hidden=True,
                 low=10,
                 high=600,
                 step=1,
@@ -266,18 +262,12 @@ SECTIONS: tuple[Section, ...] = (
                 1.0,
                 "Contrast",
                 "Exponent applied to the spectrum's energy",
+                hidden=True,
                 scope="project",
                 low=0.2,
                 high=4.0,
                 step=0.1,
                 decimals=1,
-            ),
-            Field(
-                "dim_in_edit_mode",
-                "bool",
-                True,
-                "Dim while editing",
-                "Step the spectrum back while editing, so the notes stand out over it",
             ),
         ),
     ),
@@ -287,67 +277,12 @@ SECTIONS: tuple[Section, ...] = (
         "Playback",
         (
             Field(
-                "backend",
-                "choice",
-                "auto",
-                "Output",
-                "auto uses an external synth when one is listening, else the built-in one",
-                choices=BACKENDS,
-            ),
-            Field(
-                "midi_port",
-                "text",
-                "",
-                "MIDI port",
-                "Name of the external MIDI port; empty picks the first software synth found",
-            ),
-            Field(
-                "buffer_ms",
-                "int",
-                80,
-                "Buffer (ms)",
-                "Audio buffer: smaller is lower latency, larger is safer against dropouts",
-                low=10,
-                high=1000,
-                step=10,
-            ),
-            Field(
-                "velocity",
-                "int",
-                100,
-                "Velocity",
-                "Note velocity, for an external synth",
-                low=1,
-                high=127,
-                scope="project",
-            ),
-            Field(
-                "program",
-                "choice",
-                0,
-                "Program",
-                "General MIDI program sent to an external synth, by number; 0 is a grand piano",
-                scope="project",
-                choices=PROGRAMS,
-                labels=PROGRAM_LABELS,
-            ),
-            Field(
-                "preview_seconds",
-                "float",
-                0.6,
-                "Preview (s)",
-                "How long a note auditioned by a click keeps sounding",
-                low=0.05,
-                high=5.0,
-                step=0.05,
-                decimals=2,
-            ),
-            Field(
                 "audio_volume",
                 "int",
                 80,
                 "Audio volume",
                 "Starting volume of the analysed audio",
+                hidden=True,
                 scope="project",
                 low=0,
                 high=100,
@@ -359,6 +294,7 @@ SECTIONS: tuple[Section, ...] = (
                 80,
                 "MIDI volume",
                 "Starting volume of the note playback",
+                hidden=True,
                 scope="project",
                 low=0,
                 high=100,
@@ -370,6 +306,9 @@ SECTIONS: tuple[Section, ...] = (
                 0,
                 "Latency (ms)",
                 "Offset between the sound and the displayed waveform",
+                hidden=True,
+                remembered=False,
+                scope="project",
                 low=-500,
                 high=500,
             ),
@@ -379,6 +318,7 @@ SECTIONS: tuple[Section, ...] = (
                 1.0,
                 "Speed",
                 "Playback speed in 5% steps, 0.10x to 2.00x; the pitch is left alone",
+                hidden=True,
                 scope="project",
                 low=0.1,
                 high=2.0,
@@ -394,19 +334,23 @@ SECTIONS: tuple[Section, ...] = (
         "Editor",
         (
             Field(
-                "start_in_edit_mode",
-                "bool",
-                False,
-                "Start in edit mode",
-                "Open with the pen rather than the view tool",
+                "snap",
+                "float",
+                0.5,
+                "Snap",
+                "Snap grid for the pen tool",
+                hidden=True,
+                low=0.0625,
+                high=4.0,
+                scope="project",
             ),
-            Field("snap", "float", 0.5, "Snap", "Snap grid for the pen tool", low=0.0625, high=4.0, scope="project"),
             Field(
                 "division",
                 "choice",
                 "beats",
                 "Division",
                 "What the ruler's lower row and the drawn grid lines divide by",
+                hidden=True,
                 scope="project",
                 choices=DIVISIONS,
             ),
@@ -416,6 +360,7 @@ SECTIONS: tuple[Section, ...] = (
                 48.0,
                 "Zoom x",
                 "Pixels per beat at startup",
+                hidden=True,
                 scope="project",
                 low=12,
                 high=900,
@@ -427,17 +372,27 @@ SECTIONS: tuple[Section, ...] = (
                 16.0,
                 "Zoom y",
                 "Pixels per semitone row at startup",
+                hidden=True,
                 low=8,
                 high=64,
                 decimals=1,
                 scope="project",
             ),
             Field(
+                "auto_page",
+                "bool",
+                False,
+                "Auto page turn",
+                "Take the next page of the roll once the playhead reaches the right of the window",
+                hidden=True,
+            ),
+            Field(
                 "overtone_highlight",
                 "bool",
-                True,
+                False,
                 "Overtone highlight",
-                "Paint the octave and the twelfth of the row being edited as well",
+                "Paint the overtones of the row under the mouse - f, 2f, 3f and 4f - as well",
+                hidden=True,
             ),
         ),
     ),
@@ -447,19 +402,13 @@ SECTIONS: tuple[Section, ...] = (
         "Tempo",
         (
             Field(
-                "estimator",
-                "choice",
-                "beats",
-                "Estimator",
-                "beats: beat tracking and a least-squares fit; tempocnn: the TempoCNN model",
-                choices=ESTIMATORS,
-            ),
-            Field(
                 "bpm",
                 "float",
                 120.0,
                 "Tempo",
                 "Tempo of the beat grid at startup",
+                hidden=True,
+                remembered=False,
                 scope="project",
                 low=20,
                 high=300,
@@ -491,122 +440,17 @@ SECTIONS: tuple[Section, ...] = (
         ),
     ),
     Section(
-        "extraction",
-        "Extraction",
-        "Extraction",
-        (
-            Field(
-                "model_size",
-                "choice",
-                "small",
-                "Model",
-                "Which of GAME's three model sizes to use; it is downloaded on first use",
-                choices=MODEL_SIZES,
-            ),
-            Field(
-                "model_dir",
-                "path",
-                "",
-                "Model directory",
-                "A directory that already holds the model; empty uses the data directory",
-            ),
-            Field(
-                "language",
-                "choice",
-                "zh",
-                "Language",
-                "Language the model is told to expect in the singing",
-                choices=LANGUAGES,
-            ),
-            Field("quantize", "bool", True, "Quantize", "Snap the extracted notes to the grid before inserting them"),
-            Field(
-                "quantize_subdivisions",
-                "choice",
-                4,
-                "Subdivisions",
-                "Notes per beat of that grid",
-                choices=SUBDIVISIONS,
-            ),
-            Field(
-                "batch_size",
-                "int",
-                4,
-                "Batch size",
-                "Chunks the model is run on at once",
-                low=1,
-                high=64,
-                advanced=True,
-            ),
-            Field(
-                "seg_threshold",
-                "float",
-                0.2,
-                "Boundary threshold",
-                "How sure the segmenter has to be of a note boundary",
-                low=0.0,
-                high=1.0,
-                step=0.01,
-                decimals=2,
-                advanced=True,
-            ),
-            Field(
-                "seg_radius",
-                "float",
-                0.02,
-                "Boundary radius",
-                "Seconds the boundary search may move a boundary by",
-                low=0.0,
-                high=1.0,
-                step=0.01,
-                decimals=2,
-                advanced=True,
-            ),
-            Field(
-                "est_threshold",
-                "float",
-                0.2,
-                "Pitch threshold",
-                "How sure the estimator has to be that a note sounds",
-                low=0.0,
-                high=1.0,
-                step=0.01,
-                decimals=2,
-                advanced=True,
-            ),
-            Field(
-                "d3pm_t0",
-                "float",
-                0.0,
-                "D3PM t0",
-                "Where the segmenter's diffusion starts",
-                low=0.0,
-                high=10.0,
-                step=0.1,
-                decimals=1,
-                advanced=True,
-            ),
-            Field("d3pm_steps", "int", 8, "D3PM steps", "How many steps it takes", low=1, high=64, advanced=True),
-            Field(
-                "silence_slice",
-                "bool",
-                True,
-                "Slice on silence",
-                "Cut the audio on its silences before running the model",
-                advanced=True,
-            ),
-        ),
-    ),
-    Section(
         "paths",
         "Advanced",
         "Paths",
         (
             Field(
                 "last_audio_dir",
-                "path",
+                "text",
                 "",
                 "Last directory",
                 "Where the file chooser starts",
+                hidden=True,
             ),
         ),
     ),
@@ -637,6 +481,21 @@ SECTIONS: tuple[Section, ...] = (
                 high=88.0,
                 decimals=1,
                 scope="project",
+            ),
+        ),
+    ),
+    Section(
+        "midi",
+        "Advanced",
+        "MIDI",
+        (
+            Field(
+                "wavetone",
+                "bool",
+                True,
+                "WaveTone compatibility",
+                "WaveTone's MIDI export starts every note one bar late: reading that back turns it "
+                "back, and writing MIDI adds it, so files and the two programs agree",
             ),
         ),
     ),

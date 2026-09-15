@@ -21,7 +21,7 @@ from namioto import settings as store
 from namioto.tracks import TRACK_LIMIT, Track, valid_color
 
 FORMAT = "namioto"
-VERSION = 2
+VERSION = 5
 SUFFIX = ".nto"
 NOTE_DECIMALS = 4
 
@@ -90,6 +90,7 @@ def _track_dict(track: Track) -> dict:
     return {
         "name": track.name,
         "color": track.color,
+        "channel": track.channel,
         "program": track.program,
         "volume": track.volume,
         "mute": track.mute,
@@ -135,6 +136,7 @@ def _track(entry: Any) -> Track:
     return Track(
         name=name.strip()[: store.TEXT_LIMIT] if isinstance(name, str) else "",
         color=valid_color(entry.get("color")),
+        channel=whole(entry.get("channel", 0), 0, TRACK_LIMIT - 1, 0),
         program=whole(entry.get("program", 0), 0, 127, 0),
         volume=whole(entry.get("volume", 100), 0, 127, 100),
         mute=booleans[0] if isinstance(booleans[0], bool) else False,
@@ -144,8 +146,8 @@ def _track(entry: Any) -> Track:
 
 
 def _tracks(value: Any) -> tuple[Track, ...]:
-    if not isinstance(value, list) or not value:
-        return ()  # a v1 file has no track list: one default track is made for it
+    if not isinstance(value, list):
+        return ()
     return tuple(_track(entry) for entry in value)[:TRACK_LIMIT]
 
 

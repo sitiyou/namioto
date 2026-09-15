@@ -11,6 +11,7 @@ from PyQt6.QtCore import QByteArray, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QGridLayout,
     QHBoxLayout,
@@ -21,16 +22,18 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from namioto import project
+from namioto import midi, project
 from namioto import settings as store
-from namioto.beats import TOLERANCE, estimate
+from namioto.beats import estimate
 from namioto.playback import note_frequency
 from namioto.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.tracks import audible as audible_tracks
-from namioto.tracks import channel_of
+from namioto.tracks import free_channel
+from namioto.tracks import set_field as track_set_field
 from namioto.ui import theme
-from namioto.ui.audio import open_player, port_names
+from namioto.ui.audio import open_player
 from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
+from namioto.ui.midi_dialog import MidiExportDialog, MidiImportDialog
 from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler, note_name
 from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
 from namioto.ui.song import SongPlayer, load_song
@@ -40,11 +43,12 @@ from namioto.ui.track_panel import TrackPanel
 POSITION_INTERVAL_MS = 40
 SPEED_SETTLE_MS = 100
 BEAT_SOURCE = "Beat tracking and least-squares fit"
-TEMPOCNN_SOURCE = "TempoCNN"
+PROJECT_FILTER = f"Namioto project (*{project.SUFFIX})"
+MIDI_FILTER = f"MIDI file ({' '.join(f'*{suffix}' for suffix in midi.SUFFIXES)})"
 
 
 class TempoLoader(QThread):
-    """Estimates the tempo of a file off the GUI thread, with the estimator the settings picked."""
+    """Estimates the tempo of a file off the GUI thread, from the beats of its onsets."""
 
     loaded = pyqtSignal(object)
     failed = pyqtSignal(str)
@@ -52,29 +56,22 @@ class TempoLoader(QThread):
     def __init__(
         self,
         path: str | Path,
-        estimator: str = "beats",
         window_seconds: float = 12.0,
         window_hop_seconds: float = 6.0,
         parent=None,
     ):
         super().__init__(parent)
         self.path = Path(path)
-        self.estimator = estimator
         self.window_seconds = window_seconds
         self.window_hop_seconds = window_hop_seconds
 
     def run(self) -> None:
         try:
-            if self.estimator == "tempocnn":
-                from namioto.tempo import estimate as estimate_tempocnn  # only the model needs onnxruntime
-
-                result = estimate_tempocnn(self.path)
-            else:
-                result = estimate(
-                    self.path,
-                    window_seconds=self.window_seconds,
-                    window_hop_seconds=self.window_hop_seconds,
-                )
+            result = estimate(
+                self.path,
+                window_seconds=self.window_seconds,
+                window_hop_seconds=self.window_hop_seconds,
+            )
         except Exception as error:  # a broken file must not take the editor down
             self.failed.emit(f"{type(error).__name__}: {error}")
             return
@@ -134,7 +131,7 @@ class MainWindow(QMainWindow):
         self.player, self.player_name = self._make_player()
         self._current_player_key = self._player_key()
         self.player.gain = self.settings.playback.midi_volume / 100.0
-        self.song = SongPlayer(self, buffer_ms=self.settings.playback.buffer_ms)
+        self.song = SongPlayer(self)
         self.position_timer = QTimer(self)
         self.position_timer.setInterval(POSITION_INTERVAL_MS)
         self.position_timer.timeout.connect(self._show_position)
@@ -170,7 +167,7 @@ class MainWindow(QMainWindow):
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(0)
         column.addWidget(self.controls)
-        self.track_panel = TrackPanel(self.view, default_program=self.settings.playback.program)
+        self.track_panel = TrackPanel(self.view)
         self.track_panel.setVisible(False)  # one track needs no sidebar; the icon opens it
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
@@ -182,9 +179,10 @@ class MainWindow(QMainWindow):
 
         self.edit.snap.setCurrentIndex(max(0, self.edit.snap.findData(editor.snap)))
         self.edit.division.setChecked(editor.division == "beats")
+        self.transport.auto_page.setChecked(editor.auto_page)
+        self.transport.overtone.setChecked(editor.overtone_highlight)
+        self.view.overtone_highlight = editor.overtone_highlight
         self.view.snap = self.edit.snap.currentData()
-        self.view.edit_mode = editor.start_in_edit_mode
-        self.edit.set_mode(editor.start_in_edit_mode)
         self.transport.bpm.setValue(self.settings.tempo.bpm)
         self.transport.latency.setValue(self.settings.playback.latency_ms)
         self.transport.speed.set_value(self.settings.playback.speed)
@@ -197,6 +195,7 @@ class MainWindow(QMainWindow):
         self.edit.tool_changed.connect(self._on_tool_changed)
         self.edit.mode_changed.connect(self._on_mode_changed)
         self.edit.division_changed.connect(self._on_division_changed)
+        self.transport.overtone_toggled.connect(self._on_overtone)
         self.transport.bpm.valueChanged.connect(self._on_bpm_changed)
         self.transport.detect.clicked.connect(self._start_tempo)
         self.transport.suggestion.applied.connect(self._apply_tempo)
@@ -234,6 +233,8 @@ class MainWindow(QMainWindow):
             self.transport.latency.valueChanged,
             self.transport.bpm.valueChanged,
             self.edit.division_changed,
+            self.transport.auto_page_toggled,
+            self.transport.overtone_toggled,
         ):
             signal.connect(self._on_panel_changed)
         self.edit.snap.currentIndexChanged.connect(self._on_panel_changed)
@@ -256,34 +257,19 @@ class MainWindow(QMainWindow):
             self._show_hint()
         elif project.looks_like_project(audio):
             self.load_project(audio)
+        elif midi.looks_like_midi(audio):
+            self.import_midi(audio)
         else:
             self.load_audio(audio)
         self._update_status()
         self.view.setFocus()  # the roll holds the keyboard, so the bar opens without a focus ring on its first button
 
     def _make_player(self):
-        playback = self.settings.playback
-        return open_player(
-            self,
-            backend=playback.backend,
-            port_name=playback.midi_port,
-            buffer_ms=playback.buffer_ms,
-            velocity=playback.velocity,
-            program=playback.program,
-            a4=self.settings.analysis.a4,
-        )
+        return open_player(self, a4=self.settings.analysis.a4)
 
     def _player_key(self) -> tuple:
         """What a player is built from: a change to any of it means building a new one."""
-        playback = self.settings.playback
-        return (
-            playback.backend,
-            playback.midi_port,
-            playback.buffer_ms,
-            playback.velocity,
-            playback.program,
-            self.settings.analysis.a4,
-        )
+        return (self.settings.analysis.a4,)
 
     def apply_overrides(self, gain: float | None = None, contrast: float | None = None) -> None:
         """Values a command line asked for: they shape this run, not what is remembered."""
@@ -303,7 +289,6 @@ class MainWindow(QMainWindow):
     def _open_settings(self) -> None:
         dialog = SettingsDialog(
             self.settings,
-            ports=port_names,
             can_reanalyse=self.audio_path is not None,
             parent=self,
         )
@@ -316,7 +301,7 @@ class MainWindow(QMainWindow):
             self.load_audio(self.audio_path)
 
     def _on_settings_changed(self, settings) -> None:
-        """Take a finished settings window over the running one.
+        """Take a settings object over the running one: a project was opened, or the window applied.
 
         The panel is filled in with the change kept quiet: every slider moved would otherwise write
         the values of the ones not yet moved back into the settings being applied.
@@ -332,6 +317,8 @@ class MainWindow(QMainWindow):
             self.view.snap = self.edit.snap.currentData()
             self.edit.division.setChecked(settings.editor.division == "beats")
             self.view.division = settings.editor.division
+            self.transport.auto_page.setChecked(settings.editor.auto_page)
+            self.transport.overtone.setChecked(settings.editor.overtone_highlight)
             self.view.refresh()
             self.mix.gain.set_value(settings.spectrum.gain)
             self.mix.contrast.set_value(settings.spectrum.contrast)
@@ -340,7 +327,6 @@ class MainWindow(QMainWindow):
             self.transport.bpm.setValue(settings.tempo.bpm)
             self.transport.latency.setValue(settings.playback.latency_ms)
             self.transport.speed.set_value(settings.playback.speed)
-            self.song.buffer_ms = settings.playback.buffer_ms
             if self._player_key() != self._current_player_key:
                 self._rebuild_player()
         finally:
@@ -348,7 +334,7 @@ class MainWindow(QMainWindow):
         self._update_status()
 
     def _rebuild_player(self) -> None:
-        """A different backend, port, buffer or tuning is a different player; the notes go over again."""
+        """A player that has to be built again - for another tuning - takes the notes over."""
         playing = self.player.is_playing
         position = self._position()
         self.player.stop()
@@ -371,7 +357,7 @@ class MainWindow(QMainWindow):
             if note.track in audible
         )
         channels = tuple(
-            (channel_of(index), track.program, track.volume)
+            (track.channel, track.program, track.volume)
             for index, track in enumerate(self.view.tracks)
             if index in audible
         )
@@ -395,6 +381,8 @@ class MainWindow(QMainWindow):
         store.set_value(self.settings, "tempo", "bpm", self.transport.bpm.value())
         store.set_value(self.settings, "editor", "snap", self.view.snap)
         store.set_value(self.settings, "editor", "division", self.view.division)
+        store.set_value(self.settings, "editor", "auto_page", self.transport.auto_page.isChecked())
+        store.set_value(self.settings, "editor", "overtone_highlight", self.transport.overtone.isChecked())
         store.set_value(self.settings, "editor", "zoom_x", self.view.zoom[0])
         store.set_value(self.settings, "editor", "zoom_y", self.view.zoom[1])
 
@@ -418,13 +406,15 @@ class MainWindow(QMainWindow):
         session.center_y = round(centre.y(), 1)
 
     def _file_settings(self):
-        """What the app's file keeps: once a project is open, the values you had before it are still
-        your defaults, so the project's own values never leak into them."""
-        if self._app_defaults is None:
-            return self.settings
+        """What the app's file keeps: a document's values never become the program's defaults, and the
+        ones that belong to a song - the tempo, the offset between sound and picture - keep the
+        default they are written with."""
         kept = store.clone(self.settings)
         for section, item in store.PROJECT_FIELDS:
-            store.set_value(kept, section, item.name, store.get_value(self._app_defaults, section, item.name))
+            if not item.remembered:
+                store.set_value(kept, section, item.name, item.default)
+            elif self._app_defaults is not None:
+                store.set_value(kept, section, item.name, store.get_value(self._app_defaults, section, item.name))
         return kept
 
     def _document_name(self) -> str:
@@ -467,10 +457,16 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             return
         chosen, _filter = QFileDialog.getOpenFileName(
-            self, "Open project", self._start_directory(), f"Namioto project (*{project.SUFFIX});;All files (*)"
+            self,
+            "Open project",
+            self._start_directory(),
+            f"{PROJECT_FILTER};;{MIDI_FILTER};;All files (*)",
         )
         if chosen:
-            self.load_project(chosen)
+            if midi.looks_like_midi(chosen):
+                self.import_midi(chosen)
+            else:
+                self.load_project(chosen)
 
     def _on_save(self) -> bool:
         if self.project_path is None:
@@ -478,16 +474,22 @@ class MainWindow(QMainWindow):
         return self.save_project(self.project_path)
 
     def _on_save_as(self) -> bool:
-        suggested = Path(self._start_directory()) / f"untitled{project.SUFFIX}"
-        chosen, _filter = QFileDialog.getSaveFileName(
+        name = Path(self.audio_path).stem if self.audio_path is not None else "untitled"
+        suggested = Path(self._start_directory()) / f"{name}{project.SUFFIX}"
+        chosen, selected = QFileDialog.getSaveFileName(
             self,
             "Save project",
             str(self.project_path or suggested),
-            f"Namioto project (*{project.SUFFIX})",
+            f"{PROJECT_FILTER};;{MIDI_FILTER}",
         )
         if not chosen:
             return False
         target = Path(chosen)
+        if midi.looks_like_midi(target) or (selected == MIDI_FILTER and not project.looks_like_project(target)):
+            options = MidiExportDialog(self.edit.snap.currentText(), self)
+            if options.exec() != QDialog.DialogCode.Accepted:
+                return False
+            return self.export_midi(target, **options.options())
         if not project.looks_like_project(target):
             target = target.with_name(target.name + project.SUFFIX)
         return self.save_project(target)
@@ -552,6 +554,103 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"Saved {target.name} — {len(notes)} notes")
         return True
 
+    def import_midi(self, path: str | Path) -> bool:
+        """Put the notes and tracks of a MIDI file into the running session, audio and view and all.
+
+        Importing a MIDI over analyzed audio is the way a transcription made elsewhere is checked
+        against the sound it came from, so nothing here is cleared away but the notes - and when
+        there are notes to lose, the dialog says so and offers to merge into the tracks instead.
+        """
+        try:
+            imported = midi.read(path, wavetone=self.settings.midi.wavetone)
+        except (OSError, EOFError, ValueError) as error:
+            self.statusBar().showMessage(f"MIDI file could not be read: {error}")
+            return False
+        mode, mapping = "replace", ()
+        if self.view.notes():
+            dialog = MidiImportDialog(imported, self.view.tracks, Path(path).name, self)
+            if dialog.exec() != QDialog.DialogCode.Accepted:
+                return False
+            mode, mapping = dialog.mode(), tuple(dialog.mapping())
+        self._loading = True
+        try:
+            if mode == "merge":
+                self._merge_midi(imported, mapping)
+            else:
+                self.transport.bpm.setValue(imported.bpm)  # scene units are beats, and the file sets them
+                beats = self.view.seconds_per_beat
+                self.view.set_tracks(imported.tracks)
+                self.view.set_notes(
+                    (note.pitch, note.start / beats, note.duration / beats, note.track) for note in imported.notes
+                )
+        finally:
+            self._loading = False
+        self._mark_dirty()
+        verb = "Merged" if mode == "merge" else "Imported"
+        message = [f"{verb} {len(imported.notes)} notes from {Path(path).name}"]
+        if imported.tempo_changes:
+            message.append(f"{imported.tempo_changes} tempo changes; the grid takes the first tempo")
+        if imported.dropped:
+            message.append(f"{imported.dropped} note events left out")
+        if imported.left_out:
+            message.append(f"channels {' '.join(str(channel) for channel in imported.left_out)} left out")
+        self.statusBar().showMessage(" — ".join(message))
+        return True
+
+    def _merge_midi(self, imported, mapping) -> None:
+        """Add the file's notes to the roll, on the tracks the dialog pointed them at.
+
+        The tempo stays where it is: both sets of notes are timed against the same audio, and moving
+        the grid under them would take the ones already there off it.
+        """
+        tracks = list(self.view.tracks)
+        landing: dict[int, int] = {}
+        for source, target in enumerate(mapping):
+            if target >= 0:
+                landing[source] = target
+                continue
+            wanted = imported.tracks[source]
+            used = {track.channel for track in tracks}
+            channel = wanted.channel if wanted.channel not in used else free_channel(tracks)
+            tracks.append(track_set_field(wanted, color="", channel=wanted.channel if channel is None else channel))
+            landing[source] = len(tracks) - 1
+        kept = [(note.pitch, note.start, note.duration, note.track) for note in self.view.notes()]
+        beats = self.view.seconds_per_beat
+        arriving = [
+            (note.pitch, note.start / beats, note.duration / beats, landing[note.track]) for note in imported.notes
+        ]
+        self.view.set_tracks(tracks)
+        self.view.set_notes(kept + arriving)
+
+    def export_midi(
+        self, path: str | Path, *, exact: bool = False, quantize: bool = False, visible_only: bool = False
+    ) -> bool:
+        """Write the tracks out as MIDI. The project keeps its name and its file, whatever goes out."""
+        beats = self.view.seconds_per_beat
+        notes = tuple(
+            project.Note(note.start * beats, note.duration * beats, note.pitch, note.track)
+            for note in self.view.notes()
+        )
+        included = None
+        if visible_only:
+            included = tuple(index for index, track in enumerate(self.view.tracks) if track.visible)
+        try:
+            midi.write(
+                path,
+                tuple(self.view.tracks),
+                notes,
+                self.settings.tempo.bpm,
+                wavetone=self.settings.midi.wavetone,
+                exact=exact,
+                quantize=self.view.snap if quantize else 0.0,
+                included=included,
+            )
+        except OSError as error:
+            self.statusBar().showMessage(f"MIDI file could not be written: {error}")
+            return False
+        self.statusBar().showMessage(f"Exported {Path(path).name} — {len(notes)} notes")
+        return True
+
     def _open_audio(self, target: Path | None) -> str:
         """Load the audio a project names, or say why there is none: its notes are worth having either way."""
         if target is not None and target.exists():
@@ -595,6 +694,13 @@ class MainWindow(QMainWindow):
         return chosen
 
     def load_audio(self, path: str) -> None:
+        if not self._loading and str(path) != self.audio_path:
+            beside = Path(path).with_suffix(project.SUFFIX)
+            if self.project_path is None and beside.exists() and self.load_project(beside):
+                return
+            # another song brings its own tempo and offset; a re-analysis of the same one does not
+            self.transport.bpm.setValue(store.FIELD_SPECS[("tempo", "bpm")].default)
+            self.transport.latency.setValue(store.FIELD_SPECS[("playback", "latency_ms")].default)
         self.audio_path = path
         self._mark_dirty()
         store.set_value(self.settings, "paths", "last_audio_dir", str(Path(path).parent))
@@ -653,7 +759,6 @@ class MainWindow(QMainWindow):
         tempo = self.settings.tempo
         self.tempo_loader = TempoLoader(
             self.audio_path,
-            estimator=tempo.estimator,
             window_seconds=tempo.window_seconds,
             window_hop_seconds=tempo.window_hop_seconds,
             parent=self,
@@ -663,20 +768,17 @@ class MainWindow(QMainWindow):
         self.tempo_loader.start()
 
     def _on_tempo_loaded(self, result) -> None:
-        """Offer what was estimated as a candidate, whichever estimator produced it."""
+        """Offer what was estimated as a candidate, unless the field already holds a tempo of its own."""
         self.transport.detect.setEnabled(True)
         if not result.local:
             return
+        if self.transport.bpm.value() != store.FIELD_SPECS[("tempo", "bpm")].default:
+            return  # a tempo the user set, or took from an estimate, is not one to suggest over
         if round(result.bpm) == round(self.transport.bpm.value()):
             return  # the balloon would read what the field already says
-        residual = getattr(result, "residual", None)
-        if residual is None:
-            source = TEMPOCNN_SOURCE
-            agreement = _patch_agreement(result)
-        else:
-            source = BEAT_SOURCE
-            agreement = result.agreement
-        self.transport.suggestion.estimate(result.bpm, agreement, len(result.local), source, residual)
+        self.transport.suggestion.estimate(
+            result.bpm, result.agreement, len(result.local), BEAT_SOURCE, result.residual
+        )
         self.transport.suggestion.show_under(self.transport.bpm)
 
     def _on_tempo_failed(self, message: str) -> None:
@@ -754,6 +856,8 @@ class MainWindow(QMainWindow):
         self.transport.set_playing(playing)
         self.view.playing = playing
         self.view.set_playhead(seconds)
+        if playing and self.transport.auto_page.isChecked():
+            self.view.follow_playhead(seconds)
 
     def _on_playback_finished(self) -> None:
         if self._is_playing():  # the other layer is still running
@@ -769,7 +873,7 @@ class MainWindow(QMainWindow):
 
     def _on_note_preview(self, pitch: int) -> None:
         """Audition a note the user clicked or drew."""
-        self.player.preview(pitch, self.settings.playback.preview_seconds)
+        self.player.preview(pitch)
 
     def _on_hover_changed(self, pitch: int | None) -> None:
         if pitch is None:
@@ -794,6 +898,10 @@ class MainWindow(QMainWindow):
 
     def _on_division_changed(self, division: str) -> None:
         self.view.division = division
+        self.view.refresh()
+
+    def _on_overtone(self, enabled: bool) -> None:
+        self.view.overtone_highlight = enabled
         self.view.refresh()
 
     def _on_bpm_changed(self, value: float) -> None:
@@ -821,17 +929,12 @@ class MainWindow(QMainWindow):
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="namioto", description="Namioto piano-roll MIDI editor")
-    parser.add_argument("audio", nargs="?", help="audio file to analyse, or a .nto project to open")
+    parser.add_argument("audio", nargs="?", help="audio file to analyse, or a .nto project or a .mid file to open")
     parser.add_argument("--channels", choices=CHANNEL_MODES, help="which channels to analyse, over the settings")
     parser.add_argument("--t-num", type=float, help="spectrum frames per second, over the settings")
     parser.add_argument("--gain", type=float, help="spectrum gain for this run")
     parser.add_argument("--contrast", type=float, help="spectrum contrast for this run")
     return parser.parse_args(argv)
-
-
-def _patch_agreement(result) -> float:
-    """Share of the TempoCNN patches that agree with the tempo it settled on."""
-    return sum(abs(local.bpm - result.bpm) <= result.bpm * TOLERANCE for local in result.local) / len(result.local)
 
 
 def main() -> int:

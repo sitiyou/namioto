@@ -24,7 +24,7 @@ def test_missing_file_gives_the_defaults(settings_file) -> None:
     loaded = store.load()
     assert store.to_dict(loaded) == store.to_dict(store.Settings())
     assert store.get_value(loaded, "editor", "snap") == 0.5
-    assert store.get_value(loaded, "tempo", "estimator") == "beats"
+    assert store.get_value(loaded, "midi", "wavetone") is True
 
 
 def test_the_default_path_is_the_config_directory(monkeypatch) -> None:
@@ -52,19 +52,18 @@ def test_a_round_trip_keeps_every_value(settings_file) -> None:
     store.set_value(original, "analysis", "channels", "both")
     store.set_value(original, "analysis", "t_num", 25.5)
     store.set_value(original, "analysis", "a4", 442.0)
-    store.set_value(original, "spectrum", "dim_in_edit_mode", False)
-    store.set_value(original, "playback", "midi_port", "129:0 TiMidity")
+    store.set_value(original, "spectrum", "gain", 300.0)
+    store.set_value(original, "playback", "latency_ms", 120)
     store.set_value(original, "playback", "speed", 0.75)
     store.set_value(original, "editor", "zoom_y", 22.0)
-    store.set_value(original, "tempo", "estimator", "tempocnn")
-    store.set_value(original, "extraction", "quantize_subdivisions", 16)
+    store.set_value(original, "midi", "wavetone", False)
     store.save(original)
 
     loaded = store.load()
     assert store.to_dict(loaded) == store.to_dict(original)
     assert json.loads(settings_file.read_text())["version"] == store.VERSION
-    assert store.get_value(loaded, "spectrum", "dim_in_edit_mode") is False
-    assert store.get_value(loaded, "tempo", "estimator") == "tempocnn"
+    assert store.get_value(loaded, "spectrum", "gain") == 300.0
+    assert store.get_value(loaded, "midi", "wavetone") is False
 
 
 def test_unknown_keys_are_dropped_and_missing_ones_default(settings_file) -> None:
@@ -91,7 +90,7 @@ def test_values_of_the_wrong_type_fall_back_one_by_one(settings_file) -> None:
         json.dumps(
             {
                 "analysis": {"t_num": "fast", "channels": 5, "a4": True},
-                "spectrum": {"gain": None, "dim_in_edit_mode": "yes"},
+                "spectrum": {"gain": None},
                 "editor": {"overtone_highlight": 0},
             }
         )
@@ -101,8 +100,8 @@ def test_values_of_the_wrong_type_fall_back_one_by_one(settings_file) -> None:
     assert store.get_value(loaded, "analysis", "channels") == "mono"
     assert store.get_value(loaded, "analysis", "a4") == 440.0
     assert store.get_value(loaded, "spectrum", "gain") == 240.0
-    assert store.get_value(loaded, "spectrum", "dim_in_edit_mode") is True
-    assert store.get_value(loaded, "editor", "overtone_highlight") is True
+    assert store.get_value(loaded, "editor", "overtone_highlight") is False
+    assert store.get_value(loaded, "midi", "wavetone") is True
 
 
 def test_values_out_of_range_are_brought_back_in(settings_file) -> None:
@@ -110,23 +109,20 @@ def test_values_out_of_range_are_brought_back_in(settings_file) -> None:
         json.dumps(
             {
                 "analysis": {"t_num": -5.0, "fft_points": 10**9},
-                "playback": {"buffer_ms": 10**9, "velocity": 0, "latency_ms": 9999},
+                "playback": {"latency_ms": 9999, "audio_volume": 1000},
                 "editor": {"zoom_x": 0.001, "snap": 99.0},
                 "tempo": {"bpm": 1000.0},
-                "extraction": {"quantize_subdivisions": 7},
             }
         )
     )
     loaded = store.load()
     assert store.get_value(loaded, "analysis", "t_num") == 1.0
     assert store.get_value(loaded, "analysis", "fft_points") == 32768
-    assert store.get_value(loaded, "playback", "buffer_ms") == 1000
-    assert store.get_value(loaded, "playback", "velocity") == 1
     assert store.get_value(loaded, "playback", "latency_ms") == 500
+    assert store.get_value(loaded, "playback", "audio_volume") == 100
     assert store.get_value(loaded, "editor", "zoom_x") == 12.0
     assert store.get_value(loaded, "editor", "snap") == 4.0
     assert store.get_value(loaded, "tempo", "bpm") == 300.0
-    assert store.get_value(loaded, "extraction", "quantize_subdivisions") == 4  # 7 is not a choice
 
 
 def test_values_snap_to_the_step_they_are_shown_on(settings_file) -> None:
@@ -141,18 +137,14 @@ def test_values_snap_to_the_step_they_are_shown_on(settings_file) -> None:
     )
     loaded = store.load()
     assert store.get_value(loaded, "playback", "speed") == 1.25
-    assert store.get_value(loaded, "playback", "preview_seconds") == 0.6
     assert store.get_value(loaded, "spectrum", "contrast") == 1.2
     assert store.get_value(loaded, "analysis", "fft_points") == 8960
     assert store.get_value(loaded, "analysis", "a4") == 441.0
 
 
 def test_text_is_trimmed_and_bounded(settings_file) -> None:
-    settings_file.write_text(
-        json.dumps({"extraction": {"model_dir": "  /tmp/models  "}, "paths": {"last_audio_dir": "x" * 9999}})
-    )
+    settings_file.write_text(json.dumps({"paths": {"last_audio_dir": "  " + "x" * 9999 + "  "}}))
     loaded = store.load()
-    assert store.get_value(loaded, "extraction", "model_dir") == "/tmp/models"
     assert len(store.get_value(loaded, "paths", "last_audio_dir")) == store.TEXT_LIMIT
 
 
@@ -178,13 +170,9 @@ def test_a_clone_can_be_edited_without_touching_the_original() -> None:
     assert store.get_value(original, "analysis", "channels") == "mono"
 
 
-def test_the_program_field_lists_the_general_midi_presets() -> None:
-    spec = store.FIELD_SPECS[("playback", "program")]
-    assert spec.kind == "choice"
+def test_the_program_list_names_every_general_midi_preset() -> None:
     assert len(store.GM_PROGRAMS) == 128
     assert len(set(store.GM_PROGRAMS)) == 128  # one name per program, or the list cannot be picked from
-    assert spec.choices == tuple(range(128))
-    assert spec.labels == store.PROGRAM_LABELS
     assert store.GM_PROGRAMS[0] == "Acoustic Grand Piano"
     assert store.GM_PROGRAMS[40] == "Violin"
     assert store.GM_PROGRAMS[-1] == "Gunshot"
@@ -194,13 +182,9 @@ def test_the_program_field_lists_the_general_midi_presets() -> None:
     assert [label.split(":")[0] for label in store.PROGRAM_LABELS] == [str(index) for index in range(128)]
 
 
-def test_a_program_that_is_not_a_number_falls_back(settings_file) -> None:
-    settings_file.write_text(json.dumps({"playback": {"program": True}}))
-    assert store.get_value(store.load(), "playback", "program") == 0
-    settings_file.write_text(json.dumps({"playback": {"program": 200}}))
-    assert store.get_value(store.load(), "playback", "program") == 0
-    settings_file.write_text(json.dumps({"playback": {"program": 40}}))
-    assert store.get_value(store.load(), "playback", "program") == 40
+def test_a_choice_that_is_not_one_of_them_falls_back(settings_file) -> None:
+    settings_file.write_text(json.dumps({"editor": {"division": "bars"}}))
+    assert store.get_value(store.load(), "editor", "division") == "beats"
 
 
 def test_a_caption_that_names_its_unit_does_not_repeat_it_in_the_field() -> None:
@@ -222,9 +206,17 @@ def test_every_spec_field_is_a_field_of_its_section() -> None:
     assert len(store.FIELD_SPECS) == sum(len(section.fields) for section in store.SECTIONS)
 
 
-def test_the_pages_bring_every_field_to_the_dialog() -> None:
+def test_only_the_settings_without_a_control_keep_a_row() -> None:
     shown = {(section.name, item.name) for section in store.SECTIONS for item in section.fields if not item.hidden}
-    assert ("analysis", "channels") in shown
-    assert ("extraction", "d3pm_steps") in shown
+    assert shown == {
+        ("analysis", "channels"),
+        ("analysis", "t_num"),
+        ("analysis", "fft_points"),
+        ("analysis", "a4"),
+        ("tempo", "window_seconds"),
+        ("tempo", "window_hop_seconds"),
+        ("midi", "wavetone"),
+    }
+    assert ("editor", "zoom_x") not in shown  # the wheel has it, so the window does not
+    assert ("playback", "latency_ms") not in shown
     assert ("session", "geometry") not in shown  # the window state is stored, never typed in
-    assert {section.page for section in store.SECTIONS} >= {"Analysis", "Display", "Playback", "Editor", "Tempo"}

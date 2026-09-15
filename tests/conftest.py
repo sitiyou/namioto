@@ -26,6 +26,24 @@ def isolated_settings(tmp_path_factory):
     return path
 
 
+@pytest.fixture(scope="session", autouse=True)
+def no_blocking_dialogs():
+    """A modal dialog nothing answers hangs the whole run, so one that slips through fails instead.
+
+    The tests that walk through a dialog patch `exec` on its class, which shadows this; a test that
+    reaches an unpatched one gets an error naming it rather than a run that never ends.
+    """
+    from PyQt6.QtWidgets import QDialog
+
+    def refuse(self, *_args, **_kwargs):
+        raise AssertionError(f"{type(self).__name__}.exec() would block a headless test: patch it")
+
+    patcher = pytest.MonkeyPatch()
+    patcher.setattr(QDialog, "exec", refuse)
+    yield
+    patcher.undo()
+
+
 class FakeMidiOut:
     """The MIDI backend, with one synth in its port list and nowhere to send to.
 

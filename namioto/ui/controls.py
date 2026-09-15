@@ -241,14 +241,16 @@ class TempoSuggestion(QWidget):
     """The tempo the analyser found, in a balloon under the BPM field.
 
     A suggestion is not worth a row of its own, and it is not worth resizing the field for either, so
-    it floats: the row keeps its size whether or not there is an estimate to offer.
+    it floats: the row keeps its size whether or not there is an estimate to offer. It floats *inside*
+    the window rather than as a window of its own - a popup takes the keyboard with it and is gone at
+    the first click anywhere else, and the roll is where the work is.
     """
 
     applied = pyqtSignal(float)
     dismissed = pyqtSignal()
 
     def __init__(self, parent=None):
-        super().__init__(parent, Qt.WindowType.Popup | Qt.WindowType.FramelessWindowHint)
+        super().__init__(parent)
         self.setObjectName("suggestion")
         self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self._bpm = 0.0
@@ -282,9 +284,13 @@ class TempoSuggestion(QWidget):
         self.setToolTip(f"{detail}\nNothing changes until you click the tick.")
 
     def show_under(self, anchor: QWidget) -> None:
+        """Float under `anchor`, inside its window, where it takes neither the focus nor the clicks."""
+        window = anchor.window()
+        self.setParent(window)
         self.adjustSize()
-        self.move(anchor.mapToGlobal(QPoint(0, anchor.height() + 4)))
+        self.move(anchor.mapTo(window, QPoint(0, anchor.height() + 4)))
         self.show()
+        self.raise_()
 
 
 class _SelectAll:
@@ -393,6 +399,8 @@ class TransportBar(_Group):
     forward_requested = pyqtSignal()
     open_requested = pyqtSignal()
     save_requested = pyqtSignal()
+    auto_page_toggled = pyqtSignal(bool)
+    overtone_toggled = pyqtSignal(bool)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -411,6 +419,8 @@ class TransportBar(_Group):
         self.play_from_start.clicked.connect(self.play_from_start_requested)
         self.play_pause.clicked.connect(self.play_pause_requested)
         self.forward.clicked.connect(self.forward_requested)
+        for button in (self.rewind, self.stop, self.play_from_start, self.play_pause, self.forward):
+            button.setObjectName("playbackButton")
 
         self.position = QLabel("00:00.000")
         self.position.setObjectName("position")
@@ -422,7 +432,7 @@ class TransportBar(_Group):
         self.speed.slider.setToolTip(
             "Playback speed in 5% steps, 0.10x to 2.00x: the song is rerendered, so the pitch stays"
         )
-        self.speed_reset = text_button("1.0", "Reset the playback speed to 1.00x")
+        self.speed_reset = icon_button("restore", "Reset the playback speed to 1.00x")
         self.speed_reset.clicked.connect(lambda: self.speed.set_value(1.0))
 
         self.bpm = TempoBox()
@@ -439,7 +449,7 @@ class TransportBar(_Group):
         self.detect = icon_button("refresh", "Estimate the tempo of the loaded audio")
         self.detect.setEnabled(False)
         self.suggestion = TempoSuggestion()
-        self.settings_button = icon_button("gear", "Settings: what the program remembers between runs")
+        self.settings_button = icon_button("gear", "Settings: the advanced options the bars have no control for")
 
         self.latency = LatencyBox()
         self.latency.setRange(-500, 500)
@@ -448,6 +458,19 @@ class TransportBar(_Group):
         self.latency.setFixedWidth(self.latency.sizeHint().width())
         self.latency.setFixedHeight(FIELD_HEIGHT)
         self.latency.setKeyboardTracking(False)
+
+        self.auto_page = icon_button(
+            "page",
+            "Auto page turn: take the next page of the roll once the playhead reaches the right",
+            checkable=True,
+        )
+        self.overtone = icon_button(
+            "overtone",
+            "Overtone highlight: paint f, 2f, 3f and 4f of the row under the mouse, the way WaveTone marks them",
+            checkable=True,
+        )
+        self.auto_page.clicked.connect(self.auto_page_toggled)
+        self.overtone.clicked.connect(self.overtone_toggled)
 
         project = Cluster("project")
         project.add(self.open)
@@ -460,13 +483,16 @@ class TransportBar(_Group):
         playback.add(separator())
         playback.add(self.position)
         playback.add(separator())
-        playback.add(self.latency)
-        playback.add(field_label("ms"))
+        playback.add(self.auto_page)
+        playback.add(self.overtone)
 
         bpm = Cluster("bpm")
         bpm.add(self.bpm)
         bpm.add(field_label("BPM"))
         bpm.add(self.detect)
+        bpm.add(separator())
+        bpm.add(self.latency)
+        bpm.add(field_label("ms"))
 
         speed = Cluster("speed")
         speed.add(self.speed)
@@ -545,13 +571,6 @@ class EditBar(_Group):
         tools.add(self.division)
 
         self.place(tools, 1, 0, 2)
-
-    def set_mode(self, editing: bool) -> None:
-        """Open in a mode, or leave it, without a click: the settings say where the editor starts."""
-        if editing == self.mode.isChecked():
-            return
-        self.mode.setChecked(editing)
-        self._mode_clicked()
 
     def _mode_clicked(self) -> None:
         editing = self.mode.isChecked()

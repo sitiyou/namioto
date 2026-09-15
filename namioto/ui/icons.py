@@ -19,11 +19,14 @@ GLYPHS = {
     "select": "mdi.cursor-default",
     "edit": "mdi.pencil-ruler",
     "beat": "mdi.metronome",
+    "page": "mdi.book-open-page-variant",
+    "overtone": "mdi.sine-wave",
     "snap": "mdi.music-note-eighth",
     "check": "mdi.check",
     "cross": "mdi.close",
     "gear": "mdi.cog",
     "refresh": "mdi.refresh",
+    "restore": "mdi.restore",
     "open": "mdi.folder-open",
     "save": "mdi.content-save",
     "tracks": "mdi.layers",
@@ -41,15 +44,22 @@ SECTION_GLYPHS = {
     "playback": "mdi.music-note",
     "editor": "mdi.vector-square",
     "tempo": "mdi.metronome",
-    "extraction": "mdi.robot",
     "paths": "mdi.folder-outline",
     "session": "mdi.restore",
 }
 
 
 def icon(kind: str, color: str = "") -> QIcon:
-    """The glyph named by our own word for it, so a call site never spells out a font name."""
-    return qta.icon(GLYPHS[kind], color=color or theme.TOKENS["dark"]["TEXT"])
+    """The glyph named by our own word for it, so a call site never spells out a font name.
+
+    The disabled shade comes with it: a plain pixmap has no greyed mode of its own, so without it a
+    button that is off looks exactly like one that is on.
+    """
+    return qta.icon(
+        GLYPHS[kind],
+        color=color or theme.TOKENS["dark"]["TEXT"],
+        color_disabled=theme.TOKENS["dark"]["DISABLED"],
+    )
 
 
 def section_icon(name: str, color: str = "") -> QIcon:
