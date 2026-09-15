@@ -14,7 +14,6 @@ from PyQt6.QtWidgets import (
     QMenu,
     QScrollArea,
     QSizePolicy,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
@@ -22,7 +21,7 @@ from PyQt6.QtWidgets import (
 from namioto import settings as store
 from namioto.channels import Channel, free_channel
 from namioto.ui import icons, theme
-from namioto.ui.controls import BUTTON_HEIGHT, FIELD_HEIGHT
+from namioto.ui.controls import FIELD_HEIGHT, icon_button
 from namioto.ui.roll import PianoRollView
 
 # wide enough that the longest General MIDI name fits the combo whole, scrollbar included
@@ -52,31 +51,17 @@ class _NameLabel(QLabel):
         )
 
 
-def _state_button(kind_on: str, kind_off: str, on: bool, tooltip: str) -> QToolButton:
-    button = QToolButton()
-    button.setIcon(icons.icon(kind_on if on else kind_off))
-    button.setIconSize(button.iconSize())
-    button.setFixedHeight(BUTTON_HEIGHT)
-    button.setAutoRaise(True)
-    button.setToolTip(tooltip)
-    return button
-
-
 class _Card(QWidget):
     """One channel: colour swatch, name and instrument, the lock/eye/mute buttons."""
 
     def __init__(self, panel: ChannelPanel, channel: Channel):
         super().__init__()
         self._panel = panel
-        self._channel = channel
         self._number = channel.channel
         self.setObjectName("channelCard")
-        if channel.channel == panel.view.active_channel:
-            self.setProperty("active", True)
 
-        swatch = QFrame()
-        swatch.setFixedSize(SWATCH_WIDTH, 34)
-        swatch.setStyleSheet(f"background: {channel.color}; border-radius: 2px;")
+        self.swatch = QFrame()
+        self.swatch.setFixedSize(SWATCH_WIDTH, 34)
 
         self.name = _NameLabel(channel.label)
         self.program = QComboBox()
@@ -84,14 +69,12 @@ class _Card(QWidget):
         # the card is a fixed column: the combo must be allowed to shrink below its longest item
         self.program.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.program.setMinimumContentsLength(12)
-        self.program.setCurrentIndex(channel.program)
         self.program.setFixedHeight(FIELD_HEIGHT)
-        self.program.setToolTip(store.PROGRAM_LABELS[channel.program])
         self.program.currentIndexChanged.connect(self._on_program)
 
-        self.lock_button = _state_button("lock", "unlock", channel.lock, "Lock: notes on this channel cannot be edited")
-        self.eye_button = _state_button("eye", "eyeoff", channel.visible, "Show or hide the notes of this channel")
-        self.mute_button = _state_button("mute", "sound", channel.mute, "Mute this channel during playback")
+        self.lock_button = icon_button("unlock", "Lock: notes on this channel cannot be edited", checkable=True)
+        self.eye_button = icon_button("eye", "Show or hide the notes of this channel", checkable=True)
+        self.mute_button = icon_button("sound", "Mute this channel during playback", checkable=True)
         for button, field in ((self.lock_button, "lock"), (self.eye_button, "visible"), (self.mute_button, "mute")):
             button.clicked.connect(lambda _c, field=field: self._toggle(field))
 
@@ -112,9 +95,34 @@ class _Card(QWidget):
         row = QHBoxLayout()
         row.setContentsMargins(6, 4, 4, 4)
         row.setSpacing(6)
-        row.addWidget(swatch)
+        row.addWidget(self.swatch)
         row.addLayout(text, 1)
         self.setLayout(row)
+
+        self.apply(channel)
+
+    def apply(self, channel: Channel) -> None:
+        """Take the channel over in place, so a field change never rebuilds the whole sidebar."""
+        self._channel = channel
+        self.set_active(channel.channel == self._panel.view.active_channel)
+        self.swatch.setStyleSheet(f"background: {channel.color}; border-radius: 2px;")
+        self.name.setText(channel.label)
+        self.program.blockSignals(True)
+        self.program.setCurrentIndex(channel.program)
+        self.program.setToolTip(store.PROGRAM_LABELS[channel.program])
+        self.program.blockSignals(False)
+        self.lock_button.setIcon(icons.icon("lock" if channel.lock else "unlock"))
+        self.lock_button.setChecked(channel.lock)
+        # the fill marks the exceptional state, so the eye is checked while the channel is hidden
+        self.eye_button.setIcon(icons.icon("eyeoff" if not channel.visible else "eye"))
+        self.eye_button.setChecked(not channel.visible)
+        self.mute_button.setIcon(icons.icon("mute" if channel.mute else "sound"))
+        self.mute_button.setChecked(channel.mute)
+
+    def set_active(self, active: bool) -> None:
+        self.setProperty("active", active)
+        self.style().unpolish(self)
+        self.style().polish(self)
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
@@ -163,12 +171,13 @@ class ChannelPanel(QWidget):
         self.default_program = default_program
         self.setObjectName("channelPanel")
         self.setFixedWidth(CARD_WIDTH)
-        view.channels_changed.connect(self._rebuild)
-        view.active_channel_changed.connect(lambda _number: self._rebuild())
+        view.channels_changed.connect(self._sync)
+        view.active_channel_changed.connect(self._on_active_changed)
 
         self.cards = QVBoxLayout()
         self.cards.setContentsMargins(6, 6, 6, 6)
         self.cards.setSpacing(4)
+        self._cards: dict[int, _Card] = {}
 
         body = QWidget()
         body.setLayout(self.cards)
@@ -181,15 +190,31 @@ class ChannelPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
-        self._rebuild()
+        self._sync()
+
+    def _sync(self) -> None:
+        """Bring the cards in step with the channels, rebuilding only when the set of them changes."""
+        channels = {channel.channel: channel for channel in self.view.channels}
+        if set(channels) != set(self._cards):
+            self._rebuild()
+            return
+        for number, card in self._cards.items():
+            card.apply(channels[number])
+
+    def _on_active_changed(self, _number: int) -> None:
+        for number, card in self._cards.items():
+            card.set_active(number == self.view.active_channel)
 
     def _rebuild(self) -> None:
         while self.cards.count():
             item = self.cards.takeAt(0)
             if widget := item.widget():
                 widget.deleteLater()
+        self._cards.clear()
         for channel in self.view.channels:
-            self.cards.addWidget(_Card(self, channel))
+            card = _Card(self, channel)
+            self._cards[channel.channel] = card
+            self.cards.addWidget(card)
         self.cards.addStretch(1)
 
     def contextMenuEvent(self, event) -> None:

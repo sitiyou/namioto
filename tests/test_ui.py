@@ -589,13 +589,11 @@ def drawn_pixels(window, image: QImage, button: QToolButton) -> list[QColor]:
 
 
 def test_the_buttons_that_do_something_carry_a_frame(window) -> None:
-    window.edit.channels.setChecked(True)  # the cards, and the buttons on them, have to be drawn
     window._on_tempo_loaded(fake_estimate())
     assert window.transport.suggestion.isVisible()
 
     image = window.grab().toImage()
     frame = QColor(theme.TOKENS["dark"]["BUTTON_BG"])
-    lock = next(button for button in window.findChildren(QToolButton) if button.toolTip().startswith("Lock:"))
     commands = (
         window.transport.open,
         window.transport.save,
@@ -603,17 +601,22 @@ def test_the_buttons_that_do_something_carry_a_frame(window) -> None:
         window.transport.detect,
         window.transport.speed_reset,
         window.transport.suggestion.dismiss_button,
-        lock,
     )
     for button in commands:
         assert frame in drawn_pixels(window, image, button), f"{button.toolTip()} wears no frame"
-    window.edit.channels.setChecked(False)
     window.transport.suggestion.hide()
 
 
 def test_the_switches_and_the_transport_stay_bare(window) -> None:
+    window.edit.channels.setChecked(True)  # the cards, and their switches, have to be drawn
     image = window.grab().toImage()
     frame = QColor(theme.TOKENS["dark"]["BUTTON_BG"])
+    card_switches = tuple(
+        button
+        for button in window.channel_panel.findChildren(QToolButton)
+        if button.toolTip().startswith(("Lock:", "Show or hide", "Mute this channel"))
+    )
+    assert card_switches, "the cards are drawn"
     bare = (
         window.transport.rewind,
         window.transport.play_pause,
@@ -623,12 +626,14 @@ def test_the_switches_and_the_transport_stay_bare(window) -> None:
         window.edit.select,
         window.edit.channels,
         window.edit.division,
+        *card_switches,
     )
     for button in bare:
         assert frame not in drawn_pixels(window, image, button), f"{button.toolTip()} wears a frame"
 
     tinted = drawn_pixels(window, image, window.edit.division)
     assert max(colour.blue() - colour.red() for colour in tinted) > 40, "a switch that is on keeps the accent"
+    window.edit.channels.setChecked(False)
 
 
 def test_a_button_that_cannot_be_clicked_reads_as_off(window) -> None:
@@ -2679,6 +2684,42 @@ def test_the_channels_button_toggles_the_sidebar(window) -> None:
     assert window.channel_panel.isVisible()
     window.edit.channels.click()
     assert not window.channel_panel.isVisible()
+
+
+def test_a_channel_switch_marks_the_exceptional_state(own_window) -> None:
+    own_window.view.set_channels(
+        (
+            Channel(channel=0, visible=True),
+            Channel(channel=1, lock=True, mute=True),
+            Channel(channel=2, visible=False, lock=True),
+        )
+    )
+    cards = own_window.channel_panel._cards
+    assert cards[0].lock_button.isChecked() is False
+    assert cards[0].eye_button.isChecked() is False  # visible is the normal state
+    assert cards[1].lock_button.isChecked() is True
+    assert cards[1].mute_button.isChecked() is True
+    assert cards[1].eye_button.isChecked() is False
+    assert cards[2].lock_button.isChecked() is True
+    assert cards[2].eye_button.isChecked() is True  # hidden
+
+
+def test_a_channel_change_refreshes_its_card_in_place(own_window) -> None:
+    view = own_window.view
+    view.set_channels((Channel(channel=0), Channel(channel=1)))
+    panel = own_window.channel_panel
+    card = panel._cards[0]
+
+    view.set_channel_field(0, lock=True)
+    assert panel._cards[0] is card  # a field edit refreshes the card instead of rebuilding it
+    assert card.lock_button.isChecked() is True
+
+    view.set_active_channel(1)
+    assert panel._cards[0] is card  # and so does making another channel active
+    assert card.property("active") is False
+
+    view.add_channel()
+    assert panel._cards[0] is not card  # the set of channels changed, so the cards are rebuilt
 
 
 def test_the_auto_page_and_overtone_toggles_start_off_and_reach_the_settings(own_window) -> None:
