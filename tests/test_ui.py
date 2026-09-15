@@ -27,6 +27,7 @@ from PyQt6.QtWidgets import (
 from namioto import midi, project
 from namioto import settings as store
 from namioto.beats import BeatTempo, LocalWindow
+from namioto.interaction import Interaction, Tool
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.tracks import Track
 from namioto.ui import theme
@@ -288,9 +289,29 @@ def test_control_widths_grow_with_the_theme_font(qt_app) -> None:
 
 def test_tool_buttons_switch_the_roll_mode(window) -> None:
     window.edit.select.click()
-    assert window.view.tool == "select"
+    assert window.view.tool is Tool.SELECT
     window.edit.pen.click()
-    assert window.view.tool == "pen"
+    assert window.view.tool is Tool.PEN
+
+
+def test_one_action_emits_one_state_and_the_bar_renders_it(window) -> None:
+    seen: list[Interaction] = []
+    window.edit.interaction_changed.connect(seen.append)
+    try:
+        window.edit.set_interaction(Interaction.viewing())
+        seen.clear()
+
+        window.edit.select.click()  # one click, one state - no edit-mode signal beside it
+        assert seen == [Interaction.editing_with(Tool.SELECT)]
+        assert window.edit.select.isChecked() and not window.edit.pen.isChecked()
+        assert window.edit.snap.isEnabled()
+
+        window.edit.mode.click()
+        assert seen == [Interaction.editing_with(Tool.SELECT), Interaction.viewing()]
+        assert not (window.edit.pen.isChecked() or window.edit.select.isChecked())
+        assert not window.edit.snap.isEnabled()
+    finally:
+        window.edit.interaction_changed.disconnect(seen.append)
 
 
 def test_mode_buttons_are_icons_not_text(window) -> None:
@@ -550,9 +571,9 @@ def test_working_in_the_roll_leaves_the_suggestion_up(window) -> None:
     window._on_tempo_loaded(fake_estimate())
     assert window.transport.suggestion.isVisible()
 
-    window.view.edit_mode = True  # a drawing gesture: press, drag, release, in the spectrum
+    window.edit.set_interaction(Interaction.editing_with(Tool.PEN))  # a drawing gesture, in the spectrum
     draw_note(window, QPointF(4.0, 60.0), QPointF(8.0, 60.0))
-    window.view.edit_mode = False
+    window.edit.set_interaction(Interaction.viewing())
     draw_note(window, QPointF(4.0, 60.0))  # and a plain click, which moves the playhead
     assert window.transport.suggestion.isVisible()
 
@@ -962,7 +983,7 @@ def test_clicking_the_roll_moves_the_playhead(window) -> None:
 
 def test_the_pen_draws_where_the_playhead_lands(window) -> None:
     window.edit.pen.click()  # picking a tool enters edit mode
-    assert window.view.edit_mode and window.view.tool == "pen"
+    assert window.view.edit_mode and window.view.tool is Tool.PEN
     window.view.set_playhead(None)
     window.view.clear_notes()
     left = QPointF(2.0, 40.0)
@@ -1378,7 +1399,7 @@ def test_the_roll_only_edits_in_edit_mode(window) -> None:
     window._stop()
 
     window.edit.mode.click()  # back in
-    assert window.view.edit_mode and window.view.tool == "pen"
+    assert window.view.edit_mode and window.view.tool is Tool.PEN
     assert window.edit.snap.isEnabled()
     draw_note(window, QPointF(12.3, row), QPointF(13.6, row))  # elsewhere: the first row is taken
     assert len(window.view.notes()) == 2
@@ -1390,10 +1411,10 @@ def test_picking_a_tool_turns_on_edit_mode(window) -> None:
         window.edit.mode.click()
     assert not window.view.edit_mode
     window.edit.select.click()
-    assert window.view.edit_mode and window.edit.mode.isChecked() and window.view.tool == "select"
+    assert window.view.edit_mode and window.edit.mode.isChecked() and window.view.tool is Tool.SELECT
     window.edit.mode.click()
     window.edit.mode.click()  # entering the mode always lands on the pen
-    assert window.view.tool == "pen" and window.edit.pen.isChecked()
+    assert window.view.tool is Tool.PEN and window.edit.pen.isChecked()
 
 
 def test_playing_an_empty_roll_says_so(window) -> None:
@@ -1739,6 +1760,21 @@ def test_notes_are_drawn_only_in_edit_mode(window) -> None:
     window.view.clear_notes()
 
 
+def test_the_item_is_a_view_of_the_document_note(window) -> None:
+    window.view.clear_notes()
+    item = window.view.add_note(60, 1.0, 2.0)
+    note = item.note
+    assert window.view.document.notes == [note] and window.view.notes() == [item]
+
+    note.set_range(4.0, 67)  # the model moves and the item follows it
+    assert (item.start, item.pitch) == (4.0, 67)
+    item.set_duration(3.0)  # and the item writes back into the model
+    assert note.duration == 3.0
+
+    window.view.clear_notes()
+    assert window.view.document.notes == [] and window.view.notes() == []
+
+
 def test_spectrum_loader_reports_a_bad_file(window, tmp_path) -> None:
     broken = tmp_path / "broken.wav"
     broken.write_text("not audio")
@@ -1874,6 +1910,20 @@ def test_the_command_line_seeds_the_run_without_writing_itself_back(own_window) 
     assert saved.spectrum.contrast == before.spectrum.contrast
 
 
+def test_every_bar_setting_has_one_binding(own_window) -> None:
+    bound = {(binding.section, binding.name) for binding in own_window._bindings}
+    assert bound <= set(store.FIELD_SPECS), f"a binding names no setting: {sorted(bound - set(store.FIELD_SPECS))}"
+    # zoom lives on the roll, the last directory on the chooser and the session on the window: no bar
+    elsewhere = {("editor", "zoom_x"), ("editor", "zoom_y"), ("paths", "last_audio_dir")}
+    elsewhere |= {("session", name) for name in ("geometry", "center_x", "center_y")}
+    missing = (
+        {(section.name, item.name) for section in store.SECTIONS for item in section.fields if item.hidden}
+        - bound
+        - elsewhere
+    )
+    assert not missing, f"a bar setting with no binding: {sorted(missing)}"
+
+
 def test_a_command_line_channel_beats_the_settings(own_window) -> None:
     store.set_value(own_window.settings, "analysis", "channels", "side")
     own_window.overrides["channels"] = "left"
@@ -1981,7 +2031,7 @@ def test_a_project_brings_its_tempo_and_latency_back(own_window, tmp_path) -> No
 
 
 def test_the_overtone_highlight_can_be_turned_off(window) -> None:
-    window.view.edit_mode = False
+    window.edit.set_interaction(Interaction.viewing())
     window.view.overtone_highlight = True
     window.view.set_hover_pitch(60)
     assert window.view.highlight_pitches() == [60, 72, 79, 84]  # no edit mode needed
@@ -1989,9 +2039,9 @@ def test_the_overtone_highlight_can_be_turned_off(window) -> None:
     window.view.overtone_highlight = False
     assert window.view.highlight_pitches() == [60]
 
-    window.view.edit_mode = True
+    window.edit.set_interaction(Interaction.editing_with(Tool.PEN))
     assert window.view.highlight_pitches() == [60]  # and the switch still governs it while editing
-    window.view.edit_mode = False
+    window.edit.set_interaction(Interaction.viewing())
     window.view.set_hover_pitch(None)
 
 
@@ -2133,7 +2183,6 @@ def test_a_change_made_with_a_project_open_still_leaves_the_default_alone(own_wi
     assert own_window.load_project(path) is True
 
     own_window.mix.gain.set_value(340.0)  # the document's gain, not the app's
-    own_window._on_panel_changed()
     own_window.settings_store.flush()
     written = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
     assert own_window.settings.spectrum.gain == 340.0

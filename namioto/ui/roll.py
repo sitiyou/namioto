@@ -15,19 +15,16 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from namioto.document import MIN_DURATION, PITCH_COUNT, PITCH_MAX, PITCH_MIN, Document, Note
+from namioto.interaction import Interaction, Tool
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
-from namioto.tracks import TRACK_LIMIT, Track, free_channel
-from namioto.tracks import set_field as track_set_field
+from namioto.tracks import Track, free_channel
 from namioto.ui import theme
 from namioto.ui.spectrogram import SpectrumImage
 
-PITCH_MIN = 21
-PITCH_MAX = 108
-PITCH_COUNT = PITCH_MAX - PITCH_MIN + 1
 LENGTH_BEATS = 64
 CONTENT_MARGIN = 4.0
 NOTE_INSET = 0.06
-MIN_DURATION = 0.0625
 BAR_BEATS = 4.0
 PAGE_TURN_MARGIN = 0.15  # how close to the right edge the playhead may get before the page turns
 PAGE_TURN_LEAD = 0.2  # where on the fresh page the playhead then sits
@@ -97,41 +94,53 @@ def time_step(pixels_per_second: float, minimum: float) -> float:
 
 
 class NoteItem(QGraphicsRectItem):
-    """A single MIDI note; scene units are beats (x) and semitone rows (y).
+    """The drawn body of one `Note`; scene units are beats (x) and semitone rows (y).
 
-    The track index is also the stacking order: a later track draws over, and wins the hit test,
-    the way noteDigger files its channels.
+    It is a view of the note, not a copy: the data lives in `namioto.document`, and the item reads
+    and writes it. The note's track is also the stacking order: a later track draws over, and wins
+    the hit test, the way noteDigger files its channels.
     """
 
-    def __init__(self, pitch: int, start: float, duration: float, track: int = 0):
+    def __init__(self, note: Note):
         super().__init__()
-        # notes also arrive from files and models, and they still have to land inside the roll
-        self.pitch = min(PITCH_MAX, max(PITCH_MIN, int(pitch)))
-        self.start = max(0.0, float(start))
-        self.duration = max(MIN_DURATION, float(duration))
-        self.track = min(TRACK_LIMIT - 1, max(0, int(track)))
+        self.note = note
         self.fill, self.edge_light, self.edge_dark = theme.note_shades(NOTE_COLORS[0])
         self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
+        self._sync()
+
+    @property
+    def pitch(self) -> int:
+        return self.note.pitch
+
+    @property
+    def start(self) -> float:
+        return self.note.start
+
+    @property
+    def duration(self) -> float:
+        return self.note.duration
+
+    @property
+    def track(self) -> int:
+        return self.note.track
+
+    @property
+    def end(self) -> float:
+        return self.note.end
+
+    def set_duration(self, duration: float) -> None:
+        self.note.set_duration(duration)
+        self._sync()
+
+    def set_range(self, start: float, pitch: int) -> None:
+        self.note.set_range(start, pitch)
         self._sync()
 
     def _sync(self) -> None:
         self.setRect(0.0, 0.0, self.duration, 1.0 - 2 * NOTE_INSET)
         self.setPos(self.start, PITCH_MAX - self.pitch + NOTE_INSET)
         self.setZValue(self.track)
-
-    @property
-    def end(self) -> float:
-        return self.start + self.duration
-
-    def set_duration(self, duration: float) -> None:
-        self.duration = max(MIN_DURATION, duration)
-        self._sync()
-
-    def set_range(self, start: float, pitch: int) -> None:
-        self.start = max(0.0, start)
-        self.pitch = min(PITCH_MAX, max(PITCH_MIN, pitch))
-        self._sync()
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         selected = self.isSelected()
@@ -179,8 +188,7 @@ class PianoRollView(QGraphicsView):
         super().__init__(scene, parent)
         self._scene = scene
         self.snap = 0.25
-        self.tool = "pen"
-        self._edit_mode = False
+        self._interaction = Interaction.viewing()
         self.overtone_highlight = True
         self.playing = False
         self.division = "beats"
@@ -200,7 +208,8 @@ class PianoRollView(QGraphicsView):
         self._trim_edge = ""
         self._grab_note: NoteItem | None = None
         self._snapshot: dict[NoteItem, tuple[float, int, float]] = {}
-        self.tracks: list[Track] = [Track(name="Track 1", color=theme.NOTE_PALETTE[0])]
+        self.document = Document(tracks=[Track(name="Track 1", color=theme.NOTE_PALETTE[0])])
+        self._items: list[NoteItem] = []
         self.active_track = 0
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -253,38 +262,65 @@ class PianoRollView(QGraphicsView):
         self._scene.setSceneRect(QRectF(0.0, 0.0, self.content_beats(), PITCH_COUNT))
 
     def add_note(self, pitch: int, start: float, duration: float, track: int | None = None) -> NoteItem:
-        note = NoteItem(pitch, start, duration, self.active_track if track is None else track)
-        note.fill, note.edge_light, note.edge_dark = theme.note_shades(self._track_color(note.track))
-        note.setVisible(self._edit_mode and self.tracks[note.track].visible)
-        self._scene.addItem(note)
+        note = Note(pitch, start, duration, self.active_track if track is None else track)
+        self.document.add_note(note)
+        item = self._add_item(note)
         self._update_scene()
         self.notes_changed.emit()
-        return note
+        return item
 
     def set_notes(self, notes) -> None:
         """Replace every note in one go: a project or an extraction arrives all at once.
 
         A note may carry a fourth element, the track it belongs to.
         """
-        for note in self.notes():
-            self._scene.removeItem(note)
-        for item in notes:
-            self._scene.addItem(NoteItem(item[0], item[1], item[2], item[3] if len(item) > 3 else 0))
+        self._drop_items()
+        self.document.replace_notes(Note(item[0], item[1], item[2], item[3] if len(item) > 3 else 0) for item in notes)
+        for note in self.document.notes:
+            self._add_item(note)
         self._sync_track_visuals()
         self._update_scene()
         self.notes_changed.emit()
 
     def clear_notes(self) -> None:
-        for note in self.notes():
-            self._scene.removeItem(note)
+        self._drop_items()
+        self.document.clear_notes()
         self._update_scene()
         self.notes_changed.emit()
         self.view_changed.emit()
 
     def notes(self) -> list[NoteItem]:
-        return [item for item in self._scene.items() if isinstance(item, NoteItem)]
+        return list(self._items)
+
+    def _add_item(self, note: Note) -> NoteItem:
+        item = NoteItem(note)
+        item.fill, item.edge_light, item.edge_dark = theme.note_shades(self._track_color(note.track))
+        item.setVisible(self.edit_mode and self.tracks[note.track].visible)
+        self._scene.addItem(item)
+        self._items.append(item)
+        return item
+
+    def _drop_item(self, item: NoteItem) -> None:
+        self._scene.removeItem(item)
+        self._items.remove(item)
+
+    def _drop_items(self) -> None:
+        for item in list(self._items):
+            self._scene.removeItem(item)
+        self._items.clear()
+
+    def _remove_item(self, item: NoteItem) -> None:
+        self.document.remove_note(item.note)
+        self._drop_item(item)
+        self.notes_changed.emit()
+        self.view_changed.emit()
 
     # --- tracks -----------------------------------------------------------
+
+    @property
+    def tracks(self) -> list[Track]:
+        """The document's track list; the panel and the players read it, nothing holds a copy."""
+        return self.document.tracks
 
     def _borrow_color(self) -> str:
         """The first theme colour no track wears yet; a full palette cycles."""
@@ -306,20 +342,21 @@ class PianoRollView(QGraphicsView):
         editing, the way WaveTone keeps its graph to the spectrum outside note edit mode."""
         for note in self.notes():
             note.fill, note.edge_light, note.edge_dark = theme.note_shades(self._track_color(note.track))
-            note.setVisible(self._edit_mode and self.tracks[note.track].visible)
+            note.setVisible(self.edit_mode and self.tracks[note.track].visible)
 
     def set_tracks(self, tracks) -> None:
         """Replace the track list in one go, the way a project hands it over.
 
         Notes on tracks that go away are dropped with them.
         """
-        self.tracks = list(tracks) or [Track(name="Track 1", color=theme.NOTE_PALETTE[0])]
-        for note in self.notes():
-            if note.track >= len(self.tracks):
-                self._scene.removeItem(note)
+        self.document.set_tracks(tracks or [Track(name="Track 1", color=theme.NOTE_PALETTE[0])])
         for index, track in enumerate(self.tracks):
             if not track.color:
-                self.tracks[index] = track_set_field(track, color=self._borrow_color())
+                self.document.set_track_field(index, color=self._borrow_color())
+        kept = {id(note) for note in self.document.notes}
+        for item in list(self._items):
+            if id(item.note) not in kept:
+                self._drop_item(item)
         self.active_track = min(self.active_track, len(self.tracks) - 1)
         self._sync_track_visuals()
         self.tracks_changed.emit()
@@ -332,23 +369,21 @@ class PianoRollView(QGraphicsView):
         track = Track(
             name=name or f"Track {len(self.tracks) + 1}", color=self._borrow_color(), channel=channel, program=program
         )
-        self.tracks.append(track)
+        self.document.add_track(track)
         self.tracks_changed.emit()
         return track
 
     def remove_track(self, index: int) -> bool:
         """Drop a track and the notes on it; the tracks after it shift down. The last one stays."""
-        if len(self.tracks) <= 1:
+        removed = self.document.remove_track(index)
+        if removed is None:
             return False
-        removed = False
-        for note in self.notes():
-            if note.track == index:
-                self._scene.removeItem(note)
-                removed = True
-            elif note.track > index:
-                note.track -= 1
-                note._sync()
-        self.tracks.pop(index)
+        gone = {id(note) for note in removed}
+        for item in list(self._items):
+            if id(item.note) in gone:
+                self._drop_item(item)
+        for item in self._items:
+            item._sync()  # the notes after the gap moved down a track
         self.active_track = min(self.active_track, len(self.tracks) - 1)
         self._sync_track_visuals()
         if removed:
@@ -358,7 +393,7 @@ class PianoRollView(QGraphicsView):
         return True
 
     def set_track_field(self, index: int, **fields) -> None:
-        self.tracks[index] = track_set_field(self.tracks[index], **fields)
+        self.document.set_track_field(index, **fields)
         self._sync_track_visuals()
         self.tracks_changed.emit()
 
@@ -383,14 +418,22 @@ class PianoRollView(QGraphicsView):
         self.view_changed.emit()
 
     @property
-    def edit_mode(self) -> bool:
-        return self._edit_mode
+    def interaction(self) -> Interaction:
+        return self._interaction
 
-    @edit_mode.setter
-    def edit_mode(self, editing: bool) -> None:
-        self._edit_mode = bool(editing)
+    @property
+    def edit_mode(self) -> bool:
+        return self._interaction.editing
+
+    @property
+    def tool(self) -> Tool | None:
+        return self._interaction.tool
+
+    def apply_interaction(self, state: Interaction) -> None:
+        """The one place a mode and tool land: it decides what is drawn and how it answers."""
+        self._interaction = state
         self._sync_track_visuals()
-        self.viewport().update()
+        self.refresh()
 
     def frame_width(self) -> float:
         """Scene width of one spectrum frame, in beats."""
@@ -647,9 +690,7 @@ class PianoRollView(QGraphicsView):
         if event.button() == Qt.MouseButton.RightButton:
             note = self._note_at(scene_pos)
             if note is not None and not self._locked(note.track):
-                self._scene.removeItem(note)
-                self.notes_changed.emit()
-                self.view_changed.emit()
+                self._remove_item(note)
             return
 
         if event.button() != Qt.MouseButton.LeftButton:
@@ -664,7 +705,7 @@ class PianoRollView(QGraphicsView):
             return
 
         if note is None:
-            if ctrl or self.tool == "select":
+            if ctrl or self.tool is Tool.SELECT:
                 if not shift:
                     self._clear_selection()
                 self._mode = "select"
@@ -845,8 +886,9 @@ class PianoRollView(QGraphicsView):
             return
         if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             selection = self.selected_notes()
-            for note in selection:
-                self._scene.removeItem(note)
+            for item in selection:
+                self.document.remove_note(item.note)
+                self._drop_item(item)
             if selection:
                 self.notes_changed.emit()
                 self.view_changed.emit()

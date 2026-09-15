@@ -5,7 +5,11 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Callable
+from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
+from typing import Any
 
 from PyQt6.QtCore import QByteArray, QThread, QTimer, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
@@ -45,6 +49,24 @@ SPEED_SETTLE_MS = 100
 BEAT_SOURCE = "Beat tracking and least-squares fit"
 PROJECT_FILTER = f"Namioto project (*{project.SUFFIX})"
 MIDI_FILTER = f"MIDI file ({' '.join(f'*{suffix}' for suffix in midi.SUFFIXES)})"
+
+
+@dataclass(frozen=True)
+class _Binding:
+    """One value the bars own: where it is read and written, and what a change to it means.
+
+    The window keeps no second copy of these: `read` and `write` are the settings' side, `show` is
+    what a new value does to the roll and the players, and both directions - remember on screen,
+    apply a document - walk this one table, so a bar value is a line here and nowhere else.
+    """
+
+    section: str
+    name: str
+    read: Callable[[], Any]
+    write: Callable[[Any], None]
+    signal: Any
+    show: Callable[[], None] | None = None
+    override: str = ""
 
 
 class TempoLoader(QThread):
@@ -125,7 +147,6 @@ class MainWindow(QMainWindow):
         self.view.initial_center = (self.settings.session.center_x, self.settings.session.center_y)
         self.view.overtone_highlight = editor.overtone_highlight
         self.view.division = editor.division
-        self.view.snap = editor.snap
         self.ruler = TimelineRuler(self.view)
         self.keyboard = PianoKeyboard(self.view)
         self.player, self.player_name = self._make_player()
@@ -181,7 +202,6 @@ class MainWindow(QMainWindow):
         self.edit.division.setChecked(editor.division == "beats")
         self.transport.auto_page.setChecked(editor.auto_page)
         self.transport.overtone.setChecked(editor.overtone_highlight)
-        self.view.overtone_highlight = editor.overtone_highlight
         self.view.snap = self.edit.snap.currentData()
         self.transport.bpm.setValue(self.settings.tempo.bpm)
         self.transport.latency.setValue(self.settings.playback.latency_ms)
@@ -191,12 +211,11 @@ class MainWindow(QMainWindow):
         self.mix.audio_volume.set_value(self.settings.playback.audio_volume)
         self.mix.midi_volume.set_value(self.settings.playback.midi_volume)
 
-        self.edit.snap.currentIndexChanged.connect(lambda: setattr(self.view, "snap", self.edit.snap.currentData()))
-        self.edit.tool_changed.connect(self._on_tool_changed)
-        self.edit.mode_changed.connect(self._on_mode_changed)
-        self.edit.division_changed.connect(self._on_division_changed)
-        self.transport.overtone_toggled.connect(self._on_overtone)
-        self.transport.bpm.valueChanged.connect(self._on_bpm_changed)
+        # one table for every bar value: it feeds the roll and is what the program remembers
+        self._bindings = self._make_bindings()
+        for binding in self._bindings:
+            binding.signal.connect(partial(self._binding_changed, binding))
+        self.edit.interaction_changed.connect(self.view.apply_interaction)
         self.transport.detect.clicked.connect(self._start_tempo)
         self.transport.suggestion.applied.connect(self._apply_tempo)
         self.transport.suggestion.dismissed.connect(self.transport.suggestion.hide)
@@ -214,30 +233,10 @@ class MainWindow(QMainWindow):
         self.view.note_preview.connect(self._on_note_preview)
         self.keyboard.key_preview.connect(self._on_note_preview)
         self.transport.settings_button.clicked.connect(self._open_settings)
-        self.mix.midi_volume.value_changed.connect(self._on_midi_volume)
         self.mix.midi_volume.slider.setToolTip(f"Volume of the note playback through {self.player_name}")
-        self.mix.audio_volume.value_changed.connect(self._on_audio_volume)
-        self.mix.gain.value_changed.connect(self._on_spectrum_parameters)
-        self.mix.contrast.value_changed.connect(self._on_spectrum_parameters)
         self.view.gain = self.mix.gain.value()
         self.view.contrast = self.mix.contrast.value()
         self.view.bpm = self.transport.bpm.value()
-
-        # the bar and the settings are the same thing: whatever is on screen is what comes back
-        for signal in (
-            self.mix.gain.value_changed,
-            self.mix.contrast.value_changed,
-            self.mix.audio_volume.value_changed,
-            self.mix.midi_volume.value_changed,
-            self.transport.speed.value_changed,
-            self.transport.latency.valueChanged,
-            self.transport.bpm.valueChanged,
-            self.edit.division_changed,
-            self.transport.auto_page_toggled,
-            self.transport.overtone_toggled,
-        ):
-            signal.connect(self._on_panel_changed)
-        self.edit.snap.currentIndexChanged.connect(self._on_panel_changed)
 
         self.view.notes_changed.connect(self._update_status)
         self.view.notes_changed.connect(self._mark_dirty)
@@ -285,6 +284,7 @@ class MainWindow(QMainWindow):
                 self.mix.contrast.set_value(contrast)
         finally:
             self._seeding = False
+        self._on_spectrum_parameters()  # the seed was quiet, so show the roll what it landed on
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(
@@ -300,33 +300,136 @@ class MainWindow(QMainWindow):
         if self.audio_path is not None:
             self.load_audio(self.audio_path)
 
+    def _make_bindings(self) -> tuple[_Binding, ...]:
+        """Every bar value the settings hold, one line each: read, write, the signal, and its effect."""
+        return (
+            _Binding(
+                "spectrum",
+                "gain",
+                self.mix.gain.value,
+                self.mix.gain.set_value,
+                self.mix.gain.value_changed,
+                self._on_spectrum_parameters,
+                "gain",
+            ),
+            _Binding(
+                "spectrum",
+                "contrast",
+                self.mix.contrast.value,
+                self.mix.contrast.set_value,
+                self.mix.contrast.value_changed,
+                self._on_spectrum_parameters,
+                "contrast",
+            ),
+            _Binding(
+                "playback",
+                "audio_volume",
+                self.mix.audio_volume.value,
+                self.mix.audio_volume.set_value,
+                self.mix.audio_volume.value_changed,
+                self._on_audio_volume,
+            ),
+            _Binding(
+                "playback",
+                "midi_volume",
+                self.mix.midi_volume.value,
+                self.mix.midi_volume.set_value,
+                self.mix.midi_volume.value_changed,
+                self._on_midi_volume,
+            ),
+            _Binding(
+                "playback",
+                "speed",
+                self.transport.speed.value,
+                self.transport.speed.set_value,
+                self.transport.speed.slider.valueChanged,
+                self._on_speed_changed,
+            ),
+            _Binding(
+                "playback",
+                "latency_ms",
+                self.transport.latency.value,
+                self.transport.latency.setValue,
+                self.transport.latency.valueChanged,
+            ),
+            _Binding(
+                "tempo",
+                "bpm",
+                self.transport.bpm.value,
+                self.transport.bpm.setValue,
+                self.transport.bpm.valueChanged,
+                self._on_bpm_changed,
+            ),
+            _Binding(
+                "editor",
+                "snap",
+                self._snap_value,
+                self._set_snap,
+                self.edit.snap.currentIndexChanged,
+                self._on_snap_changed,
+            ),
+            _Binding(
+                "editor",
+                "division",
+                self._division_value,
+                self._set_division,
+                self.edit.division_changed,
+                self._on_division_changed,
+            ),
+            _Binding(
+                "editor",
+                "auto_page",
+                self.transport.auto_page.isChecked,
+                self.transport.auto_page.setChecked,
+                self.transport.auto_page_toggled,
+            ),
+            _Binding(
+                "editor",
+                "overtone_highlight",
+                self.transport.overtone.isChecked,
+                self.transport.overtone.setChecked,
+                self.transport.overtone_toggled,
+                self._on_overtone,
+            ),
+        )
+
+    def _snap_value(self) -> float:
+        return self.edit.snap.currentData()
+
+    def _set_snap(self, value: float) -> None:
+        self.edit.snap.setCurrentIndex(max(0, self.edit.snap.findData(value)))
+
+    def _division_value(self) -> str:
+        return "beats" if self.edit.division.isChecked() else "seconds"
+
+    def _set_division(self, value: str) -> None:
+        self.edit.division.setChecked(value == "beats")
+
+    def _binding_changed(self, binding: _Binding, *_args) -> None:
+        """A bar value the user moved: it reaches the roll, and it is what the program remembers."""
+        if self._seeding:  # the window filled the bar in, so this is not a change to write back
+            return
+        if binding.show is not None:
+            binding.show()
+        self._display_overrides.clear()  # the bar was touched after all, so it is what is remembered
+        self._remember_configuration()
+        self.settings_store.touch()
+
     def _on_settings_changed(self, settings) -> None:
         """Take a settings object over the running one: a project was opened, or the window applied.
 
-        The panel is filled in with the change kept quiet: every slider moved would otherwise write
-        the values of the ones not yet moved back into the settings being applied.
+        Every bar is filled in quietly - `_seeding` keeps the write from looking like a user change -
+        and then told to show its value, so the roll follows even when the widget already held it.
         """
         self.settings = settings
         self._seeding = True
         try:
-            self.view.overtone_highlight = settings.editor.overtone_highlight
-            self.view.gain = settings.spectrum.gain
-            self.view.contrast = settings.spectrum.contrast
+            for binding in self._bindings:
+                binding.write(store.get_value(settings, binding.section, binding.name))
+                if binding.show is not None:
+                    binding.show()
             self.view.set_zoom(settings.editor.zoom_x, settings.editor.zoom_y)
-            self.edit.snap.setCurrentIndex(max(0, self.edit.snap.findData(settings.editor.snap)))
-            self.view.snap = self.edit.snap.currentData()
-            self.edit.division.setChecked(settings.editor.division == "beats")
-            self.view.division = settings.editor.division
-            self.transport.auto_page.setChecked(settings.editor.auto_page)
-            self.transport.overtone.setChecked(settings.editor.overtone_highlight)
             self.view.refresh()
-            self.mix.gain.set_value(settings.spectrum.gain)
-            self.mix.contrast.set_value(settings.spectrum.contrast)
-            self.mix.audio_volume.set_value(settings.playback.audio_volume)
-            self.mix.midi_volume.set_value(settings.playback.midi_volume)
-            self.transport.bpm.setValue(settings.tempo.bpm)
-            self.transport.latency.setValue(settings.playback.latency_ms)
-            self.transport.speed.set_value(settings.playback.speed)
             if self._player_key() != self._current_player_key:
                 self._rebuild_player()
         finally:
@@ -370,28 +473,12 @@ class MainWindow(QMainWindow):
 
     def _remember_configuration(self) -> None:
         """The bar values are the settings, so what is on screen is what comes back next time."""
-        if "gain" not in self._display_overrides:
-            store.set_value(self.settings, "spectrum", "gain", self.mix.gain.value())
-        if "contrast" not in self._display_overrides:
-            store.set_value(self.settings, "spectrum", "contrast", self.mix.contrast.value())
-        store.set_value(self.settings, "playback", "audio_volume", self.mix.audio_volume.value())
-        store.set_value(self.settings, "playback", "midi_volume", self.mix.midi_volume.value())
-        store.set_value(self.settings, "playback", "speed", self.transport.speed.value())
-        store.set_value(self.settings, "playback", "latency_ms", self.transport.latency.value())
-        store.set_value(self.settings, "tempo", "bpm", self.transport.bpm.value())
-        store.set_value(self.settings, "editor", "snap", self.view.snap)
-        store.set_value(self.settings, "editor", "division", self.view.division)
-        store.set_value(self.settings, "editor", "auto_page", self.transport.auto_page.isChecked())
-        store.set_value(self.settings, "editor", "overtone_highlight", self.transport.overtone.isChecked())
+        for binding in self._bindings:
+            if binding.override and binding.override in self._display_overrides:
+                continue
+            store.set_value(self.settings, binding.section, binding.name, binding.read())
         store.set_value(self.settings, "editor", "zoom_x", self.view.zoom[0])
         store.set_value(self.settings, "editor", "zoom_y", self.view.zoom[1])
-
-    def _on_panel_changed(self, *_args) -> None:
-        if self._seeding:
-            return
-        self._display_overrides.clear()  # the panel was touched after all, so it is what is remembered
-        self._remember_configuration()
-        self.settings_store.touch()
 
     def _restore_session(self) -> None:
         session = self.settings.session
@@ -865,11 +952,11 @@ class MainWindow(QMainWindow):
         self.position_timer.stop()
         self._show_position()
 
-    def _on_midi_volume(self, value: float) -> None:
-        self.player.gain = value / 100.0
+    def _on_midi_volume(self, *_args) -> None:
+        self.player.gain = self.mix.midi_volume.value() / 100.0
 
-    def _on_audio_volume(self, value: float) -> None:
-        self.song.gain = value / 100.0
+    def _on_audio_volume(self, *_args) -> None:
+        self.song.gain = self.mix.audio_volume.value() / 100.0
 
     def _on_note_preview(self, pitch: int) -> None:
         """Audition a note the user clicked or drew."""
@@ -889,26 +976,22 @@ class MainWindow(QMainWindow):
             "middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y  |  gear: settings"
         )
 
-    def _on_tool_changed(self, tool: str) -> None:
-        self.view.tool = tool or None
-
-    def _on_mode_changed(self, editing: bool) -> None:
-        self.view.edit_mode = editing
+    def _on_division_changed(self, *_args) -> None:
+        self.view.division = self._division_value()
         self.view.refresh()
 
-    def _on_division_changed(self, division: str) -> None:
-        self.view.division = division
+    def _on_overtone(self, *_args) -> None:
+        self.view.overtone_highlight = self.transport.overtone.isChecked()
         self.view.refresh()
 
-    def _on_overtone(self, enabled: bool) -> None:
-        self.view.overtone_highlight = enabled
-        self.view.refresh()
+    def _on_snap_changed(self, *_args) -> None:
+        self.view.snap = self._snap_value()
 
-    def _on_bpm_changed(self, value: float) -> None:
+    def _on_bpm_changed(self, *_args) -> None:
         self.transport.suggestion.hide()  # a tempo the user typed wins over the suggestion
-        self.view.bpm = value
+        self.view.bpm = self.transport.bpm.value()
 
-    def _on_spectrum_parameters(self, _value: float = 0.0) -> None:
+    def _on_spectrum_parameters(self, *_args) -> None:
         self.view.gain = self.mix.gain.value()
         self.view.contrast = self.mix.contrast.value()
         self.view.refresh()

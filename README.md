@@ -140,6 +140,8 @@ namioto/tempo.py      TempoCNN tempo estimation (ONNX Runtime) + tempo map helpe
 namioto/spectrum.py   note-domain spectrum analysis (STFT → 84 note bands), no Qt
 namioto/playback.py   note synthesis: pitches rendered into one audio buffer, no Qt
 namioto/tracks.py     the tracks a note belongs to, and the values they play with, no Qt
+namioto/interaction.py the roll's normal/edit mode and its tool, as one value, no Qt
+namioto/document.py   the notes and the tracks they belong to, in beats, no Qt
 namioto/midi.py       reading and writing MIDI files (mido), no Qt
 namioto/models/       bundled ONNX models
 namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars, roll.py: widgets,

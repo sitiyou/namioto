@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from namioto.interaction import Interaction, Tool, pick_tool, toggle_mode
 from namioto.ui import icons
 from namioto.ui.roll import format_time
 
@@ -469,8 +470,8 @@ class TransportBar(_Group):
             "Overtone highlight: paint f, 2f, 3f and 4f of the row under the mouse, the way WaveTone marks them",
             checkable=True,
         )
-        self.auto_page.clicked.connect(self.auto_page_toggled)
-        self.overtone.clicked.connect(self.overtone_toggled)
+        self.auto_page.toggled.connect(self.auto_page_toggled)
+        self.overtone.toggled.connect(self.overtone_toggled)
 
         project = Cluster("project")
         project.add(self.open)
@@ -514,21 +515,22 @@ class TransportBar(_Group):
 
 
 class EditBar(_Group):
-    """Tools, time-axis division and snapping."""
+    """Tools, time-axis division and snapping. The mode and the tool are one value, and this bar is
+    only its input and its display: every button and the snap field are rendered from it."""
 
-    tool_changed = pyqtSignal(str)
-    mode_changed = pyqtSignal(bool)
+    interaction_changed = pyqtSignal(object)
     division_changed = pyqtSignal(str)
 
     def __init__(self, snap_choices, parent=None):
         super().__init__(parent)
         self.setObjectName("editBar")
+        self._interaction = Interaction.viewing()
         self.mode = icon_button(
             "edit",
             "Edit mode: draw, move and select notes (off: a click in the roll moves the playhead)",
             checkable=True,
         )
-        self.mode.clicked.connect(self._mode_clicked)
+        self.mode.clicked.connect(self._toggle_mode)
         self.tracks = icon_button("tracks", "Tracks: colours, mute and instruments, one card per track", checkable=True)
         self.pen = icon_button("pen", "Pen: click or drag an empty row to draw a note", checkable=True)
         self.select = icon_button(
@@ -538,8 +540,8 @@ class EditBar(_Group):
         self.tools.setExclusive(True)
         self.tools.addButton(self.pen)
         self.tools.addButton(self.select)
-        self.pen.clicked.connect(lambda: self._tool_clicked("pen"))
-        self.select.clicked.connect(lambda: self._tool_clicked("select"))
+        self.pen.clicked.connect(lambda: self._pick_tool(Tool.PEN))
+        self.select.clicked.connect(lambda: self._pick_tool(Tool.SELECT))
 
         self.snap = QComboBox()
         for label, beats in snap_choices:
@@ -563,7 +565,7 @@ class EditBar(_Group):
             checkable=True,
         )
         self.division.setChecked(True)  # beats by default; a click flips it to seconds
-        self.division.clicked.connect(lambda checked: self.division_changed.emit("beats" if checked else "seconds"))
+        self.division.toggled.connect(lambda checked: self.division_changed.emit("beats" if checked else "seconds"))
 
         # the editing tools stay one group; the track sidebar and the time division sit beside them
         tools.add(separator())
@@ -571,29 +573,32 @@ class EditBar(_Group):
         tools.add(self.division)
 
         self.place(tools, 1, 0, 2)
+        self._render()
 
-    def _mode_clicked(self) -> None:
-        editing = self.mode.isChecked()
-        self._set_mode(editing)
-        if editing:
-            self.pen.setChecked(True)  # entering the mode starts on the pen
-            self.tool_changed.emit("pen")
-        else:
-            self.tools.setExclusive(False)
-            for button in self.tools.buttons():
-                button.setChecked(False)
-            self.tools.setExclusive(True)
-            self.tool_changed.emit("")
+    def set_interaction(self, state: Interaction) -> None:
+        """Take a mode and tool over, wherever they came from, and tell the world about it."""
+        self._interaction = state
+        self._render()
+        self.interaction_changed.emit(state)
 
-    def _tool_clicked(self, tool: str) -> None:
-        if not self.mode.isChecked():
-            self._set_mode(True)
-        self.tool_changed.emit(tool)
-
-    def _set_mode(self, editing: bool) -> None:
+    def _render(self) -> None:
+        editing = self._interaction.editing
         self.mode.setChecked(editing)
         self.snap.setEnabled(editing)
-        self.mode_changed.emit(editing)
+        if not editing:
+            self.tools.setExclusive(False)  # an exclusive group keeps its last button checked
+            self.pen.setChecked(False)
+            self.select.setChecked(False)
+            self.tools.setExclusive(True)
+            return
+        self.pen.setChecked(self._interaction.tool is Tool.PEN)
+        self.select.setChecked(self._interaction.tool is Tool.SELECT)
+
+    def _toggle_mode(self) -> None:
+        self.set_interaction(toggle_mode(self._interaction))
+
+    def _pick_tool(self, tool: Tool) -> None:
+        self.set_interaction(pick_tool(self._interaction, tool))
 
 
 class MixBar(_Group):
