@@ -27,14 +27,14 @@ from PyQt6.QtWidgets import (
 from namioto import midi, project
 from namioto import settings as store
 from namioto.beats import BeatTempo, LocalWindow
+from namioto.channels import Channel
 from namioto.interaction import Interaction, Tool
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
-from namioto.tracks import Track
 from namioto.ui import theme
 from namioto.ui.app import MIDI_FILTER, MainWindow, TempoLoader
 from namioto.ui.audio import MidiPortOut, MidiSink, find_port, find_synth_port
 from namioto.ui.controls import Cluster, EditBar, TransportBar, ValueSlider
-from namioto.ui.midi_dialog import MidiExportDialog, MidiImportDialog
+from namioto.ui.midi_dialog import MidiImportDialog
 from namioto.ui.roll import (
     CONTENT_MARGIN,
     GRID_BAR,
@@ -589,7 +589,7 @@ def drawn_pixels(window, image: QImage, button: QToolButton) -> list[QColor]:
 
 
 def test_the_buttons_that_do_something_carry_a_frame(window) -> None:
-    window.edit.tracks.setChecked(True)  # the cards, and the buttons on them, have to be drawn
+    window.edit.channels.setChecked(True)  # the cards, and the buttons on them, have to be drawn
     window._on_tempo_loaded(fake_estimate())
     assert window.transport.suggestion.isVisible()
 
@@ -607,7 +607,7 @@ def test_the_buttons_that_do_something_carry_a_frame(window) -> None:
     )
     for button in commands:
         assert frame in drawn_pixels(window, image, button), f"{button.toolTip()} wears no frame"
-    window.edit.tracks.setChecked(False)
+    window.edit.channels.setChecked(False)
     window.transport.suggestion.hide()
 
 
@@ -621,7 +621,7 @@ def test_the_switches_and_the_transport_stay_bare(window) -> None:
         window.transport.overtone,
         window.edit.mode,
         window.edit.select,
-        window.edit.tracks,
+        window.edit.channels,
         window.edit.division,
     )
     for button in bare:
@@ -2073,9 +2073,11 @@ def test_the_transport_carries_the_project_buttons() -> None:
     seen: list[str] = []
     bar.open_requested.connect(lambda: seen.append("open"))
     bar.save_requested.connect(lambda: seen.append("save"))
+    bar.export_midi_requested.connect(lambda: seen.append("export"))
     bar.open.click()
     bar.save.click()
-    assert seen == ["open", "save"]
+    bar.export_midi.click()
+    assert seen == ["open", "save", "export"]
 
 
 def test_saving_a_project_takes_the_notes_and_the_values_with_it(own_window, tmp_path) -> None:
@@ -2299,84 +2301,84 @@ def test_a_project_is_picked_up_from_the_command_line(qt_app, tmp_path) -> None:
         window.close()
 
 
-def reset_tracks(window) -> None:
-    window.view.set_tracks((Track(name="Track 1"),))
+def reset_channels(window) -> None:
     window.view.clear_notes()
+    window.view.set_channels((Channel(channel=0),))
 
 
-def test_notes_land_on_the_active_track_and_wear_its_colour(window) -> None:
+def test_notes_land_on_the_active_channel_and_wear_its_colour(window) -> None:
     window.edit.pen.click()
     window.view.clear_notes()
-    window.view.add_track(program=4)
-    window.view.set_active_track(1)
+    window.view.add_channel(program=4)
+    window.view.set_active_channel(1)
     draw_note(window, QPointF(2.0, 40.0), QPointF(3.0, 40.0))
     drawn = window.view.notes()[0]
-    assert drawn.track == 1
+    assert drawn.channel == 1
     on_first = window.view.add_note(60, 0.0, 1.0, 0)
-    assert on_first.fill != drawn.fill  # each track paints its own colour
-    reset_tracks(window)
+    assert on_first.fill != drawn.fill  # each channel paints its own colour
+    reset_channels(window)
 
 
-def test_a_locked_track_cannot_be_edited(window) -> None:
+def test_a_locked_channel_cannot_be_edited(window) -> None:
     window.edit.pen.click()
     window.view.clear_notes()
     note = window.view.add_note(60, 2.0, 2.0)
     scene_pos = QPointF(3.0, PITCH_MAX - 60 + 0.5)
-    window.view.set_track_field(0, lock=True)
+    window.view.set_channel_field(0, lock=True)
 
     roll_mouse(window, QEvent.Type.MouseButtonPress, scene_pos, button=Qt.MouseButton.RightButton)
     roll_mouse(window, QEvent.Type.MouseButtonRelease, scene_pos, button=Qt.MouseButton.RightButton)
-    assert window.view.notes() == [note]  # a right click does not delete on a locked track
+    assert window.view.notes() == [note]  # a right click does not delete on a locked channel
 
     draw_note(window, QPointF(6.0, 30.0))  # and the pen stays silent on it too
     assert window.view.notes() == [note]
-    window.view.set_track_field(0, lock=False)
+    window.view.set_channel_field(0, lock=False)
     window.view.clear_notes()
 
 
-def test_an_invisible_track_hides_its_notes(window) -> None:
+def test_an_invisible_channel_hides_its_notes(window) -> None:
     window.view.clear_notes()
     note = window.view.add_note(60, 2.0, 2.0)
     assert note.isVisible()
-    window.view.set_track_field(0, visible=False, lock=True)  # hiding also locks, noteDigger style
+    window.view.set_channel_field(0, visible=False, lock=True)  # hiding also locks, noteDigger style
     assert not note.isVisible()
-    window.view.set_track_field(0, visible=True, lock=False)
+    window.view.set_channel_field(0, visible=True, lock=False)
     assert note.isVisible()
     window.view.clear_notes()
 
 
-def test_removing_a_track_takes_its_notes_and_renumbers_the_rest(window) -> None:
+def test_removing_a_channel_takes_its_notes_and_leaves_the_numbers_alone(window) -> None:
     window.view.clear_notes()
-    window.view.add_track()
+    window.view.add_channel()
     window.view.add_note(60, 0.0, 1.0, 0)
     survivor = window.view.add_note(64, 1.0, 1.0, 1)
-    assert window.view.remove_track(0)
+    assert window.view.remove_channel(0)
     assert [note.pitch for note in window.view.notes()] == [64]
-    assert survivor.track == 0
-    reset_tracks(window)
+    assert survivor.channel == 1
+    reset_channels(window)
 
 
-def test_a_muted_track_is_left_out_of_the_program(window) -> None:
+def test_a_muted_channel_is_left_out_of_the_program(window) -> None:
     window.view.clear_notes()
-    window.view.add_track(program=4)
+    window.view.add_channel(program=4)
     window.view.add_note(60, 0.0, 1.0, 0)
     window.view.add_note(64, 0.0, 1.0, 1)
     notes, channels = window._program()
     assert len(notes) == 2 and len(channels) == 2
 
-    window.view.set_track_field(1, mute=True)
+    window.view.set_channel_field(1, mute=True)
     notes, channels = window._program()
     assert [note[0] for note in notes] == [60]
     assert [channel[0] for channel in channels] == [0]
-    reset_tracks(window)
+    reset_channels(window)
 
 
-def test_the_tracks_button_toggles_the_sidebar(window) -> None:
-    window.track_panel.setVisible(False)
-    window.edit.tracks.click()
-    assert window.track_panel.isVisible()
-    window.edit.tracks.click()
-    assert not window.track_panel.isVisible()
+def test_the_channels_button_toggles_the_sidebar(window) -> None:
+    window.channel_panel.setVisible(False)
+    window.edit.channels.click()
+    assert window.channel_panel.isVisible()
+    window.edit.channels.click()
+    assert not window.channel_panel.isVisible()
 
 
 def test_the_auto_page_and_overtone_toggles_start_off_and_reach_the_settings(own_window) -> None:
@@ -2430,18 +2432,19 @@ def accept_import(monkeypatch, mode: str, mapping=()) -> None:
     monkeypatch.setattr(MidiImportDialog, "mapping", lambda self: list(mapping))
 
 
-def test_importing_a_midi_brings_in_its_notes_and_tracks(own_window, tmp_path) -> None:
+def test_importing_a_midi_brings_in_its_notes_and_channels(own_window, tmp_path) -> None:
     path = tmp_path / "song.mid"
     midi.write(
         path,
-        (Track(name="Vocal", channel=0, program=52), Track(name="Piano", channel=1, program=0)),
+        (Channel(channel=0, program=52), Channel(channel=1)),
         (project.Note(1.0, 0.5, 60, 0), project.Note(1.0, 0.5, 48, 1)),
         120.0,
     )
     assert own_window.import_midi(path) is True
 
-    assert [track.name for track in own_window.view.tracks] == ["Vocal", "Piano"]
-    assert sorted((note.pitch, note.track) for note in own_window.view.notes()) == [(48, 1), (60, 0)]
+    assert [channel.channel for channel in own_window.view.channels] == [0, 1]
+    assert [channel.program for channel in own_window.view.channels] == [52, 0]
+    assert sorted((note.pitch, note.channel) for note in own_window.view.notes()) == [(48, 1), (60, 0)]
     assert own_window.transport.bpm.value() == 120.0
     assert own_window.project_dirty is True
     assert own_window.project_path is None  # an import is a sketch until it is saved
@@ -2451,7 +2454,7 @@ def test_importing_a_midi_brings_in_its_notes_and_tracks(own_window, tmp_path) -
 def test_importing_over_notes_asks_before_replacing(own_window, monkeypatch, tmp_path) -> None:
     own_window.view.set_notes([(60, 0.0, 1.0)])
     path = tmp_path / "song.mid"
-    midi.write(path, (Track(name="Lead", channel=0),), (project.Note(1.0, 0.5, 62, 0),), 120.0)
+    midi.write(path, (Channel(channel=0),), (project.Note(1.0, 0.5, 62, 0),), 120.0)
     monkeypatch.setattr(MidiImportDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
 
     assert own_window.import_midi(path) is False
@@ -2459,34 +2462,35 @@ def test_importing_over_notes_asks_before_replacing(own_window, monkeypatch, tmp
 
 
 def test_replacing_is_what_the_dialog_can_choose(own_window, monkeypatch, tmp_path) -> None:
-    own_window.view.set_tracks((Track(name="Old", channel=0),))
+    own_window.view.set_channels((Channel(channel=0, name="Old"),))
     own_window.view.set_notes([(60, 0.0, 1.0, 0)])
     path = tmp_path / "song.mid"
-    midi.write(path, (Track(name="Lead", channel=0),), (project.Note(1.0, 0.5, 62, 0),), 120.0)
+    midi.write(path, (Channel(channel=0),), (project.Note(1.0, 0.5, 62, 0),), 120.0)
     accept_import(monkeypatch, "replace")
 
     assert own_window.import_midi(path) is True
-    assert [track.name for track in own_window.view.tracks] == ["Lead"]
+    # a replacement is the file's channels whole: a name the project gave the old one does not stay
+    assert [channel.channel for channel in own_window.view.channels] == [0]
+    assert [channel.name for channel in own_window.view.channels] == [""]
     assert [note.pitch for note in own_window.view.notes()] == [62]
 
 
-def test_merging_adds_the_file_tracks_to_the_roll(own_window, monkeypatch, tmp_path) -> None:
-    own_window.view.set_tracks((Track(name="Voice", channel=0),))
+def test_merging_adds_the_file_channels_to_the_roll(own_window, monkeypatch, tmp_path) -> None:
+    own_window.view.set_channels((Channel(channel=0, name="Voice"),))
     own_window.view.set_notes([(60, 0.0, 1.0, 0)])
     path = tmp_path / "song.mid"
     midi.write(
         path,
-        (Track(name="Lead", channel=0), Track(name="Bass", channel=2, program=33, volume=90)),
-        (project.Note(1.0, 0.5, 64, 0), project.Note(1.0, 0.5, 40, 1)),
+        (Channel(channel=0), Channel(channel=2, program=33, volume=90)),
+        (project.Note(1.0, 0.5, 64, 0), project.Note(1.0, 0.5, 40, 2)),
         140.0,
     )
     accept_import(monkeypatch, "merge", [0, -1])
 
     assert own_window.import_midi(path) is True
-    assert [track.name for track in own_window.view.tracks] == ["Voice", "Bass"]
-    assert (own_window.view.tracks[1].program, own_window.view.tracks[1].volume) == (33, 90)
-    assert own_window.view.tracks[1].channel == 2  # the file's channel, which was free
-    assert sorted((note.pitch, note.track) for note in own_window.view.notes()) == [(40, 1), (60, 0), (64, 0)]
+    assert [channel.channel for channel in own_window.view.channels] == [0, 2]
+    assert (own_window.view.channels[1].program, own_window.view.channels[1].volume) == (33, 90)
+    assert sorted((note.pitch, note.channel) for note in own_window.view.notes()) == [(40, 2), (60, 0), (64, 0)]
     # the file's 140 BPM does not touch the grid: a second stays a second on the audio (120 BPM here)
     assert sorted((note.pitch, round(note.start, 3)) for note in own_window.view.notes()) == [
         (40, 2.0),
@@ -2496,29 +2500,86 @@ def test_merging_adds_the_file_tracks_to_the_roll(own_window, monkeypatch, tmp_p
     assert own_window.transport.bpm.value() == 120.0  # the grid stays on the audio, not on the file
 
 
-def test_the_import_dialog_prefills_the_mapping_by_channel() -> None:
-    imported = midi.Imported(tracks=(Track(name="Lead", channel=2), Track(name="Pad", channel=7)), notes=(), bpm=120.0)
-    dialog = MidiImportDialog(imported, (Track(name="Voice", channel=2), Track(name="Bass", channel=0)), "song.mid")
-    assert dialog.mapping() == [0, -1]  # channel 2 is the roll's first track; the pad has nowhere yet
+def test_merging_onto_an_empty_channel_takes_the_file_channel_over(own_window, monkeypatch, tmp_path) -> None:
+    own_window.view.set_channels((Channel(channel=5, name="Placeholder"), Channel(channel=0, name="Used")))
+    own_window.view.set_notes([(60, 0.0, 1.0, 0)])  # channel 5 carries nothing
+    path = tmp_path / "song.mid"
+    midi.write(
+        path,
+        (Channel(channel=2, program=81, volume=90),),
+        (project.Note(1.0, 0.5, 62, 2),),
+        120.0,
+    )
+    accept_import(monkeypatch, "merge", [5])
+
+    assert own_window.import_midi(path) is True
+    # an empty channel is a free place: the file's channel takes it over, the way a brand new one would
+    assert [channel.channel for channel in own_window.view.channels] == [0, 5]
+    landed = next(channel for channel in own_window.view.channels if channel.channel == 5)
+    assert (landed.program, landed.volume) == (81, 90)
+    assert landed.name == "Placeholder"  # the name belongs to the project, and it stays
+    assert sorted((note.pitch, note.channel) for note in own_window.view.notes()) == [(60, 0), (62, 5)]
+
+
+def test_a_new_channel_keeps_the_number_the_file_played_on(own_window, monkeypatch, tmp_path) -> None:
+    own_window.view.set_channels((Channel(channel=0, name="Voice"),))
+    own_window.view.set_notes([(60, 0.0, 1.0, 0)])
+    path = tmp_path / "song.mid"
+    midi.write(path, (Channel(channel=6),), (project.Note(1.0, 0.5, 62, 6),), 120.0)
+    accept_import(monkeypatch, "merge", [-1])
+
+    assert own_window.import_midi(path) is True
+    # nothing else plays on channel 6, so the file's new channel keeps that number
+    assert [channel.channel for channel in own_window.view.channels] == [0, 6]
+    assert own_window.view.channels[1].name == ""  # a MIDI channel carries no name
+    assert sorted((note.pitch, note.channel) for note in own_window.view.notes()) == [(60, 0), (62, 6)]
+
+
+def test_a_new_channel_takes_a_free_number_when_the_files_own_is_taken(own_window, monkeypatch, tmp_path) -> None:
+    own_window.view.set_channels((Channel(channel=0, name="Voice"),))
+    own_window.view.set_notes([(60, 0.0, 1.0, 0)])
+    path = tmp_path / "song.mid"
+    midi.write(path, (Channel(channel=0),), (project.Note(1.0, 0.5, 62, 0),), 120.0)
+    accept_import(monkeypatch, "merge", [-1])
+
+    assert own_window.import_midi(path) is True
+    # channel 0 already carries the roll's notes, so the file's new channel takes the lowest free one
+    assert [channel.channel for channel in own_window.view.channels] == [0, 1]
+    assert sorted((note.pitch, note.channel) for note in own_window.view.notes()) == [(60, 0), (62, 1)]
+
+
+def test_the_import_dialog_prefills_the_mapping_by_position() -> None:
+    imported = midi.Imported(channels=(Channel(channel=2), Channel(channel=7)), notes=(), bpm=120.0)
+    dialog = MidiImportDialog(imported, (Channel(channel=0), Channel(channel=2)), "song.mid")
+    assert dialog.mapping() == [0, 2]  # both roll channels carry no notes, so the file lands on them in order
     assert dialog.mode() == "merge"  # the additive choice is what a bare accept takes
     dialog.close()
 
 
-def test_the_import_dialog_keeps_the_roll_within_sixteen_tracks() -> None:
-    imported = midi.Imported(tracks=(Track(name="Extra", channel=15),), notes=(), bpm=120.0)
-    # sixteen tracks, but channel 15 is free, so the default mapping reaches for a new track
-    tracks = tuple(Track(name=f"T{index}", channel=channel) for index, channel in enumerate([0, *range(15)]))
-    dialog = MidiImportDialog(imported, tracks, "song.mid")
+def test_a_file_channel_moves_past_a_roll_channel_that_already_has_notes() -> None:
+    imported = midi.Imported(channels=(Channel(channel=0), Channel(channel=1), Channel(channel=2)), notes=(), bpm=120.0)
+    channels = tuple(Channel(name=name, channel=index) for index, name in enumerate("ABCD"))
+    # A and C carry notes, so the file's first channel takes the empty place after the second's own
+    dialog = MidiImportDialog(imported, channels, "song.mid", occupied={0, 2})
+    assert dialog.mapping() == [3, 1, -1]
+    dialog.close()
+
+
+def test_the_import_dialog_keeps_the_roll_within_sixteen_channels() -> None:
+    imported = midi.Imported(channels=(Channel(channel=15),), notes=(), bpm=120.0)
+    # every channel carries notes, so nothing is free to land on and the mapping reaches for a new one
+    channels = tuple(Channel(name=f"T{index}", channel=channel) for index, channel in enumerate([0, *range(15)]))
+    dialog = MidiImportDialog(imported, channels, "song.mid", occupied=range(16))
     assert dialog.mapping() == [-1]
-    assert dialog.merge_button.isEnabled() is False  # a new track would be the seventeenth
-    dialog._targets[0].setCurrentIndex(0)  # pointed at an existing track instead
+    assert dialog.merge_button.isEnabled() is False  # a new channel would be the seventeenth
+    dialog._targets[0].setCurrentIndex(0)  # pointed at an existing channel instead
     assert dialog.merge_button.isEnabled() is True
     dialog.close()
 
 
 def test_a_wavetone_file_loses_its_lead_in_only_when_the_setting_says_so(own_window, monkeypatch, tmp_path) -> None:
     path = tmp_path / "wavetone.mid"
-    midi.write(path, (Track(channel=0),), (project.Note(1.0, 0.5, 60, 0),), 120.0, wavetone=True)
+    midi.write(path, (Channel(channel=0),), (project.Note(1.0, 0.5, 60, 0),), 120.0, wavetone=True)
 
     own_window.import_midi(path)
     assert [round(note.start, 3) for note in own_window.view.notes()] == [2.0]
@@ -2537,59 +2598,43 @@ def test_a_midi_that_cannot_be_read_says_so(own_window, tmp_path) -> None:
 
 
 def test_exporting_writes_the_roll_out_as_midi(own_window, tmp_path) -> None:
-    own_window.view.set_tracks((Track(name="Lead", channel=2, program=81),))
-    own_window.view.set_notes(((60, 0.0, 1.0, 0), (64, 1.0, 0.5, 0)))
+    own_window.view.set_channels((Channel(channel=2, program=81),))
+    own_window.view.set_notes(((60, 0.0, 1.0, 2), (64, 1.0, 0.5, 2)))
     path = tmp_path / "out.mid"
     assert own_window.export_midi(path) is True
 
     imported = midi.read(path, wavetone=True)  # the WaveTone compatibility the settings start with
     assert [(note.pitch, round(note.start, 3)) for note in imported.notes] == [(60, 0.0), (64, 0.5)]
-    assert [(track.name, track.channel, track.program) for track in imported.tracks] == [("Lead", 2, 81)]
+    assert [(channel.channel, channel.program) for channel in imported.channels] == [(2, 81)]
     assert [round(note.start, 3) for note in midi.read(path).notes] == [2.0, 2.5]  # the same, a bar late
     assert own_window.project_path is None  # exporting is not saving
     assert "Exported out.mid" in own_window.statusBar().currentMessage()
 
 
-def test_only_the_visible_tracks_are_exported_when_asked(own_window, tmp_path) -> None:
-    own_window.view.set_tracks((Track(name="A", channel=0), Track(name="B", channel=1, visible=False)))
+def test_a_hidden_channel_is_exported_like_any_other(own_window, tmp_path) -> None:
+    own_window.view.set_channels((Channel(channel=0), Channel(channel=1, visible=False)))
     own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 0.0, 1.0, 1)))
-    path = tmp_path / "visible.mid"
-    own_window.export_midi(path, visible_only=True)
+    path = tmp_path / "hidden.mid"
+    own_window.export_midi(path)
 
-    assert [note.pitch for note in midi.read(path).notes] == [60]
-
-
-def test_the_midi_export_dialog_asks_its_questions() -> None:
-    dialog = MidiExportDialog("1/8")
-    assert dialog.options() == {"exact": False, "quantize": False, "visible_only": False}
-
-    dialog.exact.setChecked(True)
-    assert dialog.quantize.isEnabled() is False
-    assert dialog.options()["exact"] is True
-
-    dialog.visible_only.setChecked(True)
-    assert dialog.options()["visible_only"] is True
-    dialog.close()
+    assert [note.pitch for note in midi.read(path).notes] == [60, 62]
 
 
 def test_opening_a_midi_file_imports_it(own_window, monkeypatch, tmp_path) -> None:
     path = tmp_path / "song.mid"
-    midi.write(path, (Track(name="Lead", channel=0),), (project.Note(0.5, 0.5, 60, 0),), 120.0)
+    midi.write(path, (Channel(channel=0),), (project.Note(0.5, 0.5, 60, 0),), 120.0)
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(path), ""))
 
     own_window._on_open()
     assert [note.pitch for note in own_window.view.notes()] == [60]
-    assert [track.name for track in own_window.view.tracks] == ["Lead"]
 
 
-def test_saving_as_a_midi_file_exports_instead(own_window, monkeypatch, tmp_path) -> None:
-    own_window.view.set_tracks((Track(channel=0),))
+def test_the_export_button_writes_a_midi_file(own_window, monkeypatch, tmp_path) -> None:
+    own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0),))
-    target = tmp_path / "exported.mid"
-    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(target), MIDI_FILTER))
-    monkeypatch.setattr(MidiExportDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "exported"), MIDI_FILTER))
 
-    assert own_window._on_save_as() is True
-    assert target.exists()
+    assert own_window._on_export_midi() is True
+    target = tmp_path / "exported.mid"  # the export adds its own suffix
     assert [note.pitch for note in midi.read(target, wavetone=True).notes] == [60]
     assert own_window.project_path is None  # an export leaves the document where it was

@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""MIDI files: reading them into notes and tracks, and writing those back out.
+"""MIDI files: reading them into notes and channels, and writing those back out.
 
 Qt-free on purpose, like project.py and settings.py. mido is a file codec here and nothing else: no
 port is ever opened, so a machine with no sound card and a test read and write the same.
+
+A file's track chunks are not kept: a channel is what a note plays on, so every channel with notes
+becomes one entry, and one MTrk holding several channels is read as several. Names ride on a track
+chunk, not on a channel, so none is read or written - they belong to the project file.
 
 Notes are stored in seconds, as everywhere else in the project, so the tempo map of a file is walked
 on the way in and written as the one tempo the grid has on the way out.
@@ -18,13 +22,10 @@ from pathlib import Path
 import mido
 
 from namioto import project
-from namioto import settings as store
-from namioto.tracks import TRACK_LIMIT, Track
+from namioto.channels import CHANNEL_COUNT, Channel
 
 SUFFIXES = (".mid", ".midi")
 PPQ = 960  # the beat grid: a tick is well under a millisecond
-EXACT_PPQ = 10000  # exact time: at 60 BPM a tick is 0.1 ms, the precision a project keeps
-EXACT_BPM = 60.0
 VELOCITY = 100  # a note carries no velocity of its own, so every one is written alike
 DEFAULT_VOLUME = 100  # MIDI's own channel volume when the file says nothing
 LEAD_IN_BEATS = 4  # WaveTone's export starts one bar late; see `read` and `write`
@@ -38,16 +39,16 @@ def looks_like_midi(path: str | Path) -> bool:
 class Imported:
     """What a MIDI file holds, in the project's terms."""
 
-    tracks: tuple[Track, ...]
+    channels: tuple[Channel, ...]
     notes: tuple[project.Note, ...]
     bpm: float
     tempo_changes: int = 0  # tempo events past the first, which the single grid cannot follow
     dropped: int = 0  # note events that never made a note: no pair, or no length
-    left_out: tuple[int, ...] = ()  # channels past the track limit
+    left_out: tuple[int, ...] = ()  # channels past the limit
 
 
-def read(path: str | Path, *, wavetone: bool = False, limit: int = TRACK_LIMIT) -> Imported:
-    """Read a MIDI file into tracks and notes.
+def read(path: str | Path, *, wavetone: bool = False, limit: int = CHANNEL_COUNT) -> Imported:
+    """Read a MIDI file into channels and notes.
 
     Raises OSError, EOFError or ValueError for a file that is not MIDI, or is cut short.
     """
@@ -59,24 +60,17 @@ def read(path: str | Path, *, wavetone: bool = False, limit: int = TRACK_LIMIT) 
     events: list[tuple[int, int, int, int]] = []  # (tick, channel, pitch, velocity), 0 meaning off
     programs: dict[int, dict[int, int]] = {}
     volumes: dict[int, dict[int, int]] = {}
-    names: dict[int, set[str]] = {}
     for track in mid.tracks:
         tick = 0
-        channels: set[int] = set()
-        name = next((message.name for message in track if message.type == "track_name"), "")
         for message in track:
             tick += message.time
             if message.type in ("note_on", "note_off"):
-                channels.add(message.channel)
                 velocity = message.velocity if message.type == "note_on" else 0
                 events.append((tick, message.channel, message.note, velocity))
             elif message.type == "program_change":
                 programs.setdefault(message.channel, {})[tick] = message.program
             elif message.type == "control_change" and message.control == 7:
                 volumes.setdefault(message.channel, {})[tick] = message.value
-        for channel in channels:
-            if name:
-                names.setdefault(channel, set()).add(name)
 
     # an off sorts before an on of the same tick, so a note ending where the next one starts pairs
     events.sort(key=lambda event: (event[0], event[3]))
@@ -105,15 +99,12 @@ def read(path: str | Path, *, wavetone: bool = False, limit: int = TRACK_LIMIT) 
 
     present = sorted({channel for channel, _start, _end, _pitch in played})
     kept, left_out = present[:limit], tuple(present[limit:])
-    index_of = {channel: index for index, channel in enumerate(kept)}
 
-    tracks: list[Track] = []
-    for index, channel in enumerate(kept):
+    channels: list[Channel] = []
+    for channel in kept:
         first = min(start for source, start, _end, _pitch in played if source == channel)
-        name = next(iter(names.get(channel, ())), "").strip()
-        tracks.append(
-            Track(
-                name=name[: store.TEXT_LIMIT] or f"Track {index + 1}",
+        channels.append(
+            Channel(
                 channel=channel,
                 program=_before(programs.get(channel, {}), first, 0),
                 volume=_before(volumes.get(channel, {}), first, DEFAULT_VOLUME),
@@ -124,13 +115,13 @@ def read(path: str | Path, *, wavetone: bool = False, limit: int = TRACK_LIMIT) 
             _seconds(tempos, start, ppq),
             _seconds(tempos, end, ppq) - _seconds(tempos, start, ppq),
             pitch,
-            index_of[channel],
+            channel,
         )
         for channel, start, end, pitch in played
-        if channel in index_of
+        if channel in kept
     )
     return Imported(
-        tracks=tuple(tracks),
+        channels=tuple(channels),
         notes=notes,
         bpm=_bpm(tempos),
         tempo_changes=len(tempos) - 1,
@@ -139,27 +130,17 @@ def read(path: str | Path, *, wavetone: bool = False, limit: int = TRACK_LIMIT) 
     )
 
 
-def write(
-    path: str | Path,
-    tracks,
-    notes,
-    bpm: float,
-    *,
-    wavetone: bool = False,
-    exact: bool = False,
-    quantize: float = 0.0,
-    included=None,
-) -> Path:
-    """Write tracks and notes, both in seconds, out as a MIDI file.
+def write(path: str | Path, channels, notes, bpm: float, *, wavetone: bool = False) -> Path:
+    """Write channels and notes, both in seconds, out as a MIDI file, on the project's own tempo.
 
-    `exact` keeps the times the project holds down to the tick under a tempo of 60, which is what a
-    transcription from audio wants; without it the notes go on the project's own beats, where
-    `quantize` (a grid in beats) rounds them onto it.
+    One MTrk per channel, with a conductor in front of them; a channel's name is not written, since
+    a name belongs to this project and not to a MIDI channel. A note is written nearest the tick its
+    time names, so one drawn on the roll's grid lands exactly on the tick that grid stands for and
+    one taken from the audio keeps the time it has.
     """
-    ppq = EXACT_PPQ if exact else PPQ
-    grid = EXACT_BPM if exact else max(1.0, float(bpm))
+    ppq = PPQ
+    grid = max(1.0, float(bpm))
     seconds_per_beat = 60.0 / grid
-    quantize = 0.0 if exact else quantize  # exact time is the point of that mode, not a grid
     lead_in = LEAD_IN_BEATS * ppq if wavetone else 0
 
     mid = mido.MidiFile(type=1, ticks_per_beat=ppq, charset="utf-8")
@@ -168,30 +149,26 @@ def write(
     conductor.append(mido.MetaMessage("time_signature", numerator=4, denominator=4, time=0))
     mid.tracks.append(conductor)
 
-    for index in range(len(tracks)) if included is None else included:
-        track = tracks[index]
+    for entry in channels:
         events: list[tuple[int, int, int]] = []
         for note in notes:
-            if note.track != index:
+            if note.channel != entry.channel:
                 continue
-            start = _tick(note.start, seconds_per_beat, ppq, quantize)
-            end = _tick(note.start + note.duration, seconds_per_beat, ppq, quantize)
+            start = _tick(note.start, seconds_per_beat, ppq)
+            end = _tick(note.start + note.duration, seconds_per_beat, ppq)
             events.append((start, 1, note.pitch))
             events.append((max(end, start + 1), 0, note.pitch))
         events.sort()  # a note ending where the next one starts lets go of the pitch first
         written = mido.MidiTrack()
-        name = track.name.strip()
-        if name:
-            written.append(mido.MetaMessage("track_name", name=name, time=0))
-        written.append(mido.Message("program_change", channel=track.channel, program=track.program, time=0))
-        written.append(mido.Message("control_change", channel=track.channel, control=7, value=track.volume, time=0))
+        written.append(mido.Message("program_change", channel=entry.channel, program=entry.program, time=0))
+        written.append(mido.Message("control_change", channel=entry.channel, control=7, value=entry.volume, time=0))
         previous = 0
         for tick, kind, pitch in events:
             tick += lead_in
             written.append(
                 mido.Message(
                     "note_on",
-                    channel=track.channel,
+                    channel=entry.channel,
                     note=pitch,
                     velocity=VELOCITY if kind else 0,
                     time=tick - previous,
@@ -202,11 +179,8 @@ def write(
     return _save(path, mid)
 
 
-def _tick(seconds: float, seconds_per_beat: float, ppq: int, quantize: float) -> int:
-    beats = seconds / seconds_per_beat
-    if quantize > 0.0:
-        beats = round(beats / quantize) * quantize
-    return int(round(beats * ppq))
+def _tick(seconds: float, seconds_per_beat: float, ppq: int) -> int:
+    return int(round(seconds / seconds_per_beat * ppq))
 
 
 def _load(path: str | Path) -> mido.MidiFile:

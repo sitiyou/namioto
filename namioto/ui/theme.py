@@ -15,7 +15,7 @@ from PyQt6.QtWidgets import QApplication
 
 ACCENT = "#3b9dff"
 
-# One body colour per track; the first equals the single note colour the editor had before tracks.
+# One body colour per channel; the first equals the single note colour the editor had before channels.
 NOTE_PALETTE = (
     "#ff2f2f",
     "#ff9d2f",
@@ -139,9 +139,9 @@ QWidget#suggestion {
     border: 1px solid %CARD_BORDER%;
     border-radius: 6px;
 }
-QWidget#trackPanel { background: %PANEL%; border-right: 1px solid %CARD_BORDER%; }
-QWidget#trackCard { background: %CARD%; border: 1px solid %CARD_BORDER%; border-radius: 6px; }
-QWidget#trackCard[active="true"] { background: %ACCENT_SOFT%; border-color: %ACCENT%; }
+QWidget#channelPanel { background: %PANEL%; border-right: 1px solid %CARD_BORDER%; }
+QWidget#channelCard { background: %CARD%; border: 1px solid %CARD_BORDER%; border-radius: 6px; }
+QWidget#channelCard[active="true"] { background: %ACCENT_SOFT%; border-color: %ACCENT%; }
 QWidget#corner { background: %PANEL%; }
 QWidget#rubber { background: %ACCENT_SOFT%; border: 1px solid %ACCENT%; }
 QLabel { color: %TEXT_DIM%; background: transparent; }

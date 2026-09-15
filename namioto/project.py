@@ -18,29 +18,29 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from namioto import settings as store
-from namioto.tracks import TRACK_LIMIT, Track, valid_color
+from namioto.channels import CHANNEL_COUNT, Channel, valid_color
 
 FORMAT = "namioto"
-VERSION = 5
+VERSION = 6
 SUFFIX = ".nto"
 NOTE_DECIMALS = 4
 
 
 class Note(NamedTuple):
     """A note as the file holds it: when it starts and how long it lasts in seconds, its pitch, and
-    the index of the track it sits on."""
+    the MIDI channel it plays on."""
 
     start: float
     duration: float
     pitch: int
-    track: int = 0
+    channel: int = 0
 
 
 @dataclass(frozen=True)
 class Project:
     values: dict[str, dict] = field(default_factory=dict)  # the project-scoped settings, by section
     audio: str = ""
-    tracks: tuple[Track, ...] = ()
+    channels: tuple[Channel, ...] = ()
     notes: tuple[Note, ...] = ()
 
 
@@ -73,29 +73,29 @@ def to_dict(project: Project) -> dict:
         "version": VERSION,
         **project.values,
         "audio": project.audio,
-        "tracks": [_track_dict(track) for track in project.tracks],
+        "channels": [_channel_dict(channel) for channel in project.channels],
         "notes": [
             {
                 "start": round(note.start, NOTE_DECIMALS),
                 "duration": round(note.duration, NOTE_DECIMALS),
                 "pitch": note.pitch,
-                "track": note.track,
+                "channel": note.channel,
             }
             for note in project.notes
         ],
     }
 
 
-def _track_dict(track: Track) -> dict:
+def _channel_dict(channel: Channel) -> dict:
     return {
-        "name": track.name,
-        "color": track.color,
-        "channel": track.channel,
-        "program": track.program,
-        "volume": track.volume,
-        "mute": track.mute,
-        "visible": track.visible,
-        "lock": track.lock,
+        "name": channel.name,
+        "color": channel.color,
+        "channel": channel.channel,
+        "program": channel.program,
+        "volume": channel.volume,
+        "mute": channel.mute,
+        "visible": channel.visible,
+        "lock": channel.lock,
     }
 
 
@@ -103,7 +103,7 @@ def _audio(value: Any) -> str:
     return str(value).strip()[: store.TEXT_LIMIT] if isinstance(value, str) else ""
 
 
-def _note(entry: Any, track_count: int = 1) -> Note | None:
+def _note(entry: Any) -> Note | None:
     if not isinstance(entry, dict):
         return None
     start, duration, pitch = entry.get("start"), entry.get("duration"), entry.get("pitch")
@@ -112,16 +112,16 @@ def _note(entry: Any, track_count: int = 1) -> Note | None:
         return None
     if not all(math.isfinite(value) for value in numbers) or duration <= 0:
         return None
-    track = entry.get("track", 0)
-    if isinstance(track, bool) or not isinstance(track, int):
-        track = 0
-    # a track index past the list is a broken note, not a broken file: it lands on the last track
-    return Note(max(0.0, float(start)), float(duration), int(round(pitch)), min(track, track_count - 1))
+    channel = entry.get("channel", 0)
+    if isinstance(channel, bool) or not isinstance(channel, int):
+        channel = 0
+    # a channel past the sixteen is a broken note, not a broken file: it plays on the last channel
+    return Note(max(0.0, float(start)), float(duration), int(round(pitch)), min(max(channel, 0), CHANNEL_COUNT - 1))
 
 
-def _track(entry: Any) -> Track:
+def _channel(entry: Any) -> Channel:
     if not isinstance(entry, dict):
-        return Track()
+        return Channel()
 
     def whole(value, low: int, high: int, default: int) -> int:
         ok = not isinstance(value, bool) and isinstance(value, int) and low <= value <= high
@@ -133,10 +133,10 @@ def _track(entry: Any) -> Track:
         entry.get("lock", False),
     )
     name = entry.get("name")
-    return Track(
+    return Channel(
         name=name.strip()[: store.TEXT_LIMIT] if isinstance(name, str) else "",
         color=valid_color(entry.get("color")),
-        channel=whole(entry.get("channel", 0), 0, TRACK_LIMIT - 1, 0),
+        channel=whole(entry.get("channel", 0), 0, CHANNEL_COUNT - 1, 0),
         program=whole(entry.get("program", 0), 0, 127, 0),
         volume=whole(entry.get("volume", 100), 0, 127, 100),
         mute=booleans[0] if isinstance(booleans[0], bool) else False,
@@ -145,19 +145,23 @@ def _track(entry: Any) -> Track:
     )
 
 
-def _tracks(value: Any) -> tuple[Track, ...]:
+def _channels(value: Any) -> tuple[Channel, ...]:
     if not isinstance(value, list):
         return ()
-    return tuple(_track(entry) for entry in value)[:TRACK_LIMIT]
+    unique: dict[int, Channel] = {}
+    for entry in value:
+        channel = _channel(entry)
+        unique.setdefault(channel.channel, channel)
+    return tuple(unique[number] for number in sorted(unique))
 
 
-def _notes(value: Any, track_count: int) -> tuple[Note, ...]:
+def _notes(value: Any) -> tuple[Note, ...]:
     if not isinstance(value, list):
         return ()
     notes: list[Note] = []
     dropped = 0
     for entry in value:
-        note = _note(entry, track_count)
+        note = _note(entry)
         if note is None:
             dropped += 1
         else:
@@ -173,12 +177,18 @@ def from_dict(data: Any) -> Project:
         raise ValueError(f"not a {FORMAT} project")
     values = store.Settings()
     store.apply_project_values(values, data)
-    tracks = _tracks(data.get("tracks")) or (Track(name="Track 1"),)
+    channels = _channels(data.get("channels")) or (Channel(),)
+    notes = _notes(data.get("notes"))
+    # a note on a channel the file never described gets a plain entry back, the way the roll fills one
+    missing = sorted({note.channel for note in notes} - {channel.channel for channel in channels})
+    if missing:
+        filled = (*channels, *(Channel(channel=number) for number in missing))
+        channels = tuple(sorted(filled, key=lambda channel: channel.channel))
     return Project(
         values=store.project_values(values),
         audio=_audio(data.get("audio")),
-        tracks=tracks,
-        notes=_notes(data.get("notes"), len(tracks)),
+        channels=channels,
+        notes=notes,
     )
 
 

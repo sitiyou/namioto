@@ -15,10 +15,10 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from namioto.channels import Channel, free_channel
 from namioto.document import MIN_DURATION, PITCH_COUNT, PITCH_MAX, PITCH_MIN, Document, Note
 from namioto.interaction import Interaction, Tool
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
-from namioto.tracks import Track, free_channel
 from namioto.ui import theme
 from namioto.ui.spectrogram import SpectrumImage
 
@@ -97,8 +97,8 @@ class NoteItem(QGraphicsRectItem):
     """The drawn body of one `Note`; scene units are beats (x) and semitone rows (y).
 
     It is a view of the note, not a copy: the data lives in `namioto.document`, and the item reads
-    and writes it. The note's track is also the stacking order: a later track draws over, and wins
-    the hit test, the way noteDigger files its channels.
+    and writes it. The note's channel is also the stacking order: a higher channel draws over, and
+    wins the hit test, the way noteDigger files its channels.
     """
 
     def __init__(self, note: Note):
@@ -122,8 +122,8 @@ class NoteItem(QGraphicsRectItem):
         return self.note.duration
 
     @property
-    def track(self) -> int:
-        return self.note.track
+    def channel(self) -> int:
+        return self.note.channel
 
     @property
     def end(self) -> float:
@@ -140,7 +140,7 @@ class NoteItem(QGraphicsRectItem):
     def _sync(self) -> None:
         self.setRect(0.0, 0.0, self.duration, 1.0 - 2 * NOTE_INSET)
         self.setPos(self.start, PITCH_MAX - self.pitch + NOTE_INSET)
-        self.setZValue(self.track)
+        self.setZValue(self.channel)
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         selected = self.isSelected()
@@ -172,8 +172,8 @@ class PianoRollView(QGraphicsView):
 
     view_changed = pyqtSignal()
     notes_changed = pyqtSignal()
-    tracks_changed = pyqtSignal()
-    active_track_changed = pyqtSignal(int)
+    channels_changed = pyqtSignal()
+    active_channel_changed = pyqtSignal(int)
     hover_changed = pyqtSignal(object)
     note_preview = pyqtSignal(int)
     seek_requested = pyqtSignal(float)
@@ -208,9 +208,9 @@ class PianoRollView(QGraphicsView):
         self._trim_edge = ""
         self._grab_note: NoteItem | None = None
         self._snapshot: dict[NoteItem, tuple[float, int, float]] = {}
-        self.document = Document(tracks=[Track(name="Track 1", color=theme.NOTE_PALETTE[0])])
+        self.document = Document(channels=[Channel(channel=0, color=theme.NOTE_PALETTE[0])])
         self._items: list[NoteItem] = []
-        self.active_track = 0
+        self.active_channel = 0
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self.viewport().setMouseTracking(True)  # the row under the mouse is highlighted
@@ -261,8 +261,8 @@ class PianoRollView(QGraphicsView):
     def _update_scene(self) -> None:
         self._scene.setSceneRect(QRectF(0.0, 0.0, self.content_beats(), PITCH_COUNT))
 
-    def add_note(self, pitch: int, start: float, duration: float, track: int | None = None) -> NoteItem:
-        note = Note(pitch, start, duration, self.active_track if track is None else track)
+    def add_note(self, pitch: int, start: float, duration: float, channel: int | None = None) -> NoteItem:
+        note = Note(pitch, start, duration, self.active_channel if channel is None else channel)
         self.document.add_note(note)
         item = self._add_item(note)
         self._update_scene()
@@ -272,13 +272,13 @@ class PianoRollView(QGraphicsView):
     def set_notes(self, notes) -> None:
         """Replace every note in one go: a project or an extraction arrives all at once.
 
-        A note may carry a fourth element, the track it belongs to.
+        A note may carry a fourth element, the channel it plays on.
         """
         self._drop_items()
         self.document.replace_notes(Note(item[0], item[1], item[2], item[3] if len(item) > 3 else 0) for item in notes)
         for note in self.document.notes:
             self._add_item(note)
-        self._sync_track_visuals()
+        self._sync_channel_visuals()
         self._update_scene()
         self.notes_changed.emit()
 
@@ -294,8 +294,9 @@ class PianoRollView(QGraphicsView):
 
     def _add_item(self, note: Note) -> NoteItem:
         item = NoteItem(note)
-        item.fill, item.edge_light, item.edge_dark = theme.note_shades(self._track_color(note.track))
-        item.setVisible(self.edit_mode and self.tracks[note.track].visible)
+        item.fill, item.edge_light, item.edge_dark = theme.note_shades(self._channel_color(note.channel))
+        channel = self._channel(note.channel)
+        item.setVisible(self.edit_mode and (channel.visible if channel else True))
         self._scene.addItem(item)
         self._items.append(item)
         return item
@@ -315,95 +316,95 @@ class PianoRollView(QGraphicsView):
         self.notes_changed.emit()
         self.view_changed.emit()
 
-    # --- tracks -----------------------------------------------------------
+    # --- channels ---------------------------------------------------------
 
     @property
-    def tracks(self) -> list[Track]:
-        """The document's track list; the panel and the players read it, nothing holds a copy."""
-        return self.document.tracks
+    def channels(self) -> list[Channel]:
+        """The document's channel list; the panel and the players read it, nothing holds a copy."""
+        return self.document.channels
+
+    def _channel(self, number: int) -> Channel | None:
+        return next((channel for channel in self.channels if channel.channel == number), None)
 
     def _borrow_color(self) -> str:
-        """The first theme colour no track wears yet; a full palette cycles."""
-        used = {track.color for track in self.tracks if track.color}
+        """The first theme colour no channel wears yet; a full palette cycles."""
+        used = {channel.color for channel in self.channels if channel.color}
         for hex in theme.NOTE_PALETTE:
             if hex not in used:
                 return hex
-        return theme.NOTE_PALETTE[len(self.tracks) % len(theme.NOTE_PALETTE)]
+        return theme.NOTE_PALETTE[len(self.channels) % len(theme.NOTE_PALETTE)]
 
-    def _track_color(self, index: int) -> QColor:
-        track = self.tracks[min(max(index, 0), len(self.tracks) - 1)]
-        color = QColor(track.color)
+    def _channel_color(self, number: int) -> QColor:
+        channel = self._channel(number)
+        color = QColor(channel.color) if channel is not None else QColor()
         if not color.isValid():
-            color = NOTE_COLORS[index % len(NOTE_COLORS)]
+            color = NOTE_COLORS[number % len(NOTE_COLORS)]
         return color
 
-    def _sync_track_visuals(self) -> None:
-        """Body colour, bevel and visibility all come from the track list; the notes only show while
+    def _sync_channel_visuals(self) -> None:
+        """Body colour, bevel and visibility all come from the channel list; the notes only show while
         editing, the way WaveTone keeps its graph to the spectrum outside note edit mode."""
         for note in self.notes():
-            note.fill, note.edge_light, note.edge_dark = theme.note_shades(self._track_color(note.track))
-            note.setVisible(self.edit_mode and self.tracks[note.track].visible)
+            note.fill, note.edge_light, note.edge_dark = theme.note_shades(self._channel_color(note.channel))
+            channel = self._channel(note.channel)
+            note.setVisible(self.edit_mode and (channel.visible if channel else True))
 
-    def set_tracks(self, tracks) -> None:
-        """Replace the track list in one go, the way a project hands it over.
+    def set_channels(self, channels) -> None:
+        """Replace the channel list in one go, the way a project hands it over.
 
-        Notes on tracks that go away are dropped with them.
+        A note whose channel is missing from the list gets a plain entry back rather than being
+        dropped: a channel number is always a place a note can play on.
         """
-        self.document.set_tracks(tracks or [Track(name="Track 1", color=theme.NOTE_PALETTE[0])])
-        for index, track in enumerate(self.tracks):
-            if not track.color:
-                self.document.set_track_field(index, color=self._borrow_color())
-        kept = {id(note) for note in self.document.notes}
-        for item in list(self._items):
-            if id(item.note) not in kept:
-                self._drop_item(item)
-        self.active_track = min(self.active_track, len(self.tracks) - 1)
-        self._sync_track_visuals()
-        self.tracks_changed.emit()
-        self.active_track_changed.emit(self.active_track)
+        self.document.set_channels(channels or [Channel(channel=0, color=theme.NOTE_PALETTE[0])])
+        for channel in list(self.channels):
+            if not channel.color:
+                self.document.set_channel_field(channel.channel, color=self._borrow_color())
+        if self.active_channel not in {channel.channel for channel in self.channels}:
+            self.active_channel = self.channels[0].channel
+        self._sync_channel_visuals()
+        self.channels_changed.emit()
+        self.active_channel_changed.emit(self.active_channel)
 
-    def add_track(self, name: str = "", program: int = 0) -> Track | None:
-        channel = free_channel(self.tracks)
-        if channel is None:
+    def add_channel(self, program: int = 0) -> Channel | None:
+        number = free_channel(self.channels)
+        if number is None:
             return None
-        track = Track(
-            name=name or f"Track {len(self.tracks) + 1}", color=self._borrow_color(), channel=channel, program=program
-        )
-        self.document.add_track(track)
-        self.tracks_changed.emit()
-        return track
+        channel = Channel(channel=number, color=self._borrow_color(), program=program)
+        self.document.add_channel(channel)
+        self.channels_changed.emit()
+        return channel
 
-    def remove_track(self, index: int) -> bool:
-        """Drop a track and the notes on it; the tracks after it shift down. The last one stays."""
-        removed = self.document.remove_track(index)
+    def remove_channel(self, number: int) -> bool:
+        """Drop a channel and the notes on it; the other numbers stay as they are. The last one stays."""
+        removed = self.document.remove_channel(number)
         if removed is None:
             return False
         gone = {id(note) for note in removed}
         for item in list(self._items):
             if id(item.note) in gone:
                 self._drop_item(item)
-        for item in self._items:
-            item._sync()  # the notes after the gap moved down a track
-        self.active_track = min(self.active_track, len(self.tracks) - 1)
-        self._sync_track_visuals()
+        if self.active_channel not in {channel.channel for channel in self.channels}:
+            self.active_channel = self.channels[0].channel
+        self._sync_channel_visuals()
         if removed:
             self.notes_changed.emit()
-        self.tracks_changed.emit()
-        self.active_track_changed.emit(self.active_track)
+        self.channels_changed.emit()
+        self.active_channel_changed.emit(self.active_channel)
         return True
 
-    def set_track_field(self, index: int, **fields) -> None:
-        self.document.set_track_field(index, **fields)
-        self._sync_track_visuals()
-        self.tracks_changed.emit()
+    def set_channel_field(self, number: int, **fields) -> None:
+        self.document.set_channel_field(number, **fields)
+        self._sync_channel_visuals()
+        self.channels_changed.emit()
 
-    def set_active_track(self, index: int) -> None:
-        if 0 <= index < len(self.tracks) and index != self.active_track:
-            self.active_track = index
-            self.active_track_changed.emit(index)
+    def set_active_channel(self, number: int) -> None:
+        if number in {channel.channel for channel in self.channels} and number != self.active_channel:
+            self.active_channel = number
+            self.active_channel_changed.emit(number)
 
-    def _locked(self, index: int) -> bool:
-        return self.tracks[min(max(index, 0), len(self.tracks) - 1)].lock
+    def _locked(self, number: int) -> bool:
+        channel = self._channel(number)
+        return channel.lock if channel is not None else False
 
     def selected_notes(self) -> list[NoteItem]:
         return [note for note in self.notes() if note.isSelected()]
@@ -432,7 +433,7 @@ class PianoRollView(QGraphicsView):
     def apply_interaction(self, state: Interaction) -> None:
         """The one place a mode and tool land: it decides what is drawn and how it answers."""
         self._interaction = state
-        self._sync_track_visuals()
+        self._sync_channel_visuals()
         self.refresh()
 
     def frame_width(self) -> float:
@@ -689,7 +690,7 @@ class PianoRollView(QGraphicsView):
 
         if event.button() == Qt.MouseButton.RightButton:
             note = self._note_at(scene_pos)
-            if note is not None and not self._locked(note.track):
+            if note is not None and not self._locked(note.channel):
                 self._remove_item(note)
             return
 
@@ -701,7 +702,7 @@ class PianoRollView(QGraphicsView):
         ctrl = bool(modifier & Qt.KeyboardModifier.ControlModifier)
         shift = bool(modifier & Qt.KeyboardModifier.ShiftModifier)
         self._anchor = scene_pos
-        if note is not None and self._locked(note.track):
+        if note is not None and self._locked(note.channel):
             return
 
         if note is None:
@@ -713,7 +714,7 @@ class PianoRollView(QGraphicsView):
                 self._rubber.setGeometry(QRect(pos, pos))
                 self._rubber.show()
                 return
-            if self._locked(self.active_track):
+            if self._locked(self.active_channel):
                 return
             pitch = self._pitch_at(scene_pos.y())
             start = max(0.0, self._snap_floor_beats(scene_pos.x()))
@@ -788,8 +789,12 @@ class PianoRollView(QGraphicsView):
             self._rubber.setGeometry(QRect(self._rubber_origin, pos).normalized())
             region = self.mapToScene(self._rubber.geometry()).boundingRect()
             for item in self._scene.items(region):
-                # only the track being edited answers a frame, the way noteDigger frames its channels
-                if isinstance(item, NoteItem) and item.track == self.active_track and not self._locked(item.track):
+                # only the channel being edited answers a frame, the way noteDigger frames its channels
+                if (
+                    isinstance(item, NoteItem)
+                    and item.channel == self.active_channel
+                    and not self._locked(item.channel)
+                ):
                     item.setSelected(True)
             return
 

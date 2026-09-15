@@ -29,20 +29,20 @@ from PyQt6.QtWidgets import (
 from namioto import midi, project
 from namioto import settings as store
 from namioto.beats import estimate
+from namioto.channels import Channel, free_channel
+from namioto.channels import audible as audible_channels
+from namioto.channels import set_field as channel_set_field
 from namioto.playback import note_frequency
 from namioto.spectrum import CHANNEL_MODES, NoteSpectrum
-from namioto.tracks import audible as audible_tracks
-from namioto.tracks import free_channel
-from namioto.tracks import set_field as track_set_field
 from namioto.ui import theme
 from namioto.ui.audio import open_player
+from namioto.ui.channel_panel import ChannelPanel
 from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
-from namioto.ui.midi_dialog import MidiExportDialog, MidiImportDialog
+from namioto.ui.midi_dialog import MidiImportDialog
 from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler, note_name
 from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
 from namioto.ui.song import SongPlayer, load_song
 from namioto.ui.spectrogram import SpectrumLoader
-from namioto.ui.track_panel import TrackPanel
 
 POSITION_INTERVAL_MS = 40
 SPEED_SETTLE_MS = 100
@@ -188,12 +188,12 @@ class MainWindow(QMainWindow):
         column.setContentsMargins(0, 0, 0, 0)
         column.setSpacing(0)
         column.addWidget(self.controls)
-        self.track_panel = TrackPanel(self.view)
-        self.track_panel.setVisible(False)  # one track needs no sidebar; the icon opens it
+        self.channel_panel = ChannelPanel(self.view)
+        self.channel_panel.setVisible(False)  # one channel needs no sidebar; the icon opens it
         row = QHBoxLayout()
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(0)
-        row.addWidget(self.track_panel)
+        row.addWidget(self.channel_panel)
         row.addWidget(panel, 1)
         column.addLayout(row, 1)
         self.setCentralWidget(central)
@@ -226,6 +226,7 @@ class MainWindow(QMainWindow):
         self.transport.stop_requested.connect(self._stop)
         self.transport.open_requested.connect(self._on_open)
         self.transport.save_requested.connect(self._on_save)
+        self.transport.export_midi_requested.connect(self._on_export_midi)
         self.player.finished.connect(self._on_playback_finished)
         self.song.finished.connect(self._on_playback_finished)
         self.view.seek_requested.connect(self._seek)
@@ -240,9 +241,9 @@ class MainWindow(QMainWindow):
 
         self.view.notes_changed.connect(self._update_status)
         self.view.notes_changed.connect(self._mark_dirty)
-        self.view.tracks_changed.connect(self._on_tracks_changed)
-        self.view.active_track_changed.connect(self._on_active_track_changed)
-        self.edit.tracks.toggled.connect(self.track_panel.setVisible)
+        self.view.channels_changed.connect(self._on_channels_changed)
+        self.view.active_channel_changed.connect(self._on_active_channel_changed)
+        self.edit.channels.toggled.connect(self.channel_panel.setVisible)
         self.transport.bpm.valueChanged.connect(self._mark_dirty)
         self.play_shortcut = QShortcut(QKeySequence("Space"), self)
         self.play_shortcut.activated.connect(self._toggle_play)
@@ -451,25 +452,25 @@ class MainWindow(QMainWindow):
             self.player.play(position)
 
     def _program(self) -> tuple[tuple, tuple]:
-        """The notes of every track that sounds, and each sounding track's channel, instrument, volume."""
+        """The notes of every channel that sounds, and each sounding channel's instrument, volume."""
         beats = self.view.seconds_per_beat
-        audible = set(audible_tracks(self.view.tracks))
+        audible = set(audible_channels(self.view.channels))
         notes = tuple(
-            (note.pitch, note.start * beats, note.duration * beats, note.track)
+            (note.pitch, note.start * beats, note.duration * beats, note.channel)
             for note in self.view.notes()
-            if note.track in audible
+            if note.channel in audible
         )
-        channels = tuple(
-            (track.channel, track.program, track.volume)
-            for index, track in enumerate(self.view.tracks)
-            if index in audible
+        programs = tuple(
+            (channel.channel, channel.program, channel.volume)
+            for channel in self.view.channels
+            if channel.channel in audible
         )
-        return notes, channels
+        return notes, programs
 
     def _send_program(self) -> None:
-        """Hand the current notes and their tracks to the player, as playback speed leaves them."""
-        notes, channels = self._program()
-        self.player.set_program(notes, self.transport.speed.value(), channels)
+        """Hand the current notes and their channels to the player, as playback speed leaves them."""
+        notes, programs = self._program()
+        self.player.set_program(notes, self.transport.speed.value(), programs)
 
     def _remember_configuration(self) -> None:
         """The bar values are the settings, so what is on screen is what comes back next time."""
@@ -563,23 +564,35 @@ class MainWindow(QMainWindow):
     def _on_save_as(self) -> bool:
         name = Path(self.audio_path).stem if self.audio_path is not None else "untitled"
         suggested = Path(self._start_directory()) / f"{name}{project.SUFFIX}"
-        chosen, selected = QFileDialog.getSaveFileName(
+        chosen, _filter = QFileDialog.getSaveFileName(
             self,
             "Save project",
             str(self.project_path or suggested),
-            f"{PROJECT_FILTER};;{MIDI_FILTER}",
+            PROJECT_FILTER,
         )
         if not chosen:
             return False
         target = Path(chosen)
-        if midi.looks_like_midi(target) or (selected == MIDI_FILTER and not project.looks_like_project(target)):
-            options = MidiExportDialog(self.edit.snap.currentText(), self)
-            if options.exec() != QDialog.DialogCode.Accepted:
-                return False
-            return self.export_midi(target, **options.options())
         if not project.looks_like_project(target):
             target = target.with_name(target.name + project.SUFFIX)
         return self.save_project(target)
+
+    def _on_export_midi(self) -> bool:
+        """Write the roll out as a MIDI file, a file of its own and never the project's name."""
+        name = Path(self.audio_path).stem if self.audio_path is not None else "untitled"
+        suggested = Path(self._start_directory()) / f"{name}{midi.SUFFIXES[0]}"
+        chosen, _filter = QFileDialog.getSaveFileName(
+            self,
+            "Export MIDI",
+            str(suggested),
+            MIDI_FILTER,
+        )
+        if not chosen:
+            return False
+        target = Path(chosen)
+        if not midi.looks_like_midi(target):
+            target = target.with_name(target.name + midi.SUFFIXES[0])
+        return self.export_midi(target)
 
     def load_project(self, path: str | Path) -> bool:
         """Open a project: its values come over the running ones, and its notes replace the roll."""
@@ -598,9 +611,9 @@ class MainWindow(QMainWindow):
             self.project_dirty = False
             missing = self._open_audio(project.resolve_audio(self.project_path, opened.audio))
             per_beat = self.view.seconds_per_beat  # scene units are beats, the file keeps seconds
-            self.view.set_tracks(opened.tracks)
+            self.view.set_channels(opened.channels)
             self.view.set_notes(
-                (note.pitch, note.start / per_beat, note.duration / per_beat, note.track) for note in opened.notes
+                (note.pitch, note.start / per_beat, note.duration / per_beat, note.channel) for note in opened.notes
             )
             self.view.center_on(self.settings.session.center_x, self.settings.session.center_y)
         finally:
@@ -618,14 +631,14 @@ class MainWindow(QMainWindow):
         # scene order is not a file's order: sorted notes keep a saved project stable to diff
         notes = tuple(
             sorted(
-                project.Note(note.start * beats, note.duration * beats, note.pitch, note.track)
+                project.Note(note.start * beats, note.duration * beats, note.pitch, note.channel)
                 for note in self.view.notes()
             )
         )
         payload = project.Project(
             values=store.project_values(self.settings),
             audio=project.store_audio(target, self.audio_path),
-            tracks=tuple(self.view.tracks),
+            channels=tuple(self.view.channels),
             notes=notes,
         )
         try:
@@ -642,20 +655,24 @@ class MainWindow(QMainWindow):
         return True
 
     def import_midi(self, path: str | Path) -> bool:
-        """Put the notes and tracks of a MIDI file into the running session, audio and view and all.
+        """Put the notes and channels of a MIDI file into the running session, audio and view and all.
 
         Importing a MIDI over analyzed audio is the way a transcription made elsewhere is checked
         against the sound it came from, so nothing here is cleared away but the notes - and when
-        there are notes to lose, the dialog says so and offers to merge into the tracks instead.
+        there are notes to lose, the dialog says so and offers to merge into the channels instead.
         """
         try:
             imported = midi.read(path, wavetone=self.settings.midi.wavetone)
         except (OSError, EOFError, ValueError) as error:
             self.statusBar().showMessage(f"MIDI file could not be read: {error}")
             return False
+        # the file's notes land on the roll's channels, keeping the instrument and volume the file
+        # gave them; a name is not among them, because a MIDI channel cannot carry one
+        origin = Path(path).name
         mode, mapping = "replace", ()
         if self.view.notes():
-            dialog = MidiImportDialog(imported, self.view.tracks, Path(path).name, self)
+            occupied = {note.channel for note in self.view.notes()}
+            dialog = MidiImportDialog(imported, self.view.channels, origin, occupied, self)
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return False
             mode, mapping = dialog.mode(), tuple(dialog.mapping())
@@ -666,71 +683,72 @@ class MainWindow(QMainWindow):
             else:
                 self.transport.bpm.setValue(imported.bpm)  # scene units are beats, and the file sets them
                 beats = self.view.seconds_per_beat
-                self.view.set_tracks(imported.tracks)
+                self.view.set_channels(imported.channels)
                 self.view.set_notes(
-                    (note.pitch, note.start / beats, note.duration / beats, note.track) for note in imported.notes
+                    (note.pitch, note.start / beats, note.duration / beats, note.channel) for note in imported.notes
                 )
         finally:
             self._loading = False
         self._mark_dirty()
         verb = "Merged" if mode == "merge" else "Imported"
-        message = [f"{verb} {len(imported.notes)} notes from {Path(path).name}"]
+        message = [f"{verb} {len(imported.notes)} notes from {origin}"]
         if imported.tempo_changes:
             message.append(f"{imported.tempo_changes} tempo changes; the grid takes the first tempo")
         if imported.dropped:
             message.append(f"{imported.dropped} note events left out")
         if imported.left_out:
-            message.append(f"channels {' '.join(str(channel) for channel in imported.left_out)} left out")
+            message.append(f"channels {' '.join(str(channel + 1) for channel in imported.left_out)} left out")
         self.statusBar().showMessage(" — ".join(message))
         return True
 
     def _merge_midi(self, imported, mapping) -> None:
-        """Add the file's notes to the roll, on the tracks the dialog pointed them at.
+        """Add the file's notes to the roll, on the channels the dialog pointed them at.
 
         The tempo stays where it is: both sets of notes are timed against the same audio, and moving
-        the grid under them would take the ones already there off it.
+        the grid under them would take the ones already there off it. A channel that already carries
+        notes is merged into and keeps what it is; an empty one the file walks into takes the file's
+        instrument and volume, exactly as a new one would.
         """
-        tracks = list(self.view.tracks)
+        channels = {channel.channel: channel for channel in self.view.channels}
+        carried = {note.channel for note in self.view.notes()}
         landing: dict[int, int] = {}
-        for source, target in enumerate(mapping):
-            if target >= 0:
-                landing[source] = target
+        for source, wanted in enumerate(imported.channels):
+            target = mapping[source]
+            if target >= 0 and target in carried:
+                landing[wanted.channel] = target
                 continue
-            wanted = imported.tracks[source]
-            used = {track.channel for track in tracks}
-            channel = wanted.channel if wanted.channel not in used else free_channel(tracks)
-            tracks.append(track_set_field(wanted, color="", channel=wanted.channel if channel is None else channel))
-            landing[source] = len(tracks) - 1
-        kept = [(note.pitch, note.start, note.duration, note.track) for note in self.view.notes()]
+            place = target
+            if place < 0:
+                free = free_channel(channels.values())
+                place = wanted.channel if wanted.channel not in channels else free
+                if place is None:
+                    place = wanted.channel  # sixteen channels are full; the file shares its own
+            channels[place] = channel_set_field(
+                channels.get(place, Channel(channel=place)), program=wanted.program, volume=wanted.volume
+            )
+            landing[wanted.channel] = place
+        kept = [(note.pitch, note.start, note.duration, note.channel) for note in self.view.notes()]
         beats = self.view.seconds_per_beat
         arriving = [
-            (note.pitch, note.start / beats, note.duration / beats, landing[note.track]) for note in imported.notes
+            (note.pitch, note.start / beats, note.duration / beats, landing[note.channel]) for note in imported.notes
         ]
-        self.view.set_tracks(tracks)
+        self.view.set_channels(channels.values())
         self.view.set_notes(kept + arriving)
 
-    def export_midi(
-        self, path: str | Path, *, exact: bool = False, quantize: bool = False, visible_only: bool = False
-    ) -> bool:
-        """Write the tracks out as MIDI. The project keeps its name and its file, whatever goes out."""
+    def export_midi(self, path: str | Path) -> bool:
+        """Write every channel out as MIDI, on the project's own tempo."""
         beats = self.view.seconds_per_beat
         notes = tuple(
-            project.Note(note.start * beats, note.duration * beats, note.pitch, note.track)
+            project.Note(note.start * beats, note.duration * beats, note.pitch, note.channel)
             for note in self.view.notes()
         )
-        included = None
-        if visible_only:
-            included = tuple(index for index, track in enumerate(self.view.tracks) if track.visible)
         try:
             midi.write(
                 path,
-                tuple(self.view.tracks),
+                tuple(self.view.channels),
                 notes,
                 self.settings.tempo.bpm,
                 wavetone=self.settings.midi.wavetone,
-                exact=exact,
-                quantize=self.view.snap if quantize else 0.0,
-                included=included,
             )
         except OSError as error:
             self.statusBar().showMessage(f"MIDI file could not be written: {error}")
@@ -828,14 +846,15 @@ class MainWindow(QMainWindow):
         if playing:
             self.player.play(position)
 
-    def _on_tracks_changed(self, *_args) -> None:
-        """A track edit is a document change, and a mute or instrument lands in the running sound."""
+    def _on_channels_changed(self, *_args) -> None:
+        """A channel edit is a document change, and a mute or instrument lands in the running sound."""
         self._mark_dirty()
         if self._is_playing():
             self._set_note_speed()
 
-    def _on_active_track_changed(self, index: int) -> None:
-        self.statusBar().showMessage(f"Drawing into {self.view.tracks[index].label}", 2000)
+    def _on_active_channel_changed(self, number: int) -> None:
+        channel = next(channel for channel in self.view.channels if channel.channel == number)
+        self.statusBar().showMessage(f"Drawing into {channel.label}", 2000)
 
     def _start_tempo(self) -> None:
         """Estimate the tempo of the loaded audio in the background, as a suggestion only."""

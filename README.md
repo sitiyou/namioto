@@ -51,10 +51,10 @@ side, both), `--t-num` the frames per second.
 ## Projects
 
 The **Project** block of the transport row holds `Open` and `Save` (`Ctrl+O`, `Ctrl+S`, `Ctrl+Shift+S`
-for Save As). A `.nto` project is a plain JSON file that keeps the notes together with what they were
-drawn over and the values that belong to that piece of work: the audio file, the tempo, the analysis
-parameters, the spectrum display, the snap grid and the view. It is a few kilobytes, so it is
-diffable, searchable and editable by hand.
+for Save As), and `Export MIDI` beside them for a MIDI file of its own. A `.nto` project is a plain
+JSON file that keeps the notes together with what they were drawn over and the values that belong to
+that piece of work: the audio file, the tempo, the analysis parameters, the spectrum display, the snap
+grid and the view. It is a few kilobytes, so it is diffable, searchable and editable by hand.
 
 Notes are kept in seconds, so a different tempo moves the grid and never the notes, and the file
 lists them in time order. The audio is recorded as a path - relative to the project when it sits
@@ -71,26 +71,30 @@ overwrite the program's own defaults, which are what the next file starts from.
 
 ## MIDI files
 
-`Open` (`Ctrl+O`) takes a `.mid`/`.midi` file as well as a project, and Save As offers a MIDI file
-next to the `.nto` format, so a roll can be written out for a DAW, a score program or a synth. A
-MIDI is read by track: every MIDI channel with notes in it becomes one track here, named after the
-file's track when it has one and carrying its instrument and channel volume. Importing into a
-window that already has audio loaded keeps the audio, the view and the snap grid, which is how a
-transcription made elsewhere is checked against the sound it came from; what it cannot use (a note
-that never ends, a channel past the sixteen tracks, a tempo change after the first, since the grid
-holds one tempo) is counted in the status bar rather than dropped silently. An import over a roll that
-already has notes asks first, and along with **Replace** it offers **Merge**: each of the file's
-tracks is pointed at an existing track or at a new one (by channel to start with, and the mapping is
-edited in the same dialog), the notes arrive beside the ones already there, and the tempo stays where
-the audio put it.
+`Open` (`Ctrl+O`) takes a `.mid`/`.midi` file as well as a project, and `Export MIDI` writes the roll
+out for a DAW, a score program or a synth, saving the project separately. A MIDI is read by channel:
+every MIDI channel with notes in it becomes one channel here, carrying its instrument and channel
+volume, and one track chunk holding several channels is read as several. A channel carries no name -
+a name belongs to a track chunk, which may hold any number of channels - so names live in the project
+file only, and none is read from or written to MIDI. Importing into a window that already has audio
+loaded keeps the audio, the view and the snap grid, which is how a transcription made elsewhere is
+checked against the sound it came from; what it cannot use (a note that never ends, a channel past the
+sixteenth, a tempo change after the first, since the grid holds one tempo) is counted in the
+status bar rather than dropped silently. An import over a roll that already has notes asks first, and
+along with **Replace** it offers **Merge**: each of the file's channels is pointed at one of the
+roll's channels or at a new one. The file's i-th channel starts on the roll's i-th channel while that
+one carries no notes, and the ones whose place is taken fill the empty channels left, in order, so
+the notes arriving are added to a channel of their own rather than mixed into one already in use; the
+mapping is edited in the same dialog, and the tempo stays where the audio put it.
 
-Save As writes MIDI in one of two ways, picked in the small dialog it opens: on the beat grid, where
-the notes land on the project's own tempo (optionally snapped to the current snap grid first, for a
-score), or in exact time, where the file carries a tempo of 60 BPM and a tick per 0.1 ms so that what
-came out of the audio plays back unchanged. A checkbox leaves the hidden tracks out. **WaveTone
-compatibility**, in the settings, is on by default: WaveTone's own MIDI export starts every note one
-bar late, so a file it wrote is read back with that bar removed, and a file written here carries it
-again - which is what its own tools expect. Turn it off to exchange plain MIDI with anything else,
+**Export MIDI** asks for one thing only, the file name, and writes every channel on the project's own
+tempo, one track chunk per channel and no name on any of them. A note drawn on the roll's grid lands
+exactly on the tick that grid names, and one taken from the audio keeps the time it has, rounded to
+the nearest tick; a hidden channel goes in like any other, since hiding is about the drawing and not
+the notes. **WaveTone compatibility**, in the settings, is
+on by default: WaveTone's own MIDI export starts every note one bar late, so a file it wrote is read
+back with that bar removed, and a file written here carries it again - which is what its own tools
+expect. Turn it off to exchange plain MIDI with anything else,
 since a file whose notes start before that bar was never WaveTone's and is read as it stands.
 
 ## Settings
@@ -139,9 +143,9 @@ namioto/beats.py      tempo estimation by beat tracking (librosa) + least-square
 namioto/tempo.py      TempoCNN tempo estimation (ONNX Runtime) + tempo map helpers, no Qt
 namioto/spectrum.py   note-domain spectrum analysis (STFT → 84 note bands), no Qt
 namioto/playback.py   note synthesis: pitches rendered into one audio buffer, no Qt
-namioto/tracks.py     the tracks a note belongs to, and the values they play with, no Qt
+namioto/channels.py   the MIDI channels a note plays on, and the values they play with, no Qt
 namioto/interaction.py the roll's normal/edit mode and its tool, as one value, no Qt
-namioto/document.py   the notes and the tracks they belong to, in beats, no Qt
+namioto/document.py   the notes and the MIDI channels they play on, in beats, no Qt
 namioto/midi.py       reading and writing MIDI files (mido), no Qt
 namioto/models/       bundled ONNX models
 namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars, roll.py: widgets,
@@ -172,22 +176,23 @@ The window has three control bars, each split into captioned blocks of related c
 
 | Bar | Blocks |
 | --- | --- |
-| Transport | **Project** (open, save), **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout, auto page turn, overtone highlight), **Speed** (0.10x-2.00x in 5% steps, pitch unchanged, with a reset icon back to 1.00x), **Tempo** (BPM, the estimated tempo of the audio, and the latency in ms) |
-| Edit | **Tools** (edit mode, track sidebar, pen, select, snap grid), **Division** (the metronome icon: checked, the grid follows the beats of the tempo map; unchecked, it follows seconds) |
+| Transport | **Project** (open, save, export MIDI), **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout, auto page turn, overtone highlight), **Speed** (0.10x-2.00x in 5% steps, pitch unchanged, with a reset icon back to 1.00x), **Tempo** (BPM, the estimated tempo of the audio, and the latency in ms) |
+| Edit | **Tools** (edit mode, channel sidebar, pen, select, snap grid), **Division** (the metronome icon: checked, the grid follows the beats of the tempo map; unchecked, it follows seconds) |
 | Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window (the analysis parameters and the few options the bars do not hold) |
 
 **Volume** has a slider for each layer: the audio file is streamed at the level of the first one, and
 the second is the note playback - a scale factor for the built-in synth, and control change 7 (channel
 volume) for an external one, which does its own mixing.
 
-**Tracks** are toggled by the layers icon in the tools: a sidebar with one card per track. The notes
-of each track are painted in its colour, and the card holds the name (double-click to rename), the
-GM instrument the track plays, and the lock, show and mute switches. Clicking a card makes it the
-drawing track; the context menu adds a track, sets its volume or deletes it (the last one stays).
-Each track owns its MIDI channel, so it can be given any of the sixteen, percussion included.
-A locked track cannot be edited, a hidden one is not drawn, and a muted one stays silent - the
-built-in synth plays each track with the voice of its instrument family, an external one receives
-the real GM program on the track's own channel.
+**Channels** are toggled by the layers icon in the tools: a sidebar with one card per MIDI channel.
+The notes of each channel are painted in its colour, and the card holds the name (double-click to
+rename), the GM instrument the channel plays, and the lock, show and mute switches. Clicking a card
+makes it the drawing channel; the context menu adds a channel, sets its volume or deletes it (the
+last one stays). Deleting one leaves the numbers of the others alone, so a note keeps the MIDI
+channel it plays on. Any of the sixteen can be used, percussion included.
+A locked channel cannot be edited, a hidden one is not drawn, and a muted one stays silent - the
+built-in synth plays each channel with the voice of its instrument family, an external one receives
+the real GM program on the channel's own number.
 
 | Action | Input |
 | --- | --- |
@@ -204,6 +209,7 @@ the real GM program on the track's own channel.
 | Play or pause | `Space` or the play/pause button |
 | Open a project | `Ctrl+O`, or `Open` in the Project block |
 | Save a project | `Ctrl+S` (Save As on the first save, or `Ctrl+Shift+S`), or `Save` in the Project block |
+| Export MIDI | `Export MIDI` in the Project block, next to `Save` |
 | Move the playhead | A press anywhere in the roll - over the grid or over a note, in either mode - or a click in the timeline ruler (any mode, and it works while the file plays), or the rewind / forward buttons for the ends. A press on a note moves, resizes or selects it *and* moves the playhead. Dragging carries the playhead along with the pointer, and sounding every row it crosses like a glissando. While the audio plays the roll keeps its cursor so editing does not jump the sound; seeking then is what the ruler is for, and the file carries on from there |
 | Double / halve the tempo | Right-click the Tempo field, or press `*` / `/` while it has the focus |
 | Pan | Middle drag, a scrollbar, or drag in the timeline ruler to scroll horizontally |

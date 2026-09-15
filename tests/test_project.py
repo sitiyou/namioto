@@ -47,7 +47,7 @@ def test_only_the_values_that_belong_to_the_document_are_written() -> None:
         "format",
         "version",
         "audio",
-        "tracks",
+        "channels",
         "notes",
         "analysis",
         "spectrum",
@@ -132,7 +132,7 @@ def test_a_file_from_a_later_version_is_still_read(tmp_path) -> None:
 
 def test_notes_are_rounded_to_a_tenth_of_a_millisecond() -> None:
     written = project.to_dict(make(notes=(project.Note(0.7300000001, 0.37000001, 63),)))
-    assert written["notes"] == [{"start": 0.73, "duration": 0.37, "pitch": 63, "track": 0}]
+    assert written["notes"] == [{"start": 0.73, "duration": 0.37, "pitch": 63, "channel": 0}]
 
 
 def test_a_note_that_makes_no_sense_is_left_out(recwarn) -> None:

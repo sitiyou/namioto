@@ -1,18 +1,18 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""The score model: note normalisation and the track invariants, with no Qt in sight."""
+"""The score model: note normalisation and the channel invariants, with no Qt in sight."""
 
 from __future__ import annotations
 
+from namioto.channels import Channel
 from namioto.document import MIN_DURATION, PITCH_MAX, PITCH_MIN, Document, Note
-from namioto.tracks import Track
 
 
 def test_a_note_lands_inside_the_roll() -> None:
-    note = Note(pitch=PITCH_MAX + 40, start=-3.0, duration=0.0, track=99)
+    note = Note(pitch=PITCH_MAX + 40, start=-3.0, duration=0.0, channel=99)
     assert note.pitch == PITCH_MAX
     assert note.start == 0.0
     assert note.duration == MIN_DURATION
-    assert note.track == 15
+    assert note.channel == 15
     assert Note(pitch=PITCH_MIN - 40, start=0.0, duration=1.0).pitch == PITCH_MIN
 
 
@@ -33,26 +33,43 @@ def test_two_notes_that_sound_alike_are_still_two() -> None:
     assert len(document.notes) == 1 and document.notes[0] is first
 
 
-def test_removing_a_track_takes_its_notes_and_shifts_the_rest() -> None:
-    document = Document(tracks=[Track(name="A"), Track(name="B"), Track(name="C")])
-    document.add_note(Note(60, 0.0, 1.0, track=0))
-    document.add_note(Note(62, 0.0, 1.0, track=1))
-    document.add_note(Note(64, 0.0, 1.0, track=2))
+def test_removing_a_channel_takes_its_notes_and_leaves_the_numbers_alone() -> None:
+    document = Document(
+        channels=[Channel(name="A", channel=0), Channel(name="B", channel=1), Channel(name="C", channel=3)]
+    )
+    document.add_note(Note(60, 0.0, 1.0, channel=0))
+    document.add_note(Note(62, 0.0, 1.0, channel=1))
+    document.add_note(Note(64, 0.0, 1.0, channel=3))
 
-    removed = document.remove_track(1)
+    removed = document.remove_channel(1)
     assert [note.pitch for note in removed] == [62]
-    assert [track.name for track in document.tracks] == ["A", "C"]
-    assert [(note.pitch, note.track) for note in document.notes] == [(60, 0), (64, 1)]
+    assert [channel.name for channel in document.channels] == ["A", "C"]
+    assert [(note.pitch, note.channel) for note in document.notes] == [(60, 0), (64, 3)]
 
 
-def test_the_last_track_stays() -> None:
+def test_the_last_channel_stays() -> None:
     document = Document()
-    assert document.remove_track(0) is None
-    assert len(document.tracks) == 1
+    assert document.remove_channel(0) is None
+    assert len(document.channels) == 1
 
 
-def test_a_shorter_track_list_drops_the_notes_past_its_end() -> None:
-    document = Document(tracks=[Track(name="A"), Track(name="B")], notes=[Note(60, 0.0, 1.0, track=1)])
-    document.set_tracks([Track(name="A")])
-    assert document.notes == []
-    assert len(document.tracks) == 1
+def test_a_note_on_a_channel_the_document_never_heard_of_gets_an_entry() -> None:
+    document = Document(channels=[Channel(name="A")], notes=[Note(60, 0.0, 1.0, channel=4)])
+    assert [channel.channel for channel in document.channels] == [0, 4]
+
+
+def test_setting_channels_keeps_the_notes_on_the_channels_left_out() -> None:
+    document = Document(channels=[Channel(name="A"), Channel(name="B", channel=5)])
+    document.add_note(Note(60, 0.0, 1.0, channel=5))
+    document.set_channels([Channel(name="A")])
+    assert [channel.channel for channel in document.channels] == [0, 5]
+    assert [(note.pitch, note.channel) for note in document.notes] == [(60, 5)]
+
+
+def test_setting_a_channel_field_reaches_the_right_channel() -> None:
+    document = Document(channels=[Channel(name="A"), Channel(name="B", channel=5)])
+    document.set_channel_field(5, name="Lead", program=40)
+    assert [(channel.channel, channel.name, channel.program) for channel in document.channels] == [
+        (0, "A", 0),
+        (5, "Lead", 40),
+    ]

@@ -27,7 +27,7 @@ class Voice:
     """A synthesiser patch: harmonic amplitudes and envelope times.
 
     The built-in synth cannot imitate 128 GM instruments; GM programs map onto a handful of these
-    families instead, so tracks sound different from one another rather than realistic.
+    families instead, so the channels sound different from one another rather than realistic.
     """
 
     partials: tuple[tuple[int, float], ...]

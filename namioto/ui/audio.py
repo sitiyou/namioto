@@ -20,7 +20,7 @@ NOTE_ON, NOTE_OFF, VELOCITY = 0x90, 0x80, 100
 PROGRAM_CHANGE = 0xC0  # program change per channel: which instrument the synth should use
 DEFAULT_PROGRAM = 0  # a grand piano
 CHANNEL_VOLUME = (0xB0, 0x07)  # control change 7: the volume of a channel, 0 to 127
-DEFAULT_CHANNEL = (0, DEFAULT_PROGRAM, 100)  # what a program without tracks still plays on
+DEFAULT_CHANNEL = (0, DEFAULT_PROGRAM, 100)  # what a program without channels still plays on
 SYNTH_NAMES = ("timidity", "fluidsynth", "qsynth", "wavetable")
 
 
@@ -276,7 +276,7 @@ class MidiPortOut(NotePlayer):
             self._send_volume(channel)
 
     def _send_volume(self, channel: int) -> None:
-        # the track volume rides on the global one, both on the same control change
+        # the channel volume rides on the global one, both on the same control change
         level = min(1.0, min(1.27, self._volumes.get(channel, 100) / 100) * self._gain)
         self.port.send_message([CHANNEL_VOLUME[0] | channel, CHANNEL_VOLUME[1], round(level * 127)])
 

@@ -67,7 +67,7 @@ class Cluster(QWidget):
         return widget
 
     def add_sliders(self, sliders: Sequence[ValueSlider]) -> None:
-        """Stack sliders, on one width for the names, so tracks and values line up in columns."""
+        """Stack sliders, on one width for the names, so names and values line up in columns."""
         width = max(slider.caption.sizeHint().width() for slider in sliders)
         for row, slider in enumerate(sliders):
             slider.caption.setFixedWidth(width)
@@ -400,6 +400,7 @@ class TransportBar(_Group):
     forward_requested = pyqtSignal()
     open_requested = pyqtSignal()
     save_requested = pyqtSignal()
+    export_midi_requested = pyqtSignal()
     auto_page_toggled = pyqtSignal(bool)
     overtone_toggled = pyqtSignal(bool)
 
@@ -408,8 +409,10 @@ class TransportBar(_Group):
         self.setObjectName("transportBar")
         self.open = icon_button("open", "Open a project (.nto) — Ctrl+O")
         self.save = icon_button("save", "Save the project — Ctrl+S, with Shift for Save As")
+        self.export_midi = icon_button("export", "Export the notes as a MIDI file — every channel")
         self.open.clicked.connect(self.open_requested)
         self.save.clicked.connect(self.save_requested)
+        self.export_midi.clicked.connect(self.export_midi_requested)
         self.rewind = icon_button("rewind", "Rewind to the beginning")
         self.stop = icon_button("stop", "Stop")
         self.play_from_start = icon_button("playstart", "Play from the beginning")
@@ -476,6 +479,7 @@ class TransportBar(_Group):
         project = Cluster("project")
         project.add(self.open)
         project.add(self.save)
+        project.add(self.export_midi)
         project.add(self.settings_button)
 
         playback = Cluster("playback")
@@ -531,7 +535,9 @@ class EditBar(_Group):
             checkable=True,
         )
         self.mode.clicked.connect(self._toggle_mode)
-        self.tracks = icon_button("tracks", "Tracks: colours, mute and instruments, one card per track", checkable=True)
+        self.channels = icon_button(
+            "channels", "Channels: colours, mute and instruments, one card per channel", checkable=True
+        )
         self.pen = icon_button("pen", "Pen: click or drag an empty row to draw a note", checkable=True)
         self.select = icon_button(
             "select", "Select: drag a box, ctrl-click a note to add, drag a note to move", checkable=True
@@ -567,9 +573,9 @@ class EditBar(_Group):
         self.division.setChecked(True)  # beats by default; a click flips it to seconds
         self.division.toggled.connect(lambda checked: self.division_changed.emit("beats" if checked else "seconds"))
 
-        # the editing tools stay one group; the track sidebar and the time division sit beside them
+        # the editing tools stay one group; the channel sidebar and the time division sit beside them
         tools.add(separator())
-        tools.add(self.tracks)
+        tools.add(self.channels)
         tools.add(self.division)
 
         self.place(tools, 1, 0, 2)

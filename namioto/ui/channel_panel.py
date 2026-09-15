@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""The track sidebar: one card per track, noteDigger style, toggled from the edit bar."""
+"""The channel sidebar: one card per MIDI channel, noteDigger style, toggled from the edit bar."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 )
 
 from namioto import settings as store
-from namioto.tracks import free_channel
+from namioto.channels import Channel, free_channel
 from namioto.ui import icons, theme
 from namioto.ui.controls import BUTTON_HEIGHT
 from namioto.ui.roll import PianoRollView
@@ -31,7 +31,7 @@ SWATCH_WIDTH = 5
 
 
 class _NameLabel(QLabel):
-    """The track name, elided so a long one cannot push the card wider than its column."""
+    """The channel name, elided so a long one cannot push the card wider than its column."""
 
     def __init__(self, text: str):
         super().__init__(text)
@@ -63,35 +63,35 @@ def _state_button(kind_on: str, kind_off: str, on: bool, tooltip: str) -> QToolB
 
 
 class _Card(QWidget):
-    """One track: colour swatch, name and instrument, the lock/eye/mute buttons."""
+    """One channel: colour swatch, name and instrument, the lock/eye/mute buttons."""
 
-    def __init__(self, panel: TrackPanel, index: int):
+    def __init__(self, panel: ChannelPanel, channel: Channel):
         super().__init__()
         self._panel = panel
-        self._index = index
-        track = panel.view.tracks[index]
-        self.setObjectName("trackCard")
-        if index == panel.view.active_track:
+        self._channel = channel
+        self._number = channel.channel
+        self.setObjectName("channelCard")
+        if channel.channel == panel.view.active_channel:
             self.setProperty("active", True)
 
         swatch = QFrame()
         swatch.setFixedSize(SWATCH_WIDTH, 34)
-        swatch.setStyleSheet(f"background: {track.color}; border-radius: 2px;")
+        swatch.setStyleSheet(f"background: {channel.color}; border-radius: 2px;")
 
-        self.name = _NameLabel(track.label)
+        self.name = _NameLabel(channel.label)
         self.program = QComboBox()
         self.program.addItems(store.GM_PROGRAMS)  # the index is the program number
         # the card is a fixed column: the combo must be allowed to shrink below its longest item
         self.program.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.program.setMinimumContentsLength(12)
-        self.program.setCurrentIndex(track.program)
+        self.program.setCurrentIndex(channel.program)
         self.program.setFixedHeight(22)
-        self.program.setToolTip(store.PROGRAM_LABELS[track.program])
+        self.program.setToolTip(store.PROGRAM_LABELS[channel.program])
         self.program.currentIndexChanged.connect(self._on_program)
 
-        self.lock_button = _state_button("lock", "unlock", track.lock, "Lock: notes on this track cannot be edited")
-        self.eye_button = _state_button("eye", "eyeoff", track.visible, "Show or hide the notes of this track")
-        self.mute_button = _state_button("mute", "sound", track.mute, "Mute this track during playback")
+        self.lock_button = _state_button("lock", "unlock", channel.lock, "Lock: notes on this channel cannot be edited")
+        self.eye_button = _state_button("eye", "eyeoff", channel.visible, "Show or hide the notes of this channel")
+        self.mute_button = _state_button("mute", "sound", channel.mute, "Mute this channel during playback")
         for button, field in ((self.lock_button, "lock"), (self.eye_button, "visible"), (self.mute_button, "mute")):
             button.clicked.connect(lambda _c, field=field: self._toggle(field))
 
@@ -118,53 +118,53 @@ class _Card(QWidget):
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:
-            self._panel.view.set_active_track(self._index)
+            self._panel.view.set_active_channel(self._number)
         super().mousePressEvent(event)
 
     def contextMenuEvent(self, event) -> None:
-        panel, track = self._panel, self._panel.view.tracks[self._index]
+        panel, channel = self._panel, self._channel
         menu = QMenu(self)
         rename = menu.addAction("Rename…")
         volume = menu.addAction("Volume…")
-        remove = menu.addAction("Delete track")
+        remove = menu.addAction("Delete channel")
         chosen = menu.exec(event.globalPos())
         view = panel.view
         if chosen is rename:
-            name, ok = QInputDialog.getText(self, "Rename track", "Name:", text=track.name)
+            name, ok = QInputDialog.getText(self, "Rename channel", "Name:", text=channel.name)
             if ok and name.strip():
-                view.set_track_field(self._index, name=name.strip())
+                view.set_channel_field(self._number, name=name.strip())
         elif chosen is volume:
-            value, ok = QInputDialog.getInt(self, "Track volume", "Volume (0-127):", track.volume, 0, 127)
+            value, ok = QInputDialog.getInt(self, "Channel volume", "Volume (0-127):", channel.volume, 0, 127)
             if ok:
-                view.set_track_field(self._index, volume=value)
+                view.set_channel_field(self._number, volume=value)
         elif chosen is remove:
-            view.remove_track(self._index)
+            view.remove_channel(self._number)
 
     def _toggle(self, field: str) -> None:
-        track = self._panel.view.tracks[self._index]
+        channel = self._channel
         if field == "visible":
-            visible = not track.visible
+            visible = not channel.visible
             # hiding also locks, the way noteDigger couples the eye and the padlock
-            self._panel.view.set_track_field(self._index, visible=visible, lock=not visible)
+            self._panel.view.set_channel_field(self._number, visible=visible, lock=not visible)
         else:
-            self._panel.view.set_track_field(self._index, **{field: not getattr(track, field)})
+            self._panel.view.set_channel_field(self._number, **{field: not getattr(channel, field)})
 
     def _on_program(self, program: int) -> None:
         self.program.setToolTip(store.PROGRAM_LABELS[program])
-        self._panel.view.set_track_field(self._index, program=program)
+        self._panel.view.set_channel_field(self._number, program=program)
 
 
-class TrackPanel(QWidget):
-    """The list of the document's tracks; a view over `PianoRollView.tracks`, never a second copy."""
+class ChannelPanel(QWidget):
+    """The list of the document's channels; a view over `PianoRollView.channels`, never a copy."""
 
     def __init__(self, view: PianoRollView, default_program: int = 0, parent=None):
         super().__init__(parent)
         self.view = view
         self.default_program = default_program
-        self.setObjectName("trackPanel")
+        self.setObjectName("channelPanel")
         self.setFixedWidth(CARD_WIDTH)
-        view.tracks_changed.connect(self._rebuild)
-        view.active_track_changed.connect(lambda _index: self._rebuild())
+        view.channels_changed.connect(self._rebuild)
+        view.active_channel_changed.connect(lambda _number: self._rebuild())
 
         self.cards = QVBoxLayout()
         self.cards.setContentsMargins(6, 6, 6, 6)
@@ -188,13 +188,13 @@ class TrackPanel(QWidget):
             item = self.cards.takeAt(0)
             if widget := item.widget():
                 widget.deleteLater()
-        for index in range(len(self.view.tracks)):
-            self.cards.addWidget(_Card(self, index))
+        for channel in self.view.channels:
+            self.cards.addWidget(_Card(self, channel))
         self.cards.addStretch(1)
 
     def contextMenuEvent(self, event) -> None:
         menu = QMenu(self)
-        add = menu.addAction("Add track")
-        add.setEnabled(free_channel(self.view.tracks) is not None)
+        add = menu.addAction("Add channel")
+        add.setEnabled(free_channel(self.view.channels) is not None)
         if menu.exec(event.globalPos()) is add:
-            self.view.add_track(program=self.default_program)
+            self.view.add_channel(program=self.default_program)

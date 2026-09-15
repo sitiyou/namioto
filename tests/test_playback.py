@@ -69,7 +69,7 @@ def test_speed_scales_the_timeline_without_moving_the_pitch():
     assert dominant_frequency(slow) == pytest.approx(dominant_frequency(fast), rel=0.01)
 
 
-def test_a_channel_gains_its_track_volume():
+def test_a_channel_gains_its_own_volume():
     # both renders stay under the clipping peak, so the mix is not normalised and the ratio is exact
     quiet = render_notes([(69, 0.0, 0.4, 0)], channels=((0, 0, 10),))
     loud = render_notes([(69, 0.0, 0.4, 0)], channels=((0, 0, 20),))

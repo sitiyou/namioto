@@ -9,7 +9,7 @@ import mido
 import pytest
 
 from namioto import midi, project
-from namioto.tracks import Track
+from namioto.channels import Channel
 
 
 def file_with(tracks, *, ppq: int = 480, tempo: int = 500000) -> mido.MidiFile:
@@ -44,39 +44,47 @@ def absolute(track) -> list[tuple[int, Any]]:
     return events
 
 
-def test_a_round_trip_keeps_the_notes_and_the_tracks(tmp_path) -> None:
-    tracks = (
-        Track(name="Piano", channel=0, program=4, volume=90),
-        Track(name="Strings", channel=3, program=48, volume=127),
+def test_a_round_trip_keeps_the_notes_and_the_channels(tmp_path) -> None:
+    channels = (
+        Channel(channel=0, program=4, volume=90),
+        Channel(channel=3, program=48, volume=127),
     )
     notes = (
         project.Note(1.0, 0.5, 60, 0),
-        project.Note(1.25, 0.25, 64, 1),
+        project.Note(1.25, 0.25, 64, 3),
         project.Note(2.0, 1.0, 67, 0),
     )
-    imported = midi.read(midi.write(tmp_path / "out.mid", tracks, notes, 120.0))
+    imported = midi.read(midi.write(tmp_path / "out.mid", channels, notes, 120.0))
 
-    assert [(track.name, track.channel, track.program, track.volume) for track in imported.tracks] == [
-        ("Piano", 0, 4, 90),
-        ("Strings", 3, 48, 127),
+    assert [(channel.channel, channel.program, channel.volume, channel.name) for channel in imported.channels] == [
+        (0, 4, 90, ""),
+        (3, 48, 127, ""),
     ]
-    assert [(note.pitch, note.track) for note in imported.notes] == [(60, 0), (64, 1), (67, 0)]
+    assert [(note.pitch, note.channel) for note in imported.notes] == [(60, 0), (64, 3), (67, 0)]
     for written, back in zip(notes, imported.notes, strict=True):
         assert abs(written.start - back.start) < 0.002
         assert abs(written.duration - back.duration) < 0.002
 
 
+def test_a_files_track_name_is_ignored(tmp_path) -> None:
+    """A name rides on a track chunk, not on a channel: the project file is where a name lives."""
+    path = tmp_path / "named.mid"
+    file_with([("Lead", [*note(0, 60, 0, 480)])]).save(path)
+
+    assert midi.read(path).channels[0].name == ""
+
+
 def test_the_export_puts_every_note_where_it_belongs(tmp_path) -> None:
     """A note sits at its own tick, with nothing in front of it: WaveTone starts one bar late,
     and copying that would make our own round trips drift a bar."""
-    tracks = (Track(name="Piano", channel=0),)
+    channels = (Channel(channel=0),)
     notes = (project.Note(1.5, 0.5, 60, 0),)
-    plain = midi.write(tmp_path / "plain.mid", tracks, notes, 120.0)
+    plain = midi.write(tmp_path / "plain.mid", channels, notes, 120.0)
     events = absolute(mido.MidiFile(plain).tracks[1])
     # program change and volume, then the note 1.5 s in, which is 3 beats at 120 BPM over 960 ppq
     assert [tick for tick, message in events if not message.is_meta] == [0, 0, 2880, 3840]
 
-    late = midi.write(tmp_path / "late.mid", tracks, notes, 120.0, wavetone=True)
+    late = midi.write(tmp_path / "late.mid", channels, notes, 120.0, wavetone=True)
     played = [tick for tick, message in absolute(mido.MidiFile(late).tracks[1]) if not message.is_meta]
     assert played == [
         0,
@@ -112,16 +120,6 @@ def test_a_file_that_starts_at_once_keeps_its_notes(tmp_path) -> None:
     assert imported.dropped == 0
 
 
-def test_exact_time_keeps_a_tenth_of_a_millisecond(tmp_path) -> None:
-    notes = (project.Note(3.7001, 0.1234, 60, 0),)
-    path = midi.write(tmp_path / "exact.mid", (Track(channel=0),), notes, 137.0, exact=True)
-    imported = midi.read(path)
-
-    assert imported.bpm == midi.EXACT_BPM
-    assert imported.notes[0].start == pytest.approx(3.7001, abs=1e-9)
-    assert imported.notes[0].duration == pytest.approx(0.1234, abs=1e-9)
-
-
 def test_a_type_zero_file_is_split_by_channel(tmp_path) -> None:
     track = mido.MidiTrack()
     for channel, program, volume in ((0, 4, 90), (9, 0, 127)):
@@ -135,10 +133,10 @@ def test_a_type_zero_file_is_split_by_channel(tmp_path) -> None:
 
     imported = midi.read(tmp_path / "flat.mid")
     # the percussion channel is a channel like any other
-    assert [track.channel for track in imported.tracks] == [0, 9]
-    assert [track.program for track in imported.tracks] == [4, 0]
-    assert [track.volume for track in imported.tracks] == [90, 127]
-    assert [(note.pitch, note.track) for note in imported.notes] == [(60, 0), (36, 1)]
+    assert [channel.channel for channel in imported.channels] == [0, 9]
+    assert [channel.program for channel in imported.channels] == [4, 0]
+    assert [channel.volume for channel in imported.channels] == [90, 127]
+    assert [(note.pitch, note.channel) for note in imported.notes] == [(60, 0), (36, 9)]
 
 
 def test_the_tempo_map_is_walked_and_the_first_tempo_is_the_grid(tmp_path) -> None:
@@ -194,51 +192,47 @@ def test_channels_past_the_limit_are_left_out(tmp_path) -> None:
     file_with([("", messages)]).save(path)
 
     imported = midi.read(path, limit=2)
-    assert [track.channel for track in imported.tracks] == [0, 1]
+    assert [channel.channel for channel in imported.channels] == [0, 1]
     assert imported.left_out == (2, 3)
     assert len(imported.notes) == 2
 
 
-def test_only_the_tracks_asked_for_are_written(tmp_path) -> None:
-    tracks = (Track(name="One", channel=0), Track(name="Two", channel=1))
-    notes = (project.Note(0.0, 0.5, 60, 0), project.Note(0.0, 0.5, 62, 1))
-    path = midi.write(tmp_path / "some.mid", tracks, notes, 120.0, included=(1,))
+def test_a_note_drawn_on_the_grid_lands_on_its_tick(tmp_path) -> None:
+    # 0.5 beats in and one beat long at 120 BPM: an eighth-note grid divides the tick exactly
+    notes = (project.Note(0.25, 0.5, 60, 0),)
+    path = midi.write(tmp_path / "grid.mid", (Channel(channel=0),), notes, 120.0)
 
-    imported = midi.read(path)
-    assert [track.name for track in imported.tracks] == ["Two"]
-    assert [note.pitch for note in imported.notes] == [62]
-
-
-def test_quantizing_rounds_the_notes_onto_the_grid(tmp_path) -> None:
-    notes = (project.Note(0.12, 0.30, 60, 0),)  # 0.24 beats in, 0.84 beats out at 120 BPM
-    path = midi.write(tmp_path / "snap.mid", (Track(channel=0),), notes, 120.0, quantize=0.25)
-
-    back = midi.read(path).notes[0]
-    assert back.start == pytest.approx(0.125, abs=0.002)
-    assert back.duration == pytest.approx(0.25, abs=0.002)
+    events = absolute(mido.MidiFile(path).tracks[1])
+    assert [tick for tick, message in events if not message.is_meta] == [0, 0, 480, 1440]
 
 
 def test_a_note_shorter_than_a_tick_still_has_one(tmp_path) -> None:
-    path = midi.write(tmp_path / "tiny.mid", (Track(channel=0),), (project.Note(0.0, 0.00001, 60, 0),), 120.0)
+    path = midi.write(tmp_path / "tiny.mid", (Channel(channel=0),), (project.Note(0.0, 0.00001, 60, 0),), 120.0)
     assert len(midi.read(path).notes) == 1
 
 
-def test_a_track_name_that_is_not_ascii_survives(tmp_path) -> None:
-    path = midi.write(
-        tmp_path / "unicode.mid", (Track(name="钢琴", channel=0),), (project.Note(0.0, 0.5, 60, 0),), 120.0
-    )
-    assert midi.read(path).tracks[0].name == "钢琴"
+def test_a_file_whose_text_is_not_utf8_still_reads(tmp_path) -> None:
+    """A name is not read any more, but the file still has to load: its bytes are not ours to fix."""
+    path = tmp_path / "latin.mid"
+    mid = mido.MidiFile(type=1, ticks_per_beat=480, charset="latin1")
+    track = mido.MidiTrack()
+    track.append(mido.MetaMessage("track_name", name="Café", time=0))
+    track.extend(note(0, 60, 0, 480))
+    mid.tracks.append(track)
+    mid.save(path)
+
+    assert len(midi.read(path).notes) == 1
 
 
-def test_a_track_without_its_own_metadata_gets_the_plain_defaults(tmp_path) -> None:
+def test_a_channel_without_its_own_metadata_gets_the_plain_defaults(tmp_path) -> None:
     path = tmp_path / "plain.mid"
     file_with([("", [*note(2, 60, 0, 480)])]).save(path)
 
     imported = midi.read(path)
-    assert imported.tracks[0].name == "Track 1"
-    assert imported.tracks[0].program == 0
-    assert imported.tracks[0].volume == midi.DEFAULT_VOLUME
-    assert imported.tracks[0].channel == 2
+    assert imported.channels[0].name == ""
+    assert imported.channels[0].program == 0
+    assert imported.channels[0].volume == midi.DEFAULT_VOLUME
+    assert imported.channels[0].channel == 2
 
 
 def test_the_ticks_per_beat_of_the_file_are_respected(tmp_path) -> None:
