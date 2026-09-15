@@ -39,17 +39,6 @@ GLYPHS = {
     "sound": "mdi.volume-high",
 }
 
-SECTION_GLYPHS = {
-    "analysis": "mdi.tune",
-    "spectrum": "mdi.monitor",
-    "playback": "mdi.music-note",
-    "editor": "mdi.vector-square",
-    "tempo": "mdi.metronome",
-    "paths": "mdi.folder-outline",
-    "session": "mdi.restore",
-}
-
-
 def icon(kind: str, color: str = "") -> QIcon:
     """The glyph named by our own word for it, so a call site never spells out a font name.
 
@@ -61,7 +50,3 @@ def icon(kind: str, color: str = "") -> QIcon:
         color=color or theme.TOKENS["dark"]["TEXT"],
         color_disabled=theme.TOKENS["dark"]["DISABLED"],
     )
-
-
-def section_icon(name: str, color: str = "") -> QIcon:
-    return qta.icon(SECTION_GLYPHS[name], color=color or theme.TOKENS["dark"]["TEXT"])

@@ -22,7 +22,7 @@ from PyQt6.QtWidgets import (
 from namioto import settings as store
 from namioto.channels import Channel, free_channel
 from namioto.ui import icons, theme
-from namioto.ui.controls import BUTTON_HEIGHT
+from namioto.ui.controls import BUTTON_HEIGHT, FIELD_HEIGHT
 from namioto.ui.roll import PianoRollView
 
 # wide enough that the longest General MIDI name fits the combo whole, scrollbar included
@@ -85,7 +85,7 @@ class _Card(QWidget):
         self.program.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.program.setMinimumContentsLength(12)
         self.program.setCurrentIndex(channel.program)
-        self.program.setFixedHeight(22)
+        self.program.setFixedHeight(FIELD_HEIGHT)
         self.program.setToolTip(store.PROGRAM_LABELS[channel.program])
         self.program.currentIndexChanged.connect(self._on_program)
 

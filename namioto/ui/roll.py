@@ -861,7 +861,7 @@ class PianoRollView(QGraphicsView):
 
         if event.button() == Qt.MouseButton.RightButton:
             note = self._note_at(scene_pos)
-            if note is not None and not self._locked(note.channel):
+            if note is not None and self.edit_mode and not self._locked(note.channel):
                 self._remove_item(note)
             return
 
@@ -1176,6 +1176,7 @@ class TimelineRuler(QWidget):
     def wheelEvent(self, event) -> None:
         hbar = self.view.horizontalScrollBar()
         hbar.setValue(hbar.value() - event.angleDelta().y())
+        event.accept()
 
 
 class PianoKeyboard(QWidget):
@@ -1242,3 +1243,4 @@ class PianoKeyboard(QWidget):
     def wheelEvent(self, event) -> None:
         vbar = self.view.verticalScrollBar()
         vbar.setValue(vbar.value() - event.angleDelta().y())
+        event.accept()

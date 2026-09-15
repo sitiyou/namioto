@@ -164,10 +164,10 @@ QToolButton[checkable="true"], QToolButton#playbackButton {
     border: 1px solid transparent;
 }
 QToolButton[checkable="true"]:hover, QToolButton#playbackButton:hover { background: %BUTTON_HOVER%; }
+QToolButton[checkable="true"]:pressed, QToolButton#playbackButton:pressed { background: %BUTTON_PRESSED%; }
 QToolButton[checkable="true"]:checked { background: %ACCENT_SOFT%; border: 1px solid %ACCENT%; }
 QToolButton:disabled { color: %DISABLED%; }
 QToolButton#textButton { padding: 1px 6px; }
-QToolButton#textButton:checked { background: %ACCENT_SOFT%; border: 1px solid %ACCENT%; }
 QToolButton:focus { outline: none; border: 1px solid %ACCENT%; }
 QSlider::groove:horizontal { height: 4px; background: %GRID_LINE%; border-radius: 2px; }
 QSlider::sub-page:horizontal { background: %ACCENT%; border-radius: 2px; }
@@ -217,7 +217,6 @@ QMenu::item { padding: 4px 18px; border-radius: 3px; }
 QMenu::item:selected { background: %ACCENT_SOFT%; color: %POSITION%; }
 QToolTip { background: %TOOLTIP_BG%; color: %TOOLTIP_TEXT%; border: 1px solid %MENU_BORDER%; padding: 3px; }
 QStatusBar::item { border: 0; }
-QToolBar::separator { background: %SEPARATOR%; width: 1px; margin: 4px 6px; }
 """
 
 

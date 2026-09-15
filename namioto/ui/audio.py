@@ -260,7 +260,7 @@ class MidiPortOut(NotePlayer):
         self._start = 0.0
         self._started: float | None = None
         self._stopping = False
-        self._sounding: set[int] = set()
+        self._sounding: set[tuple[int, int]] = set()
         self._previews: dict[int, threading.Timer] = {}
         self._thread: threading.Thread | None = None
 

@@ -178,7 +178,6 @@ class MainWindow(QMainWindow):
         panel.setLayout(layout)
 
         self.transport = TransportBar(self)
-        self.transport.speed.slider.valueChanged.connect(self._on_speed_changed)
         self.edit = EditBar(SNAP_CHOICES, self)
         self.mix = MixBar(self)
         self.controls = ControlArea((self.transport, self.edit, self.mix))
