@@ -14,11 +14,10 @@ from pathlib import Path
 
 import librosa
 import numpy as np
-from PyQt6.QtCore import QIODevice, QObject, pyqtSignal
-from PyQt6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices, QtAudio
+from PyQt6.QtMultimedia import QtAudio
 
-BUFFER_MS = 80
-INT16_PEAK = 32767.0
+from namioto.ui.audio import BUFFER_MS, SinkPlayer
+
 N_FFT = 2048
 HOP = 512
 BLOCK_FRAMES = 256  # input frames one STFT block holds: a few seconds between block recomputations
@@ -202,58 +201,15 @@ class TimeStretcher:
         target[index:end] += values
 
 
-class _SongSource(QIODevice):
-    """Serves the song in int16 chunks, stretched to the current speed as it goes."""
-
-    def __init__(self, player: SongPlayer):
-        super().__init__()
-        self._player = player
-        self.cursor = 0
-        self.open(QIODevice.OpenModeFlag.ReadOnly)
-
-    def isSequential(self) -> bool:
-        return True
-
-    def bytesAvailable(self) -> int:
-        return self._player.remaining * 2 + super().bytesAvailable()
-
-    def readData(self, maxlen: int) -> bytes:
-        count = min(maxlen // 2, self._player.remaining)
-        if count <= 0:
-            return b""
-        chunk = self._player.read(count)
-        self.cursor += len(chunk)
-        chunk = np.clip(chunk * self._player.gain, -1.0, 1.0)
-        return (chunk * INT16_PEAK).astype(np.int16).tobytes()
-
-
-class SongPlayer(QObject):
+class SongPlayer(SinkPlayer):
     """The loaded audio file, carrying the transport surface the window drives."""
 
-    finished = pyqtSignal()
-
     def __init__(self, parent=None, buffer_ms: int = BUFFER_MS):
-        super().__init__(parent)
-        self.gain = 1.0
+        super().__init__(parent, buffer_ms=buffer_ms, sample_rate=0)
         self.samples = np.zeros(0, dtype=np.float32)  # the song as it was decoded
-        self.sample_rate = 0
-        self._speed = 1.0
         self._stretcher = TimeStretcher()
-        self._start = 0.0
         self._position_base = 0.0  # song position when the current rate was set
         self._position_us = 0  # the sink's clock reading at that moment
-        self._sink: QAudioSink | None = None
-        self._source: _SongSource | None = None
-        self._buffer_ms = buffer_ms
-
-    @property
-    def buffer_ms(self) -> int:
-        return self._buffer_ms
-
-    @buffer_ms.setter
-    def buffer_ms(self, value: int) -> None:
-        """Takes effect on the next play: the sink is built with it when the sound starts."""
-        self._buffer_ms = max(10, int(value))
 
     @property
     def speed(self) -> float:
@@ -314,10 +270,6 @@ class SongPlayer(QObject):
         elapsed = (self._sink.processedUSecs() - self._position_us) / 1e6
         return min(self.duration, self._position_base + elapsed * self._speed)
 
-    @property
-    def is_playing(self) -> bool:
-        return self._sink is not None and self._sink.state() == QtAudio.State.ActiveState
-
     def play(self, seconds: float = 0.0) -> None:
         self._close()
         if not self.is_loaded:
@@ -326,19 +278,7 @@ class SongPlayer(QObject):
         self._position_base = self._start
         self._position_us = 0
         self._stretcher.start(self._start, self._speed)
-        self._source = _SongSource(self)
-        self._sink = QAudioSink(QMediaDevices.defaultAudioOutput(), self._format(), self)
-        self._sink.setBufferSize(int(self.sample_rate * 2 * self._buffer_ms / 1000))
-        self._sink.stateChanged.connect(self._on_state_changed)
-        self._sink.start(self._source)
-
-    def pause(self) -> None:
-        self._start = self.position
-        self._close()
-
-    def stop(self) -> None:
-        self._start = 0.0
-        self._close()
+        self._open()
 
     def seek(self, seconds: float) -> None:
         """Move the playhead, carrying on from there when the song was playing."""
@@ -346,20 +286,6 @@ class SongPlayer(QObject):
             self.play(seconds)
         else:
             self._start = max(0.0, min(seconds, self.duration))
-
-    def _format(self) -> QAudioFormat:
-        audio_format = QAudioFormat()
-        audio_format.setSampleRate(self.sample_rate)
-        audio_format.setChannelCount(1)
-        audio_format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
-        return audio_format
-
-    def _close(self) -> None:
-        if self._sink is not None:
-            self._sink.stop()
-            self._sink.deleteLater()
-            self._sink = None
-        self._source = None
 
     def _on_state_changed(self, state) -> None:
         if state != QtAudio.State.IdleState:

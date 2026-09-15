@@ -7,10 +7,11 @@ import colorsys
 from pathlib import Path
 
 import numpy as np
-from PyQt6.QtCore import QThread, pyqtSignal
+from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QImage
 
 from namioto.spectrum import NoteSpectrum, analyse
+from namioto.ui.loading import LoadingThread
 
 LUT_SIZE = 384
 BLUE_STEP = 90
@@ -64,11 +65,10 @@ class SpectrumImage:
         self._image = QImage(rows.data, width, height, width * 4, QImage.Format.Format_RGB32)
 
 
-class SpectrumLoader(QThread):
+class SpectrumLoader(LoadingThread):
     """Analyses a file off the GUI thread."""
 
     loaded = pyqtSignal(object)
-    failed = pyqtSignal(str)
     progress = pyqtSignal(int, int)
 
     def __init__(
@@ -80,16 +80,15 @@ class SpectrumLoader(QThread):
         a4: float = 440.0,
         parent=None,
     ):
-        super().__init__(parent)
-        self.path = Path(path)
+        super().__init__(path, parent)
         self.channels = channels
         self.t_num = t_num
         self.fft_points = fft_points
         self.a4 = a4
 
-    def run(self) -> None:
-        try:
-            spectrum = analyse(
+    def load(self) -> None:
+        self.loaded.emit(
+            analyse(
                 self.path,
                 channels=self.channels,
                 t_num=self.t_num,
@@ -97,7 +96,4 @@ class SpectrumLoader(QThread):
                 a4=self.a4,
                 progress=lambda done, total: self.progress.emit(done, total),
             )
-        except Exception as error:  # a broken file must not take the editor down
-            self.failed.emit(f"{type(error).__name__}: {error}")
-            return
-        self.loaded.emit(spectrum)
+        )

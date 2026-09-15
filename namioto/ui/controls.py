@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
 
 from namioto.interaction import Interaction, Tool, pick_tool, toggle_mode
 from namioto.ui import icons
-from namioto.ui.roll import format_time
+from namioto.ui.text import format_time
 
 ICON_SIZE = 17
 BUTTON_HEIGHT = 24

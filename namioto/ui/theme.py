@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Where the colours live: a token set per theme, the stylesheet built from it, and the palette.
+"""Where the colours live: one token set, the stylesheet built from it, and the palette.
 
-Qt draws most of the chrome from `stylesheet()`; the parts this app paints itself - the roll, the
-ruler, the keyboard and the spectrum - read `canvas()`. Both come from the same theme name, which is
-what lets a second theme be one more token set rather than a second drawing routine.
+The one theme is dark: Qt draws most of the chrome from `stylesheet()`; the parts this app paints
+itself - the roll, the ruler, the keyboard and the spectrum - read `canvas()`. Both come from the
+tokens below, so a colour is named once and the drawing code never spells one out.
 """
 
 from __future__ import annotations
@@ -35,34 +35,32 @@ NOTE_PALETTE = (
     "#7fe0a8",
 )
 
-TOKENS: dict[str, dict[str, str]] = {
-    "dark": {
-        "BG": "#191c23",
-        "PANEL": "#20242c",
-        "CARD": "#232833",
-        "CARD_BORDER": "#2f3644",
-        "SEPARATOR": "#3f4757",
-        "GRID_LINE": "#2f3541",
-        "TEXT": "#dbe2ee",
-        "TEXT_DIM": "#b6c0ce",
-        "PLACEHOLDER": "#98a4b8",
-        "POSITION": "#eef2f8",
-        "DISABLED": "#5c6474",
-        "BUTTON_BG": "#262b34",
-        "BUTTON_HOVER": "#2b3140",
-        "BUTTON_PRESSED": "#313848",
-        "FIELD_BG": "#1c2129",
-        "FIELD_BORDER": "#3a4152",
-        "FIELD_BORDER_HOVER": "#4a5468",
-        "SCROLL_HANDLE": "#3a4152",
-        "SCROLL_HANDLE_HOVER": "#4a5468",
-        "MENU_BG": "#262b34",
-        "MENU_BORDER": "#3a4152",
-        "TAB_BG": "#262b34",
-        "TAB_SELECTED_BG": "#1f3a5c",
-        "TOOLTIP_BG": "#262b34",
-        "TOOLTIP_TEXT": "#e6ecf5",
-    },
+TOKENS: dict[str, str] = {
+    "BG": "#191c23",
+    "PANEL": "#20242c",
+    "CARD": "#232833",
+    "CARD_BORDER": "#2f3644",
+    "SEPARATOR": "#3f4757",
+    "GRID_LINE": "#2f3541",
+    "TEXT": "#dbe2ee",
+    "TEXT_DIM": "#b6c0ce",
+    "PLACEHOLDER": "#98a4b8",
+    "POSITION": "#eef2f8",
+    "DISABLED": "#5c6474",
+    "BUTTON_BG": "#262b34",
+    "BUTTON_HOVER": "#2b3140",
+    "BUTTON_PRESSED": "#313848",
+    "FIELD_BG": "#1c2129",
+    "FIELD_BORDER": "#3a4152",
+    "FIELD_BORDER_HOVER": "#4a5468",
+    "SCROLL_HANDLE": "#3a4152",
+    "SCROLL_HANDLE_HOVER": "#4a5468",
+    "MENU_BG": "#262b34",
+    "MENU_BORDER": "#3a4152",
+    "TAB_BG": "#262b34",
+    "TAB_SELECTED_BG": "#1f3a5c",
+    "TOOLTIP_BG": "#262b34",
+    "TOOLTIP_TEXT": "#e6ecf5",
 }
 
 _ACCENT_TEXT = "#101318"
@@ -97,33 +95,31 @@ class Canvas:
     key_line: QColor
 
 
-CANVASES: dict[str, Canvas] = {
-    "dark": Canvas(
-        background=QColor("#191c23"),
-        row_white=QColor("#262b34"),
-        row_black=QColor("#20242c"),
-        grid_line=QColor("#2f3541"),
-        grid_beat=QColor("#434c5c"),
-        grid_bar=QColor("#6d7a92"),
-        note_colors=tuple(QColor(hex) for hex in NOTE_PALETTE),
-        note_selected=QColor("#fecfcf"),
-        note_selected_edge=QColor("#fe7474"),
-        text=QColor("#b6c0ce"),
-        panel=QColor("#20242c"),
-        ruler_line=QColor("#3a4152"),
-        spectrum_background=QColor("#000000"),
-        spectrum_octave=QColor("#c0c0c0"),
-        spectrum_beat=QColor("#606060"),
-        spectrum_bar=QColor("#c0c0c0"),
-        hover_band=QColor(255, 255, 255, 85),
-        hover_key=QColor("#ff4040"),
-        playhead=QColor("#e6ecf5"),
-        key_white=QColor("#d8dde6"),
-        key_black=QColor("#15181e"),
-        key_text=QColor("#454c5a"),
-        key_line=QColor("#101318"),
-    ),
-}
+CANVAS = Canvas(
+    background=QColor("#191c23"),
+    row_white=QColor("#262b34"),
+    row_black=QColor("#20242c"),
+    grid_line=QColor("#2f3541"),
+    grid_beat=QColor("#434c5c"),
+    grid_bar=QColor("#6d7a92"),
+    note_colors=tuple(QColor(hex) for hex in NOTE_PALETTE),
+    note_selected=QColor("#fecfcf"),
+    note_selected_edge=QColor("#fe7474"),
+    text=QColor("#b6c0ce"),
+    panel=QColor("#20242c"),
+    ruler_line=QColor("#3a4152"),
+    spectrum_background=QColor("#000000"),
+    spectrum_octave=QColor("#c0c0c0"),
+    spectrum_beat=QColor("#606060"),
+    spectrum_bar=QColor("#c0c0c0"),
+    hover_band=QColor(255, 255, 255, 85),
+    hover_key=QColor("#ff4040"),
+    playhead=QColor("#e6ecf5"),
+    key_white=QColor("#d8dde6"),
+    key_black=QColor("#15181e"),
+    key_text=QColor("#454c5a"),
+    key_line=QColor("#101318"),
+)
 
 _QSS = """
 QMainWindow, QDialog, QStatusBar { background: %BG%; }
@@ -220,10 +216,10 @@ QStatusBar::item { border: 0; }
 """
 
 
-def stylesheet(theme: str = "dark", accent: str = ACCENT) -> str:
-    """The application stylesheet, with the theme's tokens filled in."""
+def stylesheet(accent: str = ACCENT) -> str:
+    """The application stylesheet, with the tokens filled in."""
     sheet = _QSS
-    for token, value in TOKENS[theme].items():
+    for token, value in TOKENS.items():
         sheet = sheet.replace(f"%{token}%", value)
     return sheet.replace("%ACCENT%", accent).replace("%ACCENT_SOFT%", _accent_soft(accent))
 
@@ -233,9 +229,9 @@ def _accent_soft(accent: str) -> str:
     return f"rgba({colour.red()}, {colour.green()}, {colour.blue()}, 40)"
 
 
-def palette(theme: str = "dark", accent: str = ACCENT) -> QPalette:
+def palette(accent: str = ACCENT) -> QPalette:
     """What the widgets Qt draws without asking us - native dialogs, menus - take their colours from."""
-    tokens = TOKENS[theme]
+    tokens = TOKENS
     result = QPalette()
     for role, colour in (
         (QPalette.ColorRole.Window, tokens["PANEL"]),
@@ -272,12 +268,12 @@ def note_shades(body: QColor) -> tuple[QColor, QColor, QColor]:
     return body, shade(QColor("#ffffff")), shade(QColor("#000000"))
 
 
-def canvas(theme: str = "dark") -> Canvas:
+def canvas() -> Canvas:
     """The colours the painted widgets use."""
-    return CANVASES[theme]
+    return CANVAS
 
 
-def apply(app: QApplication, theme: str = "dark", accent: str = ACCENT) -> None:
+def apply(app: QApplication, accent: str = ACCENT) -> None:
     """Dress the whole application: the palette first, so nothing is drawn light, then the sheet."""
-    app.setPalette(palette(theme, accent))
-    app.setStyleSheet(stylesheet(theme, accent))
+    app.setPalette(palette(accent))
+    app.setStyleSheet(stylesheet(accent))

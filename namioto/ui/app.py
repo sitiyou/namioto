@@ -11,7 +11,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QByteArray, QThread, QTimer, pyqtSignal
+from PyQt6.QtCore import QByteArray, QTimer, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
@@ -38,11 +38,13 @@ from namioto.ui import theme
 from namioto.ui.audio import open_player
 from namioto.ui.channel_panel import ChannelPanel
 from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
+from namioto.ui.loading import LoadingThread
 from namioto.ui.midi_dialog import MidiImportDialog
-from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler, note_name
+from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler
 from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
 from namioto.ui.song import SongPlayer, load_song
 from namioto.ui.spectrogram import SpectrumLoader
+from namioto.ui.text import note_name
 
 POSITION_INTERVAL_MS = 40
 SPEED_SETTLE_MS = 100
@@ -69,11 +71,10 @@ class _Binding:
     override: str = ""
 
 
-class TempoLoader(QThread):
+class TempoLoader(LoadingThread):
     """Estimates the tempo of a file off the GUI thread, from the beats of its onsets."""
 
     loaded = pyqtSignal(object)
-    failed = pyqtSignal(str)
 
     def __init__(
         self,
@@ -82,41 +83,27 @@ class TempoLoader(QThread):
         window_hop_seconds: float = 6.0,
         parent=None,
     ):
-        super().__init__(parent)
-        self.path = Path(path)
+        super().__init__(path, parent)
         self.window_seconds = window_seconds
         self.window_hop_seconds = window_hop_seconds
 
-    def run(self) -> None:
-        try:
-            result = estimate(
+    def load(self) -> None:
+        self.loaded.emit(
+            estimate(
                 self.path,
                 window_seconds=self.window_seconds,
                 window_hop_seconds=self.window_hop_seconds,
             )
-        except Exception as error:  # a broken file must not take the editor down
-            self.failed.emit(f"{type(error).__name__}: {error}")
-            return
-        self.loaded.emit(result)
+        )
 
 
-class SongLoader(QThread):
+class SongLoader(LoadingThread):
     """Decodes the file for playback off the GUI thread."""
 
     loaded = pyqtSignal(object, int)
-    failed = pyqtSignal(str)
 
-    def __init__(self, path: str | Path, parent=None):
-        super().__init__(parent)
-        self.path = Path(path)
-
-    def run(self) -> None:
-        try:
-            samples, sample_rate = load_song(self.path)
-        except Exception as error:  # a broken file must not take the editor down
-            self.failed.emit(f"{type(error).__name__}: {error}")
-            return
-        self.loaded.emit(samples, sample_rate)
+    def load(self) -> None:
+        self.loaded.emit(*load_song(self.path))
 
 
 class MainWindow(QMainWindow):

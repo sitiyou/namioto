@@ -593,7 +593,7 @@ def test_the_buttons_that_do_something_carry_a_frame(window) -> None:
     assert window.transport.suggestion.isVisible()
 
     image = window.grab().toImage()
-    frame = QColor(theme.TOKENS["dark"]["BUTTON_BG"])
+    frame = QColor(theme.TOKENS["BUTTON_BG"])
     commands = (
         window.transport.open,
         window.transport.save,
@@ -610,7 +610,7 @@ def test_the_buttons_that_do_something_carry_a_frame(window) -> None:
 def test_the_switches_and_the_transport_stay_bare(window) -> None:
     window.edit.channels.setChecked(True)  # the cards, and their switches, have to be drawn
     image = window.grab().toImage()
-    frame = QColor(theme.TOKENS["dark"]["BUTTON_BG"])
+    frame = QColor(theme.TOKENS["BUTTON_BG"])
     card_switches = tuple(
         button
         for button in window.channel_panel.findChildren(QToolButton)

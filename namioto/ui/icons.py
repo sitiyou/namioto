@@ -39,6 +39,7 @@ GLYPHS = {
     "sound": "mdi.volume-high",
 }
 
+
 def icon(kind: str, color: str = "") -> QIcon:
     """The glyph named by our own word for it, so a call site never spells out a font name.
 
@@ -47,6 +48,6 @@ def icon(kind: str, color: str = "") -> QIcon:
     """
     return qta.icon(
         GLYPHS[kind],
-        color=color or theme.TOKENS["dark"]["TEXT"],
-        color_disabled=theme.TOKENS["dark"]["DISABLED"],
+        color=color or theme.TOKENS["TEXT"],
+        color_disabled=theme.TOKENS["DISABLED"],
     )

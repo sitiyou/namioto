@@ -23,6 +23,7 @@ from namioto.interaction import Interaction, Tool
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.ui import theme
 from namioto.ui.spectrogram import SpectrumImage
+from namioto.ui.text import format_time, note_name
 
 LENGTH_BEATS = 64
 CONTENT_MARGIN = 4.0
@@ -73,19 +74,8 @@ def is_black_key(pitch: int) -> bool:
     return pitch % 12 in (1, 3, 6, 8, 10)
 
 
-def note_name(pitch: int) -> str:
-    names = ("C", "C#", "D", "D#", "E", "F", "F#", "G", "G#", "A", "A#", "B")
-    return f"{names[pitch % 12]}{pitch // 12 - 1}"
-
-
 def _is_multiple(value: float, step: float) -> bool:
     return abs(value / step - round(value / step)) < 1e-6
-
-
-def format_time(seconds: float) -> str:
-    """Time as the transport shows it, mm:ss.mmm."""
-    minutes, rest = divmod(max(0.0, seconds), 60.0)
-    return f"{int(minutes):02d}:{rest:06.3f}"
 
 
 def time_step(pixels_per_second: float, minimum: float) -> float:
@@ -809,7 +799,7 @@ class PianoRollView(QGraphicsView):
         item = self.itemAt(self.mapFromScene(scene_pos))
         return item if isinstance(item, NoteItem) else None
 
-    def _pitch_at(self, y: float) -> int:
+    def pitch_at(self, y: float) -> int:
         row = min(PITCH_COUNT - 1, max(0, int(math.floor(y))))
         return PITCH_MAX - row
 
@@ -853,7 +843,7 @@ class PianoRollView(QGraphicsView):
                 self.seek_requested.emit(self.seconds_at_viewport_x(pos.x()))
             # and it sounds the row it lands on, whatever the mode, so a click is heard while editing
             # and while only listening
-            self._preview_pitch = self._pitch_at(scene_pos.y())
+            self._preview_pitch = self.pitch_at(scene_pos.y())
             self.note_preview.emit(self._preview_pitch)
             if not self.edit_mode:
                 self._mode = "seek"  # dragging on, the playhead is what follows the pointer
@@ -887,7 +877,7 @@ class PianoRollView(QGraphicsView):
                 return
             if self._locked(self.active_channel):
                 return
-            pitch = self._pitch_at(scene_pos.y())
+            pitch = self.pitch_at(scene_pos.y())
             start = max(0.0, self._snap_floor_beats(scene_pos.x()))
             self._begin_gesture("Draw note")
             note = self.add_note(pitch, start, self._cell_beats())
@@ -934,7 +924,7 @@ class PianoRollView(QGraphicsView):
     def mouseMoveEvent(self, event) -> None:
         pos = event.position().toPoint()
         scene_pos = self.mapToScene(pos)
-        self.set_hover_pitch(self._pitch_at(scene_pos.y()))
+        self.set_hover_pitch(self.pitch_at(scene_pos.y()))
 
         if self._mode is not None and self._mode != "pan":
             self._follow(pos, scene_pos)
@@ -990,7 +980,7 @@ class PianoRollView(QGraphicsView):
             anchor = self._anchor.x()
             left = max(0.0, self._snap_floor_beats(min(anchor, scene_pos.x())))
             right = max(left + self._cell_beats(), self._snap_ceil_beats(max(anchor, scene_pos.x())))
-            self._grab_note.set_range(left, self._pitch_at(scene_pos.y()))  # the row follows the pointer too
+            self._grab_note.set_range(left, self.pitch_at(scene_pos.y()))  # the row follows the pointer too
             self._grab_note.set_duration(right - left)
             return
 
@@ -1005,7 +995,7 @@ class PianoRollView(QGraphicsView):
         """A drag carries the playhead along and sounds every row it crosses, like a glissando."""
         if not self.playing:
             self.seek_requested.emit(self.seconds_at_viewport_x(pos.x()))
-        pitch = self._pitch_at(scene_pos.y())
+        pitch = self.pitch_at(scene_pos.y())
         if pitch != self._preview_pitch:
             self._preview_pitch = pitch
             self.note_preview.emit(pitch)
@@ -1090,20 +1080,26 @@ class PianoRollView(QGraphicsView):
         super().keyPressEvent(event)
 
 
-class TimelineRuler(QWidget):
+class _ViewportStrip(QWidget):
+    """A strip sharing the roll's columns: the viewport's top left in this widget's coordinates."""
+
     def __init__(self, view: PianoRollView):
         super().__init__()
         self.view = view
+
+    def origin(self) -> QPoint:
+        return self.mapFromGlobal(self.view.viewport().mapToGlobal(QPoint(0, 0)))
+
+
+class TimelineRuler(_ViewportStrip):
+    def __init__(self, view: PianoRollView):
+        super().__init__(view)
         self._last_x: float | None = None
         self._press_x = 0.0
         self._moved = False
         self.setFixedHeight(RULER_HEIGHT)
         self.setCursor(Qt.CursorShape.SizeHorCursor)
         view.view_changed.connect(self.update)
-
-    def origin(self) -> QPoint:
-        """The viewport's top left corner in this widget's coordinates."""
-        return self.mapFromGlobal(self.view.viewport().mapToGlobal(QPoint(0, 0)))
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -1179,20 +1175,15 @@ class TimelineRuler(QWidget):
         event.accept()
 
 
-class PianoKeyboard(QWidget):
+class PianoKeyboard(_ViewportStrip):
     """The keys at the left of the roll; clicking one auditions that note."""
 
     key_preview = pyqtSignal(int)
 
     def __init__(self, view: PianoRollView):
-        super().__init__()
-        self.view = view
+        super().__init__(view)
         self.setFixedWidth(66)
         view.view_changed.connect(self.update)
-
-    def origin(self) -> QPoint:
-        """The viewport's top left corner in this widget's coordinates."""
-        return self.mapFromGlobal(self.view.viewport().mapToGlobal(QPoint(0, 0)))
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -1238,7 +1229,7 @@ class PianoKeyboard(QWidget):
 
     def _pitch_at(self, y: float) -> int:
         scene_y = self.view.mapToScene(QPoint(0, int(y) - self.origin().y())).y()
-        return self.view._pitch_at(scene_y)
+        return self.view.pitch_at(scene_y)
 
     def wheelEvent(self, event) -> None:
         vbar = self.view.verticalScrollBar()

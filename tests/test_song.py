@@ -11,7 +11,8 @@ from PyQt6.QtMultimedia import QtAudio
 from PyQt6.QtWidgets import QApplication
 
 from namioto.ui import theme
-from namioto.ui.song import SongPlayer, TimeStretcher, _SongSource, load_song
+from namioto.ui.audio import _FloatSource
+from namioto.ui.song import SongPlayer, TimeStretcher, load_song
 
 
 class FakeSink(QObject):
@@ -59,13 +60,13 @@ def qt_app():
     return app
 
 
-def source_for(samples: np.ndarray) -> tuple[SongPlayer, _SongSource]:
+def source_for(samples: np.ndarray) -> tuple[SongPlayer, _FloatSource]:
     player = SongPlayer()
     player.load(samples, 1000)  # a kilohertz keeps the frame numbers readable
-    return player, _SongSource(player)
+    return player, _FloatSource(player)
 
 
-def read(source: _SongSource, frames: int) -> np.ndarray:
+def read(source: _FloatSource, frames: int) -> np.ndarray:
     return np.frombuffer(source.readData(frames * 2), dtype=np.int16) / 32767.0
 
 
@@ -142,7 +143,7 @@ def test_the_source_serves_the_rerendered_song() -> None:
     player = SongPlayer()
     player.load(np.zeros(4000, dtype=np.float32), 1000)  # a four second song
     player.speed = 2.0  # rerendered at twice the speed, so half as many samples come out
-    source = _SongSource(player)
+    source = _FloatSource(player)
 
     assert player.duration == pytest.approx(4.0)  # the song's own length, not the output's
     assert player.remaining == 2000  # at 2x, a two second buffer
@@ -151,7 +152,7 @@ def test_the_source_serves_the_rerendered_song() -> None:
 
 
 def test_a_seek_serves_the_song_from_where_the_playhead_lands(monkeypatch) -> None:
-    monkeypatch.setattr("namioto.ui.song.QAudioSink", FakeSink)
+    monkeypatch.setattr("namioto.ui.audio.QAudioSink", FakeSink)
     player = SongPlayer()
     player.load(np.arange(4000, dtype=np.float32) / 4000.0, 1000)
 
@@ -168,7 +169,7 @@ def test_a_seek_serves_the_song_from_where_the_playhead_lands(monkeypatch) -> No
 
 
 def test_a_speed_change_while_playing_carries_on_from_the_playhead(monkeypatch) -> None:
-    monkeypatch.setattr("namioto.ui.song.QAudioSink", FakeSink)
+    monkeypatch.setattr("namioto.ui.audio.QAudioSink", FakeSink)
     player = SongPlayer()
     player.load(np.arange(4000, dtype=np.float32) / 4000.0, 1000)  # a four second song
     player.play(1.0)
@@ -189,7 +190,7 @@ def test_a_speed_change_does_not_restart_the_sink(monkeypatch) -> None:
             super().__init__(*_args)
             created.append(self)
 
-    monkeypatch.setattr("namioto.ui.song.QAudioSink", CountingSink)
+    monkeypatch.setattr("namioto.ui.audio.QAudioSink", CountingSink)
     player = SongPlayer()
     player.load(np.zeros(8000, dtype=np.float32), 1000)
     player.play(0.0)
@@ -201,7 +202,7 @@ def test_a_speed_change_does_not_restart_the_sink(monkeypatch) -> None:
 
 
 def test_the_playhead_counts_each_rate_from_where_it_changed(monkeypatch) -> None:
-    monkeypatch.setattr("namioto.ui.song.QAudioSink", TimedSink)
+    monkeypatch.setattr("namioto.ui.audio.QAudioSink", TimedSink)
     player = SongPlayer()
     player.load(np.zeros(8000, dtype=np.float32), 1000)
     player.play(0.0)

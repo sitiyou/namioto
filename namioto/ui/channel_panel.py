@@ -37,7 +37,7 @@ class _NameLabel(QLabel):
         self.setMinimumWidth(1)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
         palette = self.palette()
-        palette.setColor(QPalette.ColorRole.WindowText, QColor(theme.TOKENS["dark"]["TEXT"]))
+        palette.setColor(QPalette.ColorRole.WindowText, QColor(theme.TOKENS["TEXT"]))
         self.setPalette(palette)
 
     def paintEvent(self, event) -> None:

@@ -89,10 +89,10 @@ class NotePlayer(QObject):
         raise NotImplementedError
 
 
-class _MixSource(QIODevice):
-    """Serves the mix to the sink in int16 chunks, scaled by the current gain."""
+class _FloatSource(QIODevice):
+    """Serves a player's float32 frames to the sink in int16 chunks, at the current gain."""
 
-    def __init__(self, player: MidiSink):
+    def __init__(self, player: SinkPlayer):
         super().__init__()
         self._player = player
         self.cursor = 0
@@ -102,19 +102,102 @@ class _MixSource(QIODevice):
         return True
 
     def bytesAvailable(self) -> int:
-        return (len(self._player.mix) - self.cursor) * 2 + super().bytesAvailable()
+        return self._player.remaining * 2 + super().bytesAvailable()
 
     def readData(self, maxlen: int) -> bytes:
-        mix = self._player.mix
-        count = min(maxlen // 2, len(mix) - self.cursor)
+        count = min(maxlen // 2, self._player.remaining)
         if count <= 0:
             return b""
-        chunk = np.clip(mix[self.cursor : self.cursor + count] * self._player.gain, -1.0, 1.0)
-        self.cursor += count
+        chunk = self._player.read(count)
+        self.cursor += len(chunk)
+        chunk = np.clip(chunk * self._player.gain, -1.0, 1.0)
         return (chunk * INT16_PEAK).astype(np.int16).tobytes()
 
 
-class MidiSink(NotePlayer):
+class SinkPlayer(NotePlayer):
+    """A player that streams float32 frames to Qt's audio sink.
+
+    The sink, its buffer and the transport around it are the same for the built-in synth and the
+    song; what each feeds it and how it times the playhead are the subclass's.
+    """
+
+    def __init__(self, parent=None, buffer_ms: int = BUFFER_MS, sample_rate: int = SAMPLE_RATE):
+        super().__init__(parent)
+        self.sample_rate = sample_rate
+        self._buffer_ms = buffer_ms
+        self._speed = 1.0
+        self._start = 0.0
+        self._sink: QAudioSink | None = None
+        self._source: _FloatSource | None = None
+
+    @property
+    def buffer_ms(self) -> int:
+        return self._buffer_ms
+
+    @buffer_ms.setter
+    def buffer_ms(self, value: int) -> None:
+        """Takes effect on the next play: the sink is built with it when the sound starts."""
+        self._buffer_ms = max(10, int(value))
+
+    def _format(self) -> QAudioFormat:
+        audio_format = QAudioFormat()
+        audio_format.setSampleRate(self.sample_rate)
+        audio_format.setChannelCount(1)
+        audio_format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
+        return audio_format
+
+    def _start_cursor(self) -> int:
+        """Where in the output stream a play starts; a song is aimed by its vocoder instead."""
+        return 0
+
+    @property
+    def remaining(self) -> int:
+        raise NotImplementedError
+
+    def read(self, frames: int) -> np.ndarray:
+        raise NotImplementedError
+
+    def _open(self) -> None:
+        self._source = _FloatSource(self)
+        self._source.cursor = self._start_cursor()
+        self._sink = QAudioSink(QMediaDevices.defaultAudioOutput(), self._format(), self)
+        self._sink.setBufferSize(int(self.sample_rate * 2 * self._buffer_ms / 1000))
+        self._sink.stateChanged.connect(self._on_state_changed)
+        self._sink.start(self._source)
+
+    @property
+    def is_playing(self) -> bool:
+        return self._sink is not None and self._sink.state() == QtAudio.State.ActiveState
+
+    @property
+    def position(self) -> float:
+        if self._sink is None:
+            return self._start
+        return self._start + self._sink.processedUSecs() / 1e6 * self._speed
+
+    def pause(self) -> None:
+        self._start = self.position
+        self._close()
+
+    def stop(self) -> None:
+        self._start = 0.0
+        self._close()
+
+    def _close(self) -> None:
+        if self._sink is not None:
+            self._sink.stop()
+            self._sink.deleteLater()
+            self._sink = None
+        self._source = None
+
+    def _on_state_changed(self, state) -> None:
+        if state == QtAudio.State.IdleState:  # the source ran out of samples
+            self._start = self.duration
+            self._close()
+            self.finished.emit()
+
+
+class MidiSink(SinkPlayer):
     """The built-in synth: the notes rendered into one buffer and streamed to Qt's audio sink."""
 
     def __init__(
@@ -124,22 +207,12 @@ class MidiSink(NotePlayer):
         sample_rate: int = SAMPLE_RATE,
         a4: float = A4,
     ):
-        super().__init__(parent)
-        self.sample_rate = sample_rate
+        super().__init__(parent, buffer_ms=buffer_ms, sample_rate=sample_rate)
         self.a4 = a4
         self.mix = np.zeros(0, dtype=np.float32)
         self._key: tuple | None = None
         self._voices: dict[int, tuple[int, int]] = {}  # pitch -> where its audition sits in the mix
         self._release_frames = int(RELEASE * sample_rate)
-        self._speed = 1.0
-        self._start = 0.0
-        self._sink: QAudioSink | None = None
-        self._source: _MixSource | None = None
-        self._format = QAudioFormat()
-        self._format.setSampleRate(sample_rate)
-        self._format.setChannelCount(1)
-        self._format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
-        self._buffer_bytes = int(sample_rate * 2 * buffer_ms / 1000)
 
     def set_program(self, notes, speed, channels=()) -> None:
         """Render the notes into a buffer, but only when they or the speed changed."""
@@ -165,30 +238,23 @@ class MidiSink(NotePlayer):
         return len(self.mix) / self.sample_rate * self._speed
 
     @property
-    def position(self) -> float:
-        if self._sink is None:
-            return self._start
-        return self._start + self._sink.processedUSecs() / 1e6 * self._speed
+    def remaining(self) -> int:
+        start = self._source.cursor if self._source is not None else 0
+        return max(0, len(self.mix) - start)
 
-    @property
-    def is_playing(self) -> bool:
-        return self._sink is not None and self._sink.state() == QtAudio.State.ActiveState
+    def read(self, frames: int) -> np.ndarray:
+        start = self._source.cursor if self._source is not None else 0
+        return self.mix[start : start + frames]
+
+    def _start_cursor(self) -> int:
+        return int(self._start / self._speed * self.sample_rate)
 
     def play(self, seconds: float = 0.0) -> None:
         self.stop()
         if self.mix.size == 0:
             return
         self._start = max(0.0, min(seconds, self.duration))
-        self._source = _MixSource(self)
-        self._source.cursor = int(self._start / self._speed * self.sample_rate)
-        self._sink = QAudioSink(QMediaDevices.defaultAudioOutput(), self._format, self)
-        self._sink.setBufferSize(self._buffer_bytes)
-        self._sink.stateChanged.connect(self._on_state_changed)
-        self._sink.start(self._source)
-
-    def pause(self) -> None:
-        self._start = self.position
-        self._close()
+        self._open()
 
     def seek(self, seconds: float) -> None:
         """Move the play position, carrying on from there when it was playing."""
@@ -198,10 +264,6 @@ class MidiSink(NotePlayer):
             # the end of the current program is not the end of the timeline: a click past it
             # has to land where it was aimed, and play() clamps when the sound actually starts
             self._start = max(0.0, seconds)
-
-    def stop(self) -> None:
-        self._start = 0.0
-        self._close()
 
     def preview(self, pitch: int, seconds: float = PREVIEW_SECONDS) -> None:
         """Audition one note, mixed over what is already sounding so clicks never cut each other."""
@@ -231,19 +293,6 @@ class MidiSink(NotePlayer):
         fade = np.linspace(1.0, 0.0, min(len(region), self._release_frames), endpoint=False, dtype=np.float32)
         region[: len(fade)] *= fade
         region[len(fade) :] = 0.0
-
-    def _close(self) -> None:
-        if self._sink is not None:
-            self._sink.stop()
-            self._sink.deleteLater()
-            self._sink = None
-        self._source = None
-
-    def _on_state_changed(self, state) -> None:
-        if state == QtAudio.State.IdleState:  # the source ran out of samples
-            self._start = self.duration
-            self._close()
-            self.finished.emit()
 
 
 class MidiPortOut(NotePlayer):
