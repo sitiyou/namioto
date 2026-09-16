@@ -68,6 +68,18 @@ Third-party code and assets
 - Consequence: a transcription produced with those models is non-commercial, exactly as with the
   bundled TempoCNN model above.
 
+### whisperX (forced alignment)
+- Upstream: m-bain/whisperX, https://github.com/m-bain/whisperX
+- License: BSD 2-Clause
+- Used for: the algorithm `namioto/align.py` ports. `align()`'s wav2vec2 CTC trellis, its Viterbi
+  backtracking and its merge of a character's frames into one span are reimplemented here in numpy
+  and ONNX Runtime, with torch, pandas, transformers and NLTK's sentence splitting dropped and the
+  audio windowed by the caller. The aligner model is not redistributed: the module loads a converted
+  ONNX graph from the data directory (`~/.local/share/namioto/models/wav2vec2/<language>`, via
+  `platformdirs`) or from `$NAMIOTO_ALIGN_MODEL`, and `scripts/export_align_model.py` produces that
+  graph from `jonatasgrosman/wav2vec2-large-xlsr-53-japanese` (Apache-2.0), so a converted aligner
+  carries no non-commercial term, unlike the bundled TempoCNN and GAME's models.
+
 ### Dependencies (all AGPL-compatible)
 | Component | License |
 | --- | --- |
@@ -79,6 +91,8 @@ Third-party code and assets
 | numpy, scipy, scikit-learn, joblib, pooch, soundfile | BSD-3-Clause |
 | qtawesome, qtpy | MIT |
 | mido | MIT |
+| torch, onnx, onnxscript (development only) | BSD-3-Clause / Apache-2.0 |
+| transformers (development only) | Apache-2.0 |
 | packaging | Apache-2.0 OR BSD-2-Clause |
 | soxr | LGPL-2.1-or-later |
 | pytest (development only) | MIT |

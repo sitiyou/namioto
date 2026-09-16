@@ -180,13 +180,11 @@ class SettingsDialog(QDialog):
     """Every setting, on a page per group, over a copy that is only handed over when applied."""
 
     applied = pyqtSignal(object)
-    reanalyse_requested = pyqtSignal()
 
     def __init__(
         self,
         settings,
         *,
-        can_reanalyse: bool = False,
         parent=None,
     ):
         super().__init__(parent)
@@ -197,7 +195,7 @@ class SettingsDialog(QDialog):
 
         pages = QTabWidget()
         for page in _pages():
-            pages.addTab(self._page(page, can_reanalyse), tr(page))
+            pages.addTab(self._page(page), tr(page))
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -232,7 +230,7 @@ class SettingsDialog(QDialog):
         self.apply()
         self.accept()
 
-    def _page(self, page: str, can_reanalyse: bool) -> QWidget:
+    def _page(self, page: str) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
         for advanced in (False, True):
@@ -259,24 +257,8 @@ class SettingsDialog(QDialog):
             if advanced:
                 layout.addWidget(advanced_section(form))
             layout.addLayout(form)
-        if page == "Analysis":
-            layout.addWidget(self._analysis_hint(can_reanalyse))
         if page == "Advanced":
             layout.addWidget(self._path_hint())
-        layout.addStretch(1)
-        return widget
-
-    def _analysis_hint(self, can_reanalyse: bool) -> QWidget:
-        widget = QWidget()
-        layout = QHBoxLayout(widget)
-        layout.setContentsMargins(0, 0, 0, 0)
-        hint = QLabel(tr("Analysis changes reach the spectrum the next time a file is loaded."))
-        layout.addWidget(hint)
-        if can_reanalyse:
-            again = QPushButton(tr("Re-analyse now"))
-            again.setToolTip(tr("Run the analysis again with these settings"))
-            again.clicked.connect(self.reanalyse_requested)
-            layout.addWidget(again)
         layout.addStretch(1)
         return widget
 

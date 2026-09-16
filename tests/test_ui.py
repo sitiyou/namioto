@@ -25,7 +25,6 @@ from PyQt6.QtGui import (
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import (
     QApplication,
-    QComboBox,
     QDialog,
     QFileDialog,
     QLabel,
@@ -1328,6 +1327,40 @@ def test_ctrl_click_is_what_adds_to_the_selection(window) -> None:
     window.view.clear_notes()
 
 
+def test_clicking_a_note_makes_its_channel_active_and_drops_the_others(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0), Channel(channel=1)))
+    window.view.clear_notes()
+    on_zero = window.view.add_note(60, 2.0, 1.0, 0)
+    on_one = window.view.add_note(64, 4.0, 1.0, 1)
+    on_zero.setSelected(True)
+    window.view.set_active_channel(0)
+    window.view.centerOn(QPointF(4.5, PITCH_MAX - 64 + 0.5))
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(4.5, PITCH_MAX - 64 + 0.5))
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(4.5, PITCH_MAX - 64 + 0.5))
+    assert window.view.active_channel == 1
+    assert on_one.isSelected() and not on_zero.isSelected()
+    reset_channels(window)
+
+
+def test_a_marquee_selects_only_the_active_channel(window) -> None:
+    window.edit.select.click()
+    window.view.set_channels((Channel(channel=0), Channel(channel=1)))
+    window.view.clear_notes()
+    on_zero = window.view.add_note(60, 2.0, 2.0, 0)
+    on_one = window.view.add_note(62, 2.0, 2.0, 1)
+    window.view.set_active_channel(0)
+    window.view.centerOn(QPointF(3.0, PITCH_MAX - 61 + 0.5))
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(1.0, PITCH_MAX - 64 + 0.5))
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(5.0, PITCH_MAX - 58 + 0.5))
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(5.0, PITCH_MAX - 58 + 0.5))
+    assert on_zero.isSelected() and not on_one.isSelected()
+    reset_channels(window)
+    window.edit.mode.click()
+
+
 def test_a_drawn_note_is_one_undo_step(window) -> None:
     window.edit.pen.click()
     window.view.set_channels((Channel(channel=0),))
@@ -1783,11 +1816,24 @@ def test_dragging_a_box_fills_the_selection_under_any_style(window) -> None:
         assert rubber.isVisible()
         area = rubber.geometry().intersected(window.view.viewport().rect())
         image = window.view.viewport().grab().toImage()
+        accent = rubber.palette().highlight().color()
+        canvas = image.pixelColor(area.left() - 20, area.center().y())
         inside = image.pixelColor(area.center())
-        outside = image.pixelColor(area.left() - 20, area.center().y())
-        assert inside.blue() - inside.red() > outside.blue() - outside.red(), "the region is tinted"
         border = image.pixelColor(area.topLeft())
-        assert border.blue() > border.red(), "the outline is the accent, not the style's own"
+
+        def from_accent(colour: QColor) -> int:
+            """How far one pixel is from the palette's accent, across the three channels."""
+            return (
+                abs(colour.red() - accent.red())
+                + abs(colour.green() - accent.green())
+                + abs(colour.blue() - accent.blue())
+            )
+
+        # the accent is whatever the palette carries - blue, grey, red - so the pixels are measured
+        # against it rather than against a colour this test would be guessing
+        assert inside != canvas, "the region is filled"
+        assert from_accent(inside) < from_accent(canvas), "the fill is the accent over the canvas"
+        assert from_accent(border) < from_accent(canvas), "the outline is the accent, not the style's own"
         roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(8.0, 66.0))
     finally:
         QApplication.setStyle("Fusion")
@@ -2339,40 +2385,33 @@ def test_the_settings_window_lists_every_visible_field(own_window) -> None:
     }
     assert names == expected
     pages = [dialog.findChild(QTabWidget).tabText(index) for index in range(dialog.findChild(QTabWidget).count())]
-    assert pages == ["General", "Analysis", "Tempo", "Advanced"]  # the rest of the spec is what the program remembers
+    assert pages == ["General", "Tempo", "Advanced"]  # the rest of the spec is what the program remembers
     dialog.close()
 
 
 def test_applying_the_settings_window_reaches_the_window_and_the_file(own_window) -> None:
     dialog = SettingsDialog(own_window.settings, parent=own_window)
     dialog.applied.connect(own_window.settings_store.apply)  # the window wires this up when it opens it
-    row_writer(dialog, "analysis", "t_num")(25.0)
     row_writer(dialog, "tempo", "window_seconds")(20.0)
     row_writer(dialog, "midi", "wavetone")(False)
     dialog.apply()
 
-    assert own_window.settings.analysis.t_num == 25.0
     assert own_window.settings.tempo.window_seconds == 20.0
     assert own_window.settings.midi.wavetone is False
     saved = json.loads(store.default_path().read_text())
-    assert saved["analysis"]["t_num"] == 25.0
     assert saved["tempo"]["window_seconds"] == 20.0
     assert saved["midi"]["wavetone"] is False
     dialog.close()
 
 
-def test_the_channels_row_offers_the_analysis_modes(own_window) -> None:
+def test_the_analysis_options_are_a_project_s_so_the_window_has_no_row(own_window) -> None:
     dialog = SettingsDialog(own_window.settings, parent=own_window)
-    combos = [combo for combo in dialog.findChildren(QComboBox) if combo.findData("side") >= 0]
-    assert len(combos) == 1
-    combos[0].setCurrentIndex(combos[0].findData("side"))
-    assert store.get_value(dialog.values(), "analysis", "channels") == "side"
+    assert not [row for row in dialog._rows if row[0] == "analysis"]
     dialog.close()
 
 
 def test_restoring_defaults_puts_every_widget_back(own_window) -> None:
     dialog = SettingsDialog(own_window.settings, parent=own_window)
-    row_writer(dialog, "analysis", "t_num")(12.0)
     row_writer(dialog, "tempo", "window_seconds")(8.0)
     row_writer(dialog, "midi", "wavetone")(False)
     assert store.get_value(dialog.values(), "midi", "wavetone") is False
@@ -2380,7 +2419,6 @@ def test_restoring_defaults_puts_every_widget_back(own_window) -> None:
     dialog.restore_defaults()
     values = dialog.values()
     assert store.get_value(values, "midi", "wavetone") is True
-    assert store.get_value(values, "analysis", "t_num") == 40.0
     assert store.get_value(values, "tempo", "window_seconds") == 12.0
     dialog.close()
 
@@ -2435,6 +2473,8 @@ def test_every_bar_setting_has_one_binding(own_window) -> None:
     # zoom lives on the roll, the last directory on the chooser and the session on the window: no bar
     elsewhere = {("editor", "zoom_x"), ("editor", "zoom_y"), ("paths", "last_audio_dir")}
     elsewhere |= {("session", name) for name in ("geometry", "center_x", "center_y")}
+    # the analysis options are the project's; the command line carries them for one run
+    elsewhere |= {("analysis", name) for name in ("channels", "t_num", "fft_points", "a4")}
     missing = (
         {(section.name, item.name) for section in store.SECTIONS for item in section.fields if item.hidden}
         - bound
@@ -2684,7 +2724,7 @@ def test_the_transcription_dialog_remembers_what_was_typed(own_window, monkeypat
     saved = transcription.load_parameters()
     assert saved["size"] == "large"
     assert saved["language"] == "zh"
-    assert dialog.insert_button.isEnabled()
+    assert dialog.result() == QDialog.DialogCode.Accepted
 
 
 def test_the_transcription_run_shows_its_log_and_progress(own_window, monkeypatch) -> None:
@@ -2703,7 +2743,7 @@ def test_the_transcription_run_shows_its_log_and_progress(own_window, monkeypatc
     assert "GAME model small" in dialog.log.toPlainText()
     assert dialog.progress_label.text() == "2 notes"
     assert dialog.notes() == [(0.0, 0.5, 60.0), (0.5, 1.0, 62.0)]
-    assert dialog.insert_button.isEnabled()
+    assert dialog.result() == QDialog.DialogCode.Accepted
 
 
 def test_a_cached_run_is_offered_instead_of_running(own_window, monkeypatch) -> None:
@@ -2720,7 +2760,7 @@ def test_a_cached_run_is_offered_instead_of_running(own_window, monkeypatch) -> 
     assert asked == [True]
     assert dialog.notes() == [(0.0, 0.5, 60.0)]
     assert "saved run reused" in dialog.log.toPlainText()
-    assert dialog.insert_button.isEnabled()
+    assert dialog.result() == QDialog.DialogCode.Accepted
 
 
 def test_a_declined_cache_still_runs(own_window, monkeypatch) -> None:
@@ -2746,7 +2786,7 @@ def test_a_crashed_transcription_leaves_the_window_alone(own_window, monkeypatch
 
     assert "exit code 1" in dialog.log.toPlainText()
     assert dialog.run_button.isEnabled()
-    assert not dialog.insert_button.isEnabled()
+    assert dialog.result() != QDialog.DialogCode.Accepted
 
 
 def test_a_failed_transcription_shows_the_traceback(own_window, monkeypatch) -> None:
@@ -2776,6 +2816,38 @@ def test_a_child_that_cannot_start_is_reported(own_window, monkeypatch) -> None:
     assert dialog.run_button.isEnabled()
 
 
+def test_an_empty_active_channel_takes_the_notes_without_asking(own_window, monkeypatch) -> None:
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: pytest.fail("must not ask"))
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+    parameter_writer(dialog, "target")("active")
+    assert dialog.target() == "active"
+    dialog.close()
+
+
+def test_the_active_channel_is_only_overwritten_on_an_explicit_yes(own_window, monkeypatch) -> None:
+    answers = iter([QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes])
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: next(answers))
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window, active_has_notes=True)
+
+    parameter_writer(dialog, "target")("active")
+    assert dialog.target() == "new"  # a declined overwrite falls back to a channel of its own
+
+    parameter_writer(dialog, "target")("active")
+    assert dialog.target() == "active"
+    dialog.close()
+
+
+def test_a_remembered_active_target_is_checked_before_it_overwrites(own_window, monkeypatch) -> None:
+    values = dict(transcription.default_parameters(), target="active")
+    monkeypatch.setattr(transcription, "load_parameters", lambda: dict(values))
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.StandardButton.No)
+
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window, active_has_notes=True)
+
+    assert dialog.target() == "new"
+    dialog.close()
+
+
 def test_a_transcription_lands_on_a_channel_of_its_own(own_window) -> None:
     before = len(own_window.view.channels)
 
@@ -2792,16 +2864,15 @@ def test_a_transcription_lands_on_a_channel_of_its_own(own_window) -> None:
     assert len(own_window.view.channels) == before
 
 
-def test_a_transcription_can_merge_or_replace(own_window) -> None:
-    own_window.view.add_note(60, 0.0, 1.0)
-    own_window.view.set_active_channel(own_window.view.channels[0].channel)
+def test_a_transcription_over_the_active_channel_replaces_only_that_channel(own_window) -> None:
+    own_window.view.set_channels((Channel(channel=0), Channel(channel=1)))
+    own_window.view.set_notes([(60, 0.0, 1.0, 0), (62, 0.0, 1.0, 1)])
+    own_window.view.set_active_channel(0)
 
     own_window._adopt_transcription([(1.0, 1.5, 64.0)], "active")
-    assert len(own_window.view.channels) == 1
-    assert len(own_window.view.notes()) == 2
 
-    own_window._adopt_transcription([(2.0, 2.5, 65.0)], "replace")
-    assert len(own_window.view.notes()) == 1
+    assert len(own_window.view.channels) == 2
+    assert sorted((note.pitch, note.channel) for note in own_window.view.notes()) == [(62, 1), (64, 0)]
 
 
 def test_saving_a_project_takes_the_notes_and_the_values_with_it(own_window, tmp_path) -> None:
@@ -3024,14 +3095,34 @@ def test_unsaved_notes_are_asked_about_once(own_window, monkeypatch) -> None:
     own_window.project_dirty = False
 
 
-def test_the_open_dialog_is_left_alone_when_the_notes_are_kept(own_window, monkeypatch) -> None:
+def test_the_chosen_file_is_left_alone_when_the_notes_are_kept(own_window, monkeypatch, tmp_path) -> None:
     own_window.view.set_notes([(64, 0.0, 1.0)])
     own_window.project_path = Path("song.nto")
+    other = tmp_path / "other.nto"
+    project.save(project.Project(values=store.project_values(store.Settings())), other)
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.StandardButton.Cancel)
-    asked: list[str] = []
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: asked.append("opened"))
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(other), ""))
+
     own_window._on_open()
-    assert asked == []
+
+    assert own_window.project_path == Path("song.nto")  # the prompt was answered no, so nothing opened
+    assert [note.pitch for note in own_window.view.notes()] == [64]
+    own_window.project_dirty = False
+
+
+def test_a_chosen_audio_file_is_left_alone_when_the_notes_are_kept(own_window, monkeypatch, tmp_path) -> None:
+    own_window.view.set_notes([(64, 0.0, 1.0)])
+    own_window.project_path = Path("song.nto")
+    audio = tmp_path / "other.wav"
+    audio.write_bytes(b"")
+    fake_loaders(monkeypatch)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.StandardButton.Cancel)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(audio), ""))
+
+    own_window._on_open()
+
+    assert own_window.project_path == Path("song.nto")  # the prompt was answered no, so nothing opened
+    assert own_window.audio_path is None  # and the sound was not analysed behind its back
     own_window.project_dirty = False
 
 
@@ -3070,24 +3161,24 @@ def test_a_project_beside_the_audio_is_opened_instead(own_window, monkeypatch, t
     )
     fake_loaders(monkeypatch)  # the project's own audio is analysed, not the file handed in
 
-    own_window.load_audio(str(audio))
+    assert own_window.open_audio(str(audio)) is True
 
     assert own_window.project_path == tmp_path / "song.nto"
     assert [note.pitch for note in own_window.view.notes()] == [62]
     assert own_window.audio_path == str(audio)
 
 
-def test_a_broken_project_beside_the_audio_does_not_hide_it(own_window, monkeypatch, tmp_path) -> None:
+def test_a_broken_project_beside_the_audio_stops_the_open(own_window, monkeypatch, tmp_path) -> None:
     audio = tmp_path / "song.wav"
     audio.write_bytes(b"")
     (tmp_path / "song.nto").write_text("{}")
     captured = fake_loaders(monkeypatch)
 
-    own_window.load_audio(str(audio))
+    assert own_window.open_audio(str(audio)) is False
 
     assert own_window.project_path is None
-    assert own_window.audio_path == str(audio)
-    assert captured  # the audio is loaded all the same
+    assert own_window.audio_path is None  # the project is the document, so a broken one opens nothing
+    assert not captured  # and the sound is not analysed behind its back
 
 
 def test_a_project_is_picked_up_from_the_command_line(qt_app, tmp_path) -> None:
@@ -3096,7 +3187,8 @@ def test_a_project_is_picked_up_from_the_command_line(qt_app, tmp_path) -> None:
         project.Project(values=store.project_values(store.Settings()), notes=(project.Note(1.0, 0.5, 62),)),
         path,
     )
-    window = MainWindow(audio=str(path))
+    window = MainWindow()
+    window.open_file(str(path))
     try:
         assert window.project_path == path
         assert [note.pitch for note in window.view.notes()] == [62]
@@ -3215,9 +3307,29 @@ def test_a_channel_change_refreshes_its_card_in_place(own_window) -> None:
     view.set_active_channel(1)
     assert panel._cards[0] is card  # and so does making another channel active
     assert card.property("active") is False
+    assert panel._cards[1].property("active") is True
 
     view.add_channel()
     assert panel._cards[0] is not card  # the set of channels changed, so the cards are rebuilt
+
+
+def test_the_active_channel_wears_the_selection_colour(own_window) -> None:
+    view = own_window.view
+    view.set_channels((Channel(channel=0), Channel(channel=1)))
+    panel = own_window.channel_panel
+    card = panel._cards[0]
+    card.resize(288, 62)  # an unshown window never lays the cards out on its own
+    highlight = panel.palette().color(QPalette.ColorRole.Highlight)
+
+    def edge_distance() -> int:
+        """How far the card's top edge is from the palette's selection colour, at its middle."""
+        colour = card.grab().toImage().pixelColor(card.width() // 2, 1)
+        return sum((getattr(colour, part)() - getattr(highlight, part)()) ** 2 for part in ("red", "green", "blue"))
+
+    view.set_active_channel(1)
+    plain = edge_distance()
+    view.set_active_channel(0)
+    assert edge_distance() < plain  # the outline is drawn only while the channel is active
 
 
 def test_the_auto_page_and_overtone_toggles_start_off_and_reach_the_settings(own_window) -> None:
@@ -3271,7 +3383,14 @@ def accept_import(monkeypatch, mode: str, mapping=()) -> None:
     monkeypatch.setattr(MidiImportDialog, "mapping", lambda self: list(mapping))
 
 
-def test_importing_a_midi_brings_in_its_notes_and_channels(own_window, tmp_path) -> None:
+@pytest.fixture
+def midi_window(own_window, tmp_path):
+    """A window with a project open: a MIDI is imported into one, never on its own."""
+    own_window.project_path = tmp_path / "song.nto"
+    return own_window
+
+
+def test_importing_a_midi_brings_in_its_notes_and_channels(midi_window, tmp_path) -> None:
     path = tmp_path / "song.mid"
     midi.write(
         path,
@@ -3279,44 +3398,52 @@ def test_importing_a_midi_brings_in_its_notes_and_channels(own_window, tmp_path)
         (project.Note(1.0, 0.5, 60, 0), project.Note(1.0, 0.5, 48, 1)),
         120.0,
     )
-    assert own_window.import_midi(path) is True
+    assert midi_window.import_midi(path) is True
 
-    assert [channel.channel for channel in own_window.view.channels] == [0, 1]
-    assert [channel.program for channel in own_window.view.channels] == [52, 0]
-    assert sorted((note.pitch, note.channel) for note in own_window.view.notes()) == [(48, 1), (60, 0)]
-    assert own_window.transport.bpm.value() == 120.0
-    assert own_window.project_dirty is True
-    assert own_window.project_path is None  # an import is a sketch until it is saved
-    assert "Imported 2 notes" in own_window.statusBar().currentMessage()
+    assert [channel.channel for channel in midi_window.view.channels] == [0, 1]
+    assert [channel.program for channel in midi_window.view.channels] == [52, 0]
+    assert sorted((note.pitch, note.channel) for note in midi_window.view.notes()) == [(48, 1), (60, 0)]
+    assert midi_window.transport.bpm.value() == 120.0
+    assert midi_window.project_dirty is True
+    assert "Imported 2 notes" in midi_window.statusBar().currentMessage()
 
 
-def test_importing_over_notes_asks_before_replacing(own_window, monkeypatch, tmp_path) -> None:
-    own_window.view.set_notes([(60, 0.0, 1.0)])
+def test_a_midi_without_a_project_is_refused(own_window, tmp_path) -> None:
+    path = tmp_path / "song.mid"
+    midi.write(path, (Channel(channel=0),), (project.Note(1.0, 0.5, 60, 0),), 120.0)
+
+    assert own_window.import_midi(path) is False
+    assert own_window.view.notes() == []
+    assert "Open a song first" in own_window.statusBar().currentMessage()
+
+
+def test_importing_over_notes_asks_before_replacing(midi_window, monkeypatch, tmp_path) -> None:
+    midi_window.view.set_notes([(60, 0.0, 1.0)])
     path = tmp_path / "song.mid"
     midi.write(path, (Channel(channel=0),), (project.Note(1.0, 0.5, 62, 0),), 120.0)
     monkeypatch.setattr(MidiImportDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
 
-    assert own_window.import_midi(path) is False
-    assert [note.pitch for note in own_window.view.notes()] == [60]  # nothing was touched
+    assert midi_window.import_midi(path) is False
+    assert [note.pitch for note in midi_window.view.notes()] == [60]  # nothing was touched
 
 
-def test_replacing_is_what_the_dialog_can_choose(own_window, monkeypatch, tmp_path) -> None:
-    own_window.view.set_channels((Channel(channel=0, name="Old"),))
-    own_window.view.set_notes([(60, 0.0, 1.0, 0)])
+def test_replacing_is_what_the_dialog_can_choose(midi_window, monkeypatch, tmp_path) -> None:
+    midi_window.view.set_channels((Channel(channel=0, name="Old"),))
+    midi_window.view.set_notes([(60, 0.0, 1.0, 0)])
     path = tmp_path / "song.mid"
     midi.write(path, (Channel(channel=0),), (project.Note(1.0, 0.5, 62, 0),), 120.0)
     accept_import(monkeypatch, "replace")
 
-    assert own_window.import_midi(path) is True
+    assert midi_window.import_midi(path) is True
     # a replacement is the file's channels whole: a name the project gave the old one does not stay
-    assert [channel.channel for channel in own_window.view.channels] == [0]
-    assert [channel.name for channel in own_window.view.channels] == [""]
-    assert [note.pitch for note in own_window.view.notes()] == [62]
+    assert [channel.channel for channel in midi_window.view.channels] == [0]
+    assert [channel.name for channel in midi_window.view.channels] == [""]
+    assert [note.pitch for note in midi_window.view.notes()] == [62]
 
 
-def test_merging_adds_the_file_channels_to_the_roll(own_window, monkeypatch, tmp_path) -> None:
-    own_window.view.set_channels((Channel(channel=0, name="Voice"),))
-    own_window.view.set_notes([(60, 0.0, 1.0, 0)])
+def test_merging_adds_the_file_channels_to_the_roll(midi_window, monkeypatch, tmp_path) -> None:
+    midi_window.view.set_channels((Channel(channel=0, name="Voice"),))
+    midi_window.view.set_notes([(60, 0.0, 1.0, 0)])
     path = tmp_path / "song.mid"
     midi.write(
         path,
@@ -3326,22 +3453,22 @@ def test_merging_adds_the_file_channels_to_the_roll(own_window, monkeypatch, tmp
     )
     accept_import(monkeypatch, "merge", [0, -1])
 
-    assert own_window.import_midi(path) is True
-    assert [channel.channel for channel in own_window.view.channels] == [0, 2]
-    assert (own_window.view.channels[1].program, own_window.view.channels[1].volume) == (33, 90)
-    assert sorted((note.pitch, note.channel) for note in own_window.view.notes()) == [(40, 2), (60, 0), (64, 0)]
+    assert midi_window.import_midi(path) is True
+    assert [channel.channel for channel in midi_window.view.channels] == [0, 2]
+    assert (midi_window.view.channels[1].program, midi_window.view.channels[1].volume) == (33, 90)
+    assert sorted((note.pitch, note.channel) for note in midi_window.view.notes()) == [(40, 2), (60, 0), (64, 0)]
     # the file's 140 BPM does not touch the grid: a second stays a second on the audio (120 BPM here)
-    assert sorted((note.pitch, round(note.start, 3)) for note in own_window.view.notes()) == [
+    assert sorted((note.pitch, round(note.start, 3)) for note in midi_window.view.notes()) == [
         (40, 2.0),
         (60, 0.0),
         (64, 2.0),
     ]
-    assert own_window.transport.bpm.value() == 120.0  # the grid stays on the audio, not on the file
+    assert midi_window.transport.bpm.value() == 120.0  # the grid stays on the audio, not on the file
 
 
-def test_merging_onto_an_empty_channel_takes_the_file_channel_over(own_window, monkeypatch, tmp_path) -> None:
-    own_window.view.set_channels((Channel(channel=5, name="Placeholder"), Channel(channel=0, name="Used")))
-    own_window.view.set_notes([(60, 0.0, 1.0, 0)])  # channel 5 carries nothing
+def test_merging_onto_an_empty_channel_takes_the_file_channel_over(midi_window, monkeypatch, tmp_path) -> None:
+    midi_window.view.set_channels((Channel(channel=5, name="Placeholder"), Channel(channel=0, name="Used")))
+    midi_window.view.set_notes([(60, 0.0, 1.0, 0)])  # channel 5 carries nothing
     path = tmp_path / "song.mid"
     midi.write(
         path,
@@ -3351,40 +3478,40 @@ def test_merging_onto_an_empty_channel_takes_the_file_channel_over(own_window, m
     )
     accept_import(monkeypatch, "merge", [5])
 
-    assert own_window.import_midi(path) is True
+    assert midi_window.import_midi(path) is True
     # an empty channel is a free place: the file's channel takes it over, the way a brand new one would
-    assert [channel.channel for channel in own_window.view.channels] == [0, 5]
-    landed = next(channel for channel in own_window.view.channels if channel.channel == 5)
+    assert [channel.channel for channel in midi_window.view.channels] == [0, 5]
+    landed = next(channel for channel in midi_window.view.channels if channel.channel == 5)
     assert (landed.program, landed.volume) == (81, 90)
     assert landed.name == "Placeholder"  # the name belongs to the project, and it stays
-    assert sorted((note.pitch, note.channel) for note in own_window.view.notes()) == [(60, 0), (62, 5)]
+    assert sorted((note.pitch, note.channel) for note in midi_window.view.notes()) == [(60, 0), (62, 5)]
 
 
-def test_a_new_channel_keeps_the_number_the_file_played_on(own_window, monkeypatch, tmp_path) -> None:
-    own_window.view.set_channels((Channel(channel=0, name="Voice"),))
-    own_window.view.set_notes([(60, 0.0, 1.0, 0)])
+def test_a_new_channel_keeps_the_number_the_file_played_on(midi_window, monkeypatch, tmp_path) -> None:
+    midi_window.view.set_channels((Channel(channel=0, name="Voice"),))
+    midi_window.view.set_notes([(60, 0.0, 1.0, 0)])
     path = tmp_path / "song.mid"
     midi.write(path, (Channel(channel=6),), (project.Note(1.0, 0.5, 62, 6),), 120.0)
     accept_import(monkeypatch, "merge", [-1])
 
-    assert own_window.import_midi(path) is True
+    assert midi_window.import_midi(path) is True
     # nothing else plays on channel 6, so the file's new channel keeps that number
-    assert [channel.channel for channel in own_window.view.channels] == [0, 6]
-    assert own_window.view.channels[1].name == ""  # a MIDI channel carries no name
-    assert sorted((note.pitch, note.channel) for note in own_window.view.notes()) == [(60, 0), (62, 6)]
+    assert [channel.channel for channel in midi_window.view.channels] == [0, 6]
+    assert midi_window.view.channels[1].name == ""  # a MIDI channel carries no name
+    assert sorted((note.pitch, note.channel) for note in midi_window.view.notes()) == [(60, 0), (62, 6)]
 
 
-def test_a_new_channel_takes_a_free_number_when_the_files_own_is_taken(own_window, monkeypatch, tmp_path) -> None:
-    own_window.view.set_channels((Channel(channel=0, name="Voice"),))
-    own_window.view.set_notes([(60, 0.0, 1.0, 0)])
+def test_a_new_channel_takes_a_free_number_when_the_files_own_is_taken(midi_window, monkeypatch, tmp_path) -> None:
+    midi_window.view.set_channels((Channel(channel=0, name="Voice"),))
+    midi_window.view.set_notes([(60, 0.0, 1.0, 0)])
     path = tmp_path / "song.mid"
     midi.write(path, (Channel(channel=0),), (project.Note(1.0, 0.5, 62, 0),), 120.0)
     accept_import(monkeypatch, "merge", [-1])
 
-    assert own_window.import_midi(path) is True
+    assert midi_window.import_midi(path) is True
     # channel 0 already carries the roll's notes, so the file's new channel takes the lowest free one
-    assert [channel.channel for channel in own_window.view.channels] == [0, 1]
-    assert sorted((note.pitch, note.channel) for note in own_window.view.notes()) == [(60, 0), (62, 1)]
+    assert [channel.channel for channel in midi_window.view.channels] == [0, 1]
+    assert sorted((note.pitch, note.channel) for note in midi_window.view.notes()) == [(60, 0), (62, 1)]
 
 
 def test_the_import_dialog_prefills_the_mapping_by_position() -> None:
@@ -3416,24 +3543,24 @@ def test_the_import_dialog_keeps_the_roll_within_sixteen_channels() -> None:
     dialog.close()
 
 
-def test_a_wavetone_file_loses_its_lead_in_only_when_the_setting_says_so(own_window, monkeypatch, tmp_path) -> None:
+def test_a_wavetone_file_loses_its_lead_in_only_when_the_setting_says_so(midi_window, monkeypatch, tmp_path) -> None:
     path = tmp_path / "wavetone.mid"
     midi.write(path, (Channel(channel=0),), (project.Note(1.0, 0.5, 60, 0),), 120.0, wavetone=True)
 
-    own_window.import_midi(path)
-    assert [round(note.start, 3) for note in own_window.view.notes()] == [2.0]
+    midi_window.import_midi(path)
+    assert [round(note.start, 3) for note in midi_window.view.notes()] == [2.0]
 
-    store.set_value(own_window.settings, "midi", "wavetone", False)
+    store.set_value(midi_window.settings, "midi", "wavetone", False)
     accept_import(monkeypatch, "replace")  # the roll holds a note now, so the dialog would stand in the way
-    own_window.import_midi(path)
-    assert [round(note.start, 3) for note in own_window.view.notes()] == [6.0]
+    midi_window.import_midi(path)
+    assert [round(note.start, 3) for note in midi_window.view.notes()] == [6.0]
 
 
-def test_a_midi_that_cannot_be_read_says_so(own_window, tmp_path) -> None:
+def test_a_midi_that_cannot_be_read_says_so(midi_window, tmp_path) -> None:
     broken = tmp_path / "broken.mid"
     broken.write_bytes(b"not a MIDI file at all")
-    assert own_window.import_midi(broken) is False
-    assert "could not be read" in own_window.statusBar().currentMessage()
+    assert midi_window.import_midi(broken) is False
+    assert "could not be read" in midi_window.statusBar().currentMessage()
 
 
 def test_exporting_writes_the_roll_out_as_midi(own_window, tmp_path) -> None:
@@ -3459,13 +3586,13 @@ def test_a_hidden_channel_is_exported_like_any_other(own_window, tmp_path) -> No
     assert [note.pitch for note in midi.read(path).notes] == [60, 62]
 
 
-def test_opening_a_midi_file_imports_it(own_window, monkeypatch, tmp_path) -> None:
+def test_opening_a_midi_file_imports_it(midi_window, monkeypatch, tmp_path) -> None:
     path = tmp_path / "song.mid"
     midi.write(path, (Channel(channel=0),), (project.Note(0.5, 0.5, 60, 0),), 120.0)
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(path), ""))
 
-    own_window._on_open()
-    assert [note.pitch for note in own_window.view.notes()] == [60]
+    midi_window._on_open()
+    assert [note.pitch for note in midi_window.view.notes()] == [60]
 
 
 def test_the_open_dialog_shows_every_file_type_by_default(own_window, monkeypatch) -> None:
@@ -3479,6 +3606,22 @@ def test_the_open_dialog_shows_every_file_type_by_default(own_window, monkeypatc
     own_window._on_open()
 
     assert shown[0].split(";;")[0] == "All files (*)"
+    # a MIDI is a project's, so without one the chooser does not offer it
+    assert "MIDI" not in shown[0]
+
+
+def test_the_open_dialog_offers_a_midi_once_a_project_is_open(midi_window, monkeypatch) -> None:
+    shown: list[str] = []
+
+    def fake(_parent, _caption, _directory, filters, *_args, **_kwargs):
+        shown.append(filters)
+        return ("", "")
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", fake)
+
+    midi_window._on_open()
+
+    assert "MIDI" in shown[0]
 
 
 def test_opening_an_audio_file_analyses_it(own_window, monkeypatch, tmp_path) -> None:
@@ -3486,14 +3629,15 @@ def test_opening_an_audio_file_analyses_it(own_window, monkeypatch, tmp_path) ->
     path.write_bytes(b"")
     fake_loaders(monkeypatch)
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(path), ""))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "song.nto"), ""))
 
     own_window._on_open()
 
     assert own_window.audio_path == str(path)
-    assert own_window.project_path is None
+    assert own_window.project_path == tmp_path / "song.nto"  # a sound is a project, and it has a file
 
 
-def test_the_command_line_takes_audio_midi_and_projects_alike(qt_app, monkeypatch, tmp_path) -> None:
+def test_the_command_line_takes_audio_and_projects_but_not_a_midi_alone(qt_app, monkeypatch, tmp_path) -> None:
     fake_loaders(monkeypatch)
     audio = tmp_path / "clip.flac"
     audio.write_bytes(b"")
@@ -3504,11 +3648,17 @@ def test_the_command_line_takes_audio_midi_and_projects_alike(qt_app, monkeypatc
         project.Project(values=store.project_values(store.Settings()), notes=(project.Note(1.0, 0.5, 62),)),
         project_path,
     )
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "clip.nto"), ""))
 
-    opened = [MainWindow(audio=str(audio)), MainWindow(audio=str(midi_path)), MainWindow(audio=str(project_path))]
+    opened = [MainWindow(), MainWindow(), MainWindow()]
+    for window, path in zip(opened, (audio, midi_path, project_path), strict=True):
+        window.open_file(str(path))
     try:
         assert opened[0].audio_path == str(audio)
-        assert [note.pitch for note in opened[1].view.notes()] == [60]
+        assert opened[0].project_path == tmp_path / "clip.nto"  # opening a sound names its project
+        # a MIDI is part of a project, so it is not a document the command line can open on its own
+        assert opened[1].project_path is None
+        assert [note.pitch for note in opened[1].view.notes()] == []
         assert opened[2].project_path == project_path
         assert [note.pitch for note in opened[2].view.notes()] == [62]
     finally:

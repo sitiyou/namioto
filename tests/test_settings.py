@@ -212,10 +212,6 @@ def test_every_spec_field_is_a_field_of_its_section() -> None:
 def test_only_the_settings_without_a_control_keep_a_row() -> None:
     shown = {(section.name, item.name) for section in store.SECTIONS for item in section.fields if not item.hidden}
     assert shown == {
-        ("analysis", "channels"),
-        ("analysis", "t_num"),
-        ("analysis", "fft_points"),
-        ("analysis", "a4"),
         ("general", "auto_save"),
         ("general", "language"),
         ("general", "style"),
@@ -227,3 +223,4 @@ def test_only_the_settings_without_a_control_keep_a_row() -> None:
     assert ("editor", "zoom_x") not in shown  # the wheel has it, so the window does not
     assert ("playback", "latency_ms") not in shown
     assert ("session", "geometry") not in shown  # the window state is stored, never typed in
+    assert ("analysis", "channels") not in shown  # a project's analysis, not the program's

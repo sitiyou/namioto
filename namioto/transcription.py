@@ -26,9 +26,9 @@ GAME_PROVIDERS = ("cpu", "cuda")
 # the codes GAME's own config.json maps for the segmenter; 0, and so the empty code, is universal
 LANGUAGE_CODES = ("", "en", "ja", "yue", "zh")
 LANGUAGE_LABELS = ("Universal", "English", "Japanese", "Cantonese", "Mandarin")
-TARGETS = ("new", "active", "replace")
+TARGETS = ("new", "active")
 PARAMETER_FILE = "transcription.json"
-STORE_VERSION = 1
+STORE_VERSION = 2
 
 PARAMETERS: tuple[Field, ...] = (
     Field(
@@ -71,9 +71,9 @@ PARAMETERS: tuple[Field, ...] = (
         "choice",
         "new",
         "Target",
-        "Where the notes land: a channel of their own, the active channel, or a fresh start",
+        "Where the notes land: a channel of their own, or the active channel, over what it holds",
         choices=TARGETS,
-        labels=("New channel", "Active channel", "Replace all notes"),
+        labels=("New channel", "Active channel"),
     ),
     Field("batch_size", "int", 4, "Batch", "Chunks per inference batch", low=1, high=32, advanced=True),
     Field(
@@ -222,12 +222,18 @@ def _notes(run: dict) -> list[tuple[float, float, float]] | None:
 
 
 def load_runs(path: Any) -> dict[str, dict]:
-    """Every run saved for one audio file, keyed by run key; an unreadable file means no runs."""
+    """Every run saved for one audio file, keyed by run key; an unreadable file means no runs.
+
+    A file another version wrote is no runs either: what it holds came out of a pipeline that has
+    since changed, and re-running the model is cheaper than trusting notes it would not produce.
+    """
     try:
         data = json.loads(_results_path(path).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return {}
-    runs = data.get("runs") if isinstance(data, dict) else None
+    if not isinstance(data, dict) or data.get("version") != STORE_VERSION:
+        return {}
+    runs = data.get("runs")
     if not isinstance(runs, dict):
         return {}
     return {key: run for key, run in runs.items() if isinstance(run, dict) and _notes(run) is not None}

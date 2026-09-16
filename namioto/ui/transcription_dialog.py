@@ -53,15 +53,17 @@ def start_job(audio: str, parameters: dict, tempo: float):
 class TranscriptionDialog(QDialog):
     """GAME's parameters and the run, over one audio file.
 
-    `accept()` means the caller takes `notes()` and puts them where `target()` says.
+    `accept()` means the caller takes `notes()` and puts them where `target()` says; a finished run
+    accepts on its own, so the notes land without a second click.
     """
 
-    def __init__(self, audio: str, tempo: float, parent=None):
+    def __init__(self, audio: str, tempo: float, parent=None, active_has_notes: bool = False):
         super().__init__(parent)
         self.setWindowTitle(tr("Transcribe the singing voice with GAME"))
         self.resize(600, 640)
         self.audio = str(audio)
         self.tempo = float(tempo)
+        self.active_has_notes = bool(active_has_notes)
         self._parameters = transcription.load_parameters()
         self._fields: list[tuple[Field, Callable[[], object], Callable[[object], None]]] = []
         self._process = None
@@ -83,9 +85,6 @@ class TranscriptionDialog(QDialog):
         self.log.setFixedHeight(LOG_HEIGHT)
         self.run_button = QPushButton(tr("Transcribe"))
         self.run_button.clicked.connect(self._start)
-        self.insert_button = QPushButton(tr("Insert"))
-        self.insert_button.setEnabled(False)
-        self.insert_button.clicked.connect(self.accept)
         self.close_button = QPushButton(tr("Close"))
         self.close_button.clicked.connect(self.reject)
 
@@ -93,7 +92,6 @@ class TranscriptionDialog(QDialog):
         buttons.addWidget(self.progress, 1)
         buttons.addWidget(self.progress_label)
         buttons.addWidget(self.run_button)
-        buttons.addWidget(self.insert_button)
         buttons.addWidget(self.close_button)
 
         layout = QVBoxLayout(self)
@@ -131,11 +129,27 @@ class TranscriptionDialog(QDialog):
                     editor.setToolTip(tr(item.tooltip))
                 form.addRow(label, editor)
                 self._fields.append((item, read, write))
+                if item.name == "target":
+                    self._target_read, self._target_write = read, write
+                    editor.currentIndexChanged.connect(self._target_changed)
             if advanced:
                 layout.addWidget(advanced_section(form))
             layout.addLayout(form)
         layout.addStretch(1)
+        self._target_changed()
         return widget
+
+    def _target_changed(self) -> None:
+        """A channel that already carries notes is only overwritten on an explicit yes."""
+        if self._target_read() != "active" or not self.active_has_notes:
+            return
+        answer = QMessageBox.question(
+            self,
+            tr("Transcribe with GAME"),
+            tr("The active channel already has notes. Replace them with the transcription?"),
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            self._target_write("new")
 
     def _start(self) -> None:
         self._parameters = self.parameters()
@@ -236,8 +250,8 @@ class TranscriptionDialog(QDialog):
         self.progress_label.setText(tr("{count} notes", count=len(self._notes)))
         self._log_line(tr("{count} notes", count=len(self._notes)))
         self._set_running(False)
-        self.insert_button.setEnabled(bool(self._notes))
-        self.insert_button.setDefault(True)
+        if self._notes:
+            self.accept()
 
     def _fail(self, message: str) -> None:
         self._settled = True
@@ -260,7 +274,6 @@ class TranscriptionDialog(QDialog):
         self.form.setEnabled(not running)
         self.run_button.setEnabled(not running)
         self.run_button.setText(tr("Transcribing …") if running else tr("Transcribe"))
-        self.insert_button.setEnabled(False if running else bool(self._notes))
 
     def _log_line(self, text: str) -> None:
         self.log.appendPlainText(text)

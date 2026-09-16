@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QPainter, QPalette
+from PyQt6.QtGui import QPainter, QPalette, QPen
 from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -22,12 +22,13 @@ from namioto import settings as store
 from namioto.channels import Channel, free_channel
 from namioto.i18n import tr
 from namioto.ui import icons
-from namioto.ui.controls import FIELD_HEIGHT, icon_button
+from namioto.ui.controls import CORNER_RADIUS, FIELD_HEIGHT, icon_button
 from namioto.ui.roll import PianoRollView
 
 # wide enough that the longest General MIDI name fits the combo whole, scrollbar included
 CARD_WIDTH = 300
 SWATCH_WIDTH = 5
+ACTIVE_BORDER = 2
 
 
 class _NameLabel(QLabel):
@@ -50,7 +51,11 @@ class _NameLabel(QLabel):
 
 
 class _Card(QWidget):
-    """One channel: colour swatch, name and instrument, the lock/eye/mute buttons."""
+    """One channel: colour swatch, name and instrument, the lock/eye/mute buttons.
+
+    The active channel — where new notes land, and the only one the roll's frame selects — wears the
+    palette's selection colour as an outline, so which one it is can be read off the sidebar.
+    """
 
     def __init__(self, panel: ChannelPanel, channel: Channel):
         super().__init__()
@@ -118,8 +123,18 @@ class _Card(QWidget):
 
     def set_active(self, active: bool) -> None:
         self.setProperty("active", active)
-        self.style().unpolish(self)
-        self.style().polish(self)
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        if not self.property("active"):
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QPen(self.palette().color(QPalette.ColorRole.Highlight), ACTIVE_BORDER))
+        inset = ACTIVE_BORDER // 2
+        painter.drawRoundedRect(
+            self.rect().adjusted(inset, inset, -inset - 1, -inset - 1), CORNER_RADIUS, CORNER_RADIUS
+        )
 
     def mousePressEvent(self, event) -> None:
         if event.button() == Qt.MouseButton.LeftButton:

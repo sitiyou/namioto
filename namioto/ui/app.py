@@ -160,7 +160,7 @@ class SongLoader(LoadingThread):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, audio: str | None = None, settings=None, overrides: dict | None = None):
+    def __init__(self, settings=None, overrides: dict | None = None):
         super().__init__()
         self.setWindowTitle("Namioto")
         self.resize(1200, 720)
@@ -315,10 +315,7 @@ class MainWindow(QMainWindow):
         self.cursor_note = QLabel()
         self.statusBar().addPermanentWidget(self.cursor_note)
         self._restore_session()
-        if audio is None:
-            self._show_hint()
-        else:
-            self.open_file(audio)
+        self._show_hint()
         self._update_status()
         self.view.setFocus()  # the roll holds the keyboard, so the bar opens without a focus ring on its first button
 
@@ -348,16 +345,10 @@ class MainWindow(QMainWindow):
     def _open_settings(self) -> None:
         dialog = SettingsDialog(
             self.settings,
-            can_reanalyse=self.audio_path is not None,
             parent=self,
         )
         dialog.applied.connect(self.settings_store.apply)
-        dialog.reanalyse_requested.connect(self._reanalyse)
         dialog.exec()
-
-    def _reanalyse(self) -> None:
-        if self.audio_path is not None:
-            self.load_audio(self.audio_path)
 
     def _make_bindings(self) -> tuple[_Binding, ...]:
         """Every bar value the settings hold, one line each: read, write, the signal, and its effect."""
@@ -572,6 +563,11 @@ class MainWindow(QMainWindow):
         session.center_x = round(centre.x(), 1)
         session.center_y = round(centre.y(), 1)
 
+    def _capture_app_defaults(self) -> None:
+        """What the program's own file keeps: a document's values must not become the defaults."""
+        if self._app_defaults is None:
+            self._app_defaults = store.clone(self.settings)
+
     def _file_settings(self):
         """What the app's file keeps: a document's values never become the program's defaults, and the
         ones that belong to a song - the tempo, the offset between sound and picture - keep the
@@ -639,13 +635,14 @@ class MainWindow(QMainWindow):
         return True
 
     def _on_open(self) -> None:
-        if not self._confirm_discard():
-            return
+        filters = [i18n.tr("All files (*)"), _project_filter(), _audio_filter()]
+        if self.project_path is not None:  # a MIDI is a project's, so it is only worth offering inside one
+            filters.append(_midi_filter())
         chosen, _filter = QFileDialog.getOpenFileName(
             self,
             i18n.tr("Open"),
             self._start_directory(),
-            ";;".join((i18n.tr("All files (*)"), _project_filter(), _audio_filter(), _midi_filter())),
+            ";;".join(filters),
         )
         if chosen:
             self.open_file(chosen)
@@ -654,14 +651,43 @@ class MainWindow(QMainWindow):
         """Open a file by what it is - a project, a MIDI file to import, or audio to analyse.
 
         The command line and the Open dialog both come through here, so a file behaves the same
-        whichever way it arrives.
+        whichever way it arrives. A project and audio are a document each, so switching to one asks
+        about unsaved work first; a MIDI is only a part that goes into the project already open.
         """
         if project.looks_like_project(path):
-            return self.load_project(path)
+            return self._confirm_discard() and self.load_project(path)
         if midi.looks_like_midi(path):
             return self.import_midi(path)
-        self.load_audio(str(path))
-        return True
+        return self._confirm_discard() and self.open_audio(str(path))
+
+    def open_audio(self, path: str) -> bool:
+        """Open audio as part of a project: the sibling project if there is one, else a new one.
+
+        The project has to be named before the sound is analysed, because the notes and the
+        analysis all belong to that file; a cancelled chooser leaves the audio untouched.
+        """
+        beside = Path(path).with_suffix(project.SUFFIX)
+        if beside.exists():
+            return self.load_project(beside)
+        target = self._new_project_path(path)
+        if target is None:
+            return False
+        self._capture_app_defaults()
+        self.load_audio(path)
+        return self.save_project(target)
+
+    def _new_project_path(self, audio: str) -> Path | None:
+        """Where a new project for an audio file is saved: its own name, in the audio's folder."""
+        chosen, _filter = QFileDialog.getSaveFileName(
+            self,
+            i18n.tr("Save project"),
+            str(Path(audio).with_suffix(project.SUFFIX)),
+            _project_filter(),
+        )
+        if not chosen:
+            return None
+        target = Path(chosen)
+        return target if project.looks_like_project(target) else target.with_name(target.name + project.SUFFIX)
 
     def _on_save(self) -> bool:
         if self.project_path is None:
@@ -710,8 +736,7 @@ class MainWindow(QMainWindow):
             return False
         self._loading = True
         try:
-            if self._app_defaults is None:
-                self._app_defaults = store.clone(self.settings)
+            self._capture_app_defaults()
             store.apply_project_values(self.settings, opened.values)
             self.settings_store.apply(self.settings, save=False)
             self.project_path = Path(path)
@@ -773,6 +798,11 @@ class MainWindow(QMainWindow):
         against the sound it came from, so nothing here is cleared away but the notes - and when
         there are notes to lose, the dialog says so and offers to merge into the channels instead.
         """
+        if self.project_path is None:
+            self.statusBar().showMessage(
+                i18n.tr("Open a song first: a MIDI file is imported into a project, not on its own")
+            )
+            return False
         try:
             imported = midi.read(path, wavetone=self.settings.midi.wavetone)
         except (OSError, EOFError, ValueError) as error:
@@ -875,12 +905,14 @@ class MainWindow(QMainWindow):
         """Ask GAME for the singing voice's notes, over the audio the session is already listening to."""
         if self.audio_path is None:
             return
-        dialog = TranscriptionDialog(self.audio_path, self.transport.bpm.value(), self)
+        active = self.view.active_channel
+        occupied = any(note.channel == active for note in self.view.notes())
+        dialog = TranscriptionDialog(self.audio_path, self.transport.bpm.value(), self, active_has_notes=occupied)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._adopt_transcription(dialog.notes(), dialog.target())
 
     def _adopt_transcription(self, notes, target: str) -> None:
-        """Put a run's notes in the roll, on a channel of their own unless the dialog says otherwise."""
+        """Put a run's notes on a channel of their own, or over the active channel's own."""
         if not notes:
             self.statusBar().showMessage(i18n.tr("GAME found no notes in the loaded audio"))
             return
@@ -890,11 +922,7 @@ class MainWindow(QMainWindow):
         ]
         channels = list(self.view.channels)
         number = self.view.active_channel
-        kept = (
-            []
-            if target == "replace"
-            else [(note.pitch, note.start, note.duration, note.channel) for note in self.view.notes()]
-        )
+        kept = [(note.pitch, note.start, note.duration, note.channel) for note in self.view.notes()]
         if target == "new":
             free = free_channel(channels)
             if free is None:
@@ -904,6 +932,8 @@ class MainWindow(QMainWindow):
             else:
                 number = free
                 channels.append(Channel(name="GAME", channel=number, program=53))
+        else:
+            kept = [note for note in kept if note[3] != number]
         self.view.replace(channels, kept + [(*note, number) for note in arriving], "Transcribe with GAME")
         self.statusBar().showMessage(
             i18n.tr("GAME found {notes} notes on channel {channel}", notes=len(arriving), channel=number + 1)
@@ -960,9 +990,6 @@ class MainWindow(QMainWindow):
 
     def load_audio(self, path: str) -> None:
         if not self._loading and str(path) != self.audio_path:
-            beside = Path(path).with_suffix(project.SUFFIX)
-            if self.project_path is None and beside.exists() and self.load_project(beside):
-                return
             # another song brings its own tempo and offset; a re-analysis of the same one does not
             self.transport.bpm.setValue(store.FIELD_SPECS[("tempo", "bpm")].default)
             self.transport.latency.setValue(store.FIELD_SPECS[("playback", "latency_ms")].default)
@@ -1229,9 +1256,14 @@ def main() -> int:
     multiprocessing.freeze_support()  # a frozen build has to hand the child back the same bootstrap
     args = parse_args()
     app = QApplication(sys.argv)
-    window = MainWindow(audio=args.audio, overrides={"channels": args.channels, "t_num": args.t_num})
+    window = MainWindow(overrides={"channels": args.channels, "t_num": args.t_num})
     window.apply_overrides(gain=args.gain, contrast=args.contrast)
     window.show()
+    if args.audio is not None:
+        # a file waits for the window. Naming a project opens the platform's file chooser, and on
+        # Linux that is the xdg-desktop-portal one, which is only ready once the event loop has run -
+        # asking before that falls back to Qt's own dialog.
+        QTimer.singleShot(0, lambda: window.open_file(args.audio))
     return app.exec()
 
 

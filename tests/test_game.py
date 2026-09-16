@@ -65,9 +65,16 @@ def test_merge_notes_sorts_and_drops_the_overlaps() -> None:
     ]
 
 
-def test_quantize_notes_lands_on_the_grid_and_keeps_a_cell() -> None:
+def test_quantize_notes_lands_on_the_grid_and_drops_a_note_with_no_cell() -> None:
     notes = [(0.51, 0.98, 60.0), (1.02, 1.03, 62.0)]
-    assert quantize_notes(notes, 0.5) == [(0.5, 1.0, 60.0), (1.0, 1.5, 62.0)]
+    assert quantize_notes(notes, 0.5) == [(0.5, 1.0, 60.0)]
+
+
+def test_quantize_notes_drops_a_note_the_onset_push_leaves_without_a_cell() -> None:
+    # GAME's notes may overlap: the second here starts before the first ends, and the grid rounds
+    # its end behind where the onset is pushed to, so there is no cell left for it
+    notes = [(0.0, 0.6, 60.0), (0.2, 0.4, 62.0)]
+    assert quantize_notes(notes, 0.5) == [(0.0, 0.5, 60.0)]
 
 
 def test_the_grid_phase_is_the_one_that_fits_the_onsets() -> None:

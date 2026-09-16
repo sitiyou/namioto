@@ -962,6 +962,8 @@ class PianoRollView(QGraphicsView):
         self._anchor = scene_pos
         if note is not None and self._locked(note.channel):
             return
+        if note is not None:
+            self.set_active_channel(note.channel)  # picking a note files the pen under its channel
 
         if note is None:
             if ctrl or self.tool is Tool.SELECT:
@@ -1003,6 +1005,10 @@ class PianoRollView(QGraphicsView):
         elif not note.isSelected():
             self._clear_selection()
             note.setSelected(True)
+        else:
+            for item in self.selected_notes():
+                if item.channel != note.channel:
+                    item.setSelected(False)
         if not note.isSelected():
             return
 

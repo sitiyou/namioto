@@ -17,8 +17,7 @@ with them.
 ```bash
 uv run namioto                            # the editor
 uv run namioto song.mp3                   # the editor with the audio analysed into a spectrum
-uv run namioto song.nto                   # open a project
-uv run namioto song.mid                   # open a MIDI file (or import one over an audio file)
+uv run namioto song.nto                   # open a project (the notes and the audio together)
 uv run namioto song.mp3 --channels both --gain 300   # analysis options
 uv run namioto-tempo song.mp3             # estimate the tempo of a file (beat tracking + fit)
 uv run namioto-tempo song.mp3 --local     # per-window estimates, 12 s wide, 6 s apart
@@ -28,6 +27,7 @@ uv run namioto-spectrum song.mp3          # analyse into 84 note bands (C1-B7)
 uv run namioto-spectrum song.mp3 --bench  # plus per-stage timings
 uv run namioto-spectrum song.mp3 --threshold 1.2   # plus auto-filled note spans
 uv run namioto-game song.mp3 --model DIR  # extract the notes of a singing voice (GAME's models)
+uv run namioto-align vocal.wav lines.json # time known lyrics against a separated vocal
 uv run pytest                             # tests
 uv run scripts/bench_spectrum.py          # spectrum benchmark
 ```
@@ -56,6 +56,11 @@ JSON file that keeps the notes together with what they were drawn over and the v
 that piece of work: the audio file, the tempo, the analysis parameters, the spectrum display, the snap
 grid and the view. It is a few kilobytes, so it is diffable, searchable and editable by hand.
 
+Opening an audio file is how a project starts: namioto asks where its `.nto` goes, defaulting to the
+audio's own name beside it, and writes it there. A MIDI file is imported into the project that is
+open, never opened on its own, and switching to another project or another audio file asks about
+unsaved notes first.
+
 Notes are kept in seconds, so a different tempo moves the grid and never the notes, and the file
 lists them in time order. The audio is recorded as a path - relative to the project when it sits
 beside it - and never copied into the project. A project whose audio is missing still opens, since
@@ -71,9 +76,10 @@ overwrite the program's own defaults, which are what the next file starts from.
 
 ## MIDI files
 
-`Open` (`Ctrl+O`) takes audio files, `.mid`/`.midi` files and `.nto` projects alike — the suffix
-picks whether the file is analysed behind the roll, imported as notes, or opened as a project — and
-`Export MIDI` writes the roll out for a DAW, a score program or a synth, saving the project
+`Open` (`Ctrl+O`) takes audio files and `.nto` projects — the suffix picks whether the file is
+analysed behind the roll or opened as a project — and, once a project is open, `.mid`/`.midi` files
+to import into it: a MIDI is a part of a project and is never opened on its own. `Export MIDI`
+writes the roll out for a DAW, a score program or a synth, saving the project
 separately. A MIDI is read by channel: every MIDI channel with notes in it becomes one channel here,
 carrying its instrument and channel volume, and one track chunk holding several channels is read as
 several. A channel carries no name -
@@ -185,7 +191,7 @@ The window has three control bars, each split into captioned blocks of related c
 | --- | --- |
 | Transport | **Project** (open, save, export MIDI), **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout, and the four display switches: auto page turn, overtone highlight, the channel sidebar, and the time division - the metronome icon checked means the time axis follows the beats of the tempo map, unchecked the seconds), **Speed** (0.10x-2.00x in 5% steps, pitch unchanged, with a reset icon back to 1.00x), **Tempo** (BPM, the estimated tempo of the audio, and the latency in ms) |
 | Edit | **Tools** (edit mode, pen, select, snap grid, quantize, the GAME transcription) |
-| Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window (the analysis parameters and the few options the bars do not hold) |
+| Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window (the few options the bars do not hold; the analysis parameters belong to the project) |
 
 **Volume** has a slider for each layer: the audio file is streamed at the level of the first one, and
 the second is the note playback - a scale factor for the built-in synth, and control change 7 (channel
@@ -258,10 +264,11 @@ uv run namioto-game                                 # only fetch a model, do not
 The editor can do the same over the file it has open: the wand button in the tools opens a
 window with GAME's options (model size, backend, language, the quantisation grid and its inference
 parameters), runs the model in a process of its own so a crash cannot take the editor down, and
-watches it there with a progress bar and a log. The notes arrive on a channel of their own, which
-the window's **Target** can also point at the active channel or at the whole roll (replacing what is
-there). The options are remembered for the next run, and so is the result: asking for exactly the
-same run again offers the saved notes instead of loading the model a second time.
+watches it there with a progress bar and a log. The notes arrive on a channel of their own, or over
+the active channel's own — the window's **Target** says which, and asks before overwriting a channel
+that already holds notes. A finished run inserts itself, so there is no second click to make. The
+options are remembered for the next run, and so is the result: asking for exactly the same run again
+offers the saved notes instead of loading the model a second time.
 
 GAME is a PyTorch project and ships its models separately, in three sizes, so they are not packaged
 here: `--size` picks one and it is downloaded from GAME's GitHub release into the data directory
@@ -283,6 +290,40 @@ provider that cannot be created is not an error - ONNX Runtime says so on stderr
 on the CPU. The code is MIT (Team OpenVPI, like GAME
 itself); the models are CC BY-NC-SA 4.0, so anything produced with them is non-commercial, and they
 are downloaded rather than redistributed here - see NOTICE.
+
+## Aligning lyrics to a vocal
+
+Given a separated vocal and the text of each line, `namioto-align` puts a time on every character:
+the text is forced onto the frames of a wav2vec2 CTC model, which never recognises anything, it only
+says where the words it is given fall. The vocal has to be the isolated singing voice and not the
+mix, the text its kana reading, and each line a roughly right window - a list of `{start, end, text}`
+in a JSON file - because the aligner refines a window and cannot find one: it is passed as a whole,
+only the model's own frames carry the times.
+
+```bash
+uv run namioto-align vocal.wav lines.json --out aligned.json
+```
+
+Each line comes back with one entry per input character - its onset, its end and the model's
+probability - and a space or a character the model could not place stays untimed. Only the onset is
+worth reading: a character's end is the next character's onset, so the last one before a rest
+reaches into the rest. Lines the run could not place are named on stderr: `empty` when nothing was
+timed, `nonmonotonic` when the times run backwards, `collapsed` when a run of characters was squeezed
+into no time at all, and `diverged` against reference times handed to the module's `problems()`. A
+line wearing one of them is worth running again with another window before it is believed.
+
+The model is not redistributed and has no download of its own: `scripts/export_align_model.py`
+converts the HuggingFace model into the data directory once, and `--model` or `$NAMIOTO_ALIGN_MODEL`
+points at a converted one. The script is a development tool and needs torch, transformers and ONNX,
+which the program itself does not install:
+
+```bash
+uv run --with torch --with transformers --with onnx --with onnxruntime scripts/export_align_model.py
+```
+
+On one song's 39 lines, a separated vocal and kana text, the onsets the model gave were a median
+31 ms from a hand-checked grid, and the whole run took about 9 s on 8 CPU threads with the int8
+graph the script writes.
 
 The transport plays the loaded audio file and the notes on top of it. A press in the roll moves its
 playhead wherever it lands - over a note it edits it as well, over the empty grid the pen draws one

@@ -265,17 +265,19 @@ def merge_notes(notes: Sequence[Note]) -> list[Note]:
 def quantize_notes(notes: Sequence[Note], unit: float, phase: float = 0.0) -> list[Note]:
     """Snap to the grid cells picked around `phase`, output strictly on the absolute grid.
 
-    The phase only influences rounding decisions; it is never baked into the output.
+    The phase only influences rounding decisions; it is never baked into the output. A note the grid
+    leaves without a cell of its own has nowhere to sit and is dropped, which is what takes GAME's
+    sub-grid fragments out of a quantised run.
     """
     out = []
     last_time = 0.0
     for onset, oset, pitch in notes:
         onset = unit * round((onset - phase) / unit)
         oset = unit * round((oset - phase) / unit)
-        if oset <= onset:
-            oset = onset + unit
+        # a monophonic line: a note the grid put before the one before it ended starts at that end
         onset = max(onset, last_time)
-        oset = max(oset, onset)
+        if oset <= onset:  # what is left is shorter than a cell, so there is no note here
+            continue
         out.append((onset, oset, pitch))
         last_time = oset
     return out

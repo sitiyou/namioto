@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import json
 import pathlib
 import queue
 
@@ -134,7 +135,7 @@ def test_the_tempo_counts_only_when_the_notes_are_quantised() -> None:
 def test_where_the_notes_go_is_not_part_of_the_run() -> None:
     notes = [(0.0, 0.5, 60.0)]
     transcription.save_run(AUDIO, dict(transcription.default_parameters(), target="new"), 120.0, notes)
-    assert transcription.find_run(AUDIO, dict(transcription.default_parameters(), target="replace"), 120.0) == notes
+    assert transcription.find_run(AUDIO, dict(transcription.default_parameters(), target="active"), 120.0) == notes
 
 
 def test_running_the_same_thing_again_keeps_one_entry() -> None:
@@ -151,8 +152,24 @@ def test_a_run_file_that_makes_no_sense_is_no_runs(tmp_path) -> None:
     from namioto import settings as store
 
     target = transcription.results_root() / f"{transcription.audio_key(AUDIO)}.json"
-    store.write_json({"version": 1, "runs": {"x": {"notes": "nonsense"}}}, target)
+    store.write_json({"version": transcription.STORE_VERSION, "runs": {"x": {"notes": "nonsense"}}}, target)
     assert transcription.load_runs(AUDIO) == {}
+
+
+def test_a_run_file_another_version_wrote_is_no_runs() -> None:
+    from namioto import settings as store
+
+    values = transcription.default_parameters()
+    assert transcription.save_run(AUDIO, values, 120.0, [(0.0, 0.5, 60.0)])
+    assert transcription.find_run(AUDIO, values, 120.0) is not None
+
+    target = transcription.results_root() / f"{transcription.audio_key(AUDIO)}.json"
+    stored = json.loads(target.read_text())
+    stored["version"] = transcription.STORE_VERSION - 1
+    store.write_json(stored, target)
+
+    assert transcription.load_runs(AUDIO) == {}
+    assert transcription.find_run(AUDIO, values, 120.0) is None
 
 
 def test_transcribe_reports_progress_and_the_result(fake_game) -> None:
