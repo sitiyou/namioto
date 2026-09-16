@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QPainter, QPalette
+from PyQt6.QtGui import QColor, QPainter
 from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -36,14 +36,11 @@ class _NameLabel(QLabel):
         super().__init__(text)
         self.setMinimumWidth(1)
         self.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Preferred)
-        palette = self.palette()
-        palette.setColor(QPalette.ColorRole.WindowText, QColor(theme.TOKENS["TEXT"]))
-        self.setPalette(palette)
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         metrics = painter.fontMetrics()
-        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
+        painter.setPen(QColor(theme.tokens()["TEXT"]))
         painter.drawText(
             self.rect(),
             Qt.AlignmentFlag.AlignVCenter,

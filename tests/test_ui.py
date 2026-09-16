@@ -38,24 +38,13 @@ from namioto.ui.controls import Cluster, EditBar, TransportBar, ValueSlider
 from namioto.ui.midi_dialog import MidiImportDialog
 from namioto.ui.roll import (
     CONTENT_MARGIN,
-    GRID_BAR,
-    GRID_BEAT,
-    GRID_LINE,
-    HOVER_KEY,
     LENGTH_BEATS,
     MIN_DURATION,
     NOTE_INSET,
-    NOTE_SELECTED,
-    NOTE_SELECTED_EDGE,
-    PANEL,
     PITCH_MAX,
-    PLAYHEAD,
     RULER_HEIGHT,
     RULER_TIME_ROW,
     SNAP_CHOICES,
-    SPECTRUM_BAR,
-    SPECTRUM_BEAT,
-    SPECTRUM_OCTAVE,
     SPECTRUM_TOP,
     PianoRollView,
 )
@@ -353,8 +342,12 @@ def test_ruler_marks_line_up_with_the_roll(window) -> None:
     ruler, viewport = window.ruler, window.view.viewport()
     ruler_image, view_image = ruler.grab().toImage(), window.view.grab().toImage()
     row = viewport.mapTo(window.view, QPoint(0, viewport.height() // 2)).y()
-    ruler_marks = [x for x in range(ruler_image.width()) if ruler_image.pixelColor(x, RULER_TIME_ROW + 2) == GRID_BAR]
-    roll_marks = [x for x in range(view_image.width()) if view_image.pixelColor(x, row) == GRID_BAR]
+    ruler_marks = [
+        x
+        for x in range(ruler_image.width())
+        if ruler_image.pixelColor(x, RULER_TIME_ROW + 2) == theme.canvas().grid_bar
+    ]
+    roll_marks = [x for x in range(view_image.width()) if view_image.pixelColor(x, row) == theme.canvas().grid_bar]
     offset = ruler.mapToGlobal(QPoint(0, 0)).x() - window.view.mapToGlobal(QPoint(0, 0)).x()
     assert ruler_marks and roll_marks
     assert [x + offset for x in ruler_marks] == roll_marks
@@ -366,9 +359,13 @@ def test_keyboard_rows_line_up_with_the_roll(window) -> None:
     keyboard_image, view_image = keyboard.grab().toImage(), window.view.grab().toImage()
     centre = viewport.mapTo(window.view, QPoint(viewport.width() // 2, 0)).x()
     # a vertical grid line covers the whole height of the roll, so the column read has to miss it
-    column = next(x for x in range(centre, centre + 8) if view_image.pixelColor(x, 0).name() != GRID_LINE.name())
-    white_keys = [y for y in range(keyboard_image.height()) if keyboard_image.pixelColor(2, y) == QColor("#d8dde6")]
-    white_rows = [y for y in range(view_image.height()) if view_image.pixelColor(column, y) == QColor("#262b34")]
+    column = next(
+        x for x in range(centre, centre + 8) if view_image.pixelColor(x, 0).name() != theme.canvas().grid_line.name()
+    )
+    white_keys = [
+        y for y in range(keyboard_image.height()) if keyboard_image.pixelColor(2, y) == theme.canvas().key_white
+    ]
+    white_rows = [y for y in range(view_image.height()) if view_image.pixelColor(column, y) == theme.canvas().row_white]
     offset = keyboard.mapToGlobal(QPoint(0, 0)).y() - window.view.mapToGlobal(QPoint(0, 0)).y()
     assert white_keys and white_rows
     assert [y + offset for y in white_keys] == white_rows
@@ -386,7 +383,13 @@ def test_the_division_button_flips_between_beats_and_seconds(window) -> None:
 
 def text_columns(image: QImage, top: int, bottom: int) -> set[int]:
     """Columns holding label glyphs in a ruler row; the rows are otherwise flat colours."""
-    flat = {PANEL.name(), GRID_LINE.name(), GRID_BEAT.name(), GRID_BAR.name(), "#3a4152"}
+    flat = {
+        theme.canvas().panel.name(),
+        theme.canvas().grid_line.name(),
+        theme.canvas().grid_beat.name(),
+        theme.canvas().grid_bar.name(),
+        theme.canvas().ruler_line.name(),
+    }
     return {x for x in range(image.width()) for y in range(top, bottom) if QColor(image.pixel(x, y)).name() not in flat}
 
 
@@ -422,7 +425,11 @@ def test_spectrum_grid_lines_follow_the_division() -> None:
         view.refresh()
         image = view.grab().toImage()
         y = device_point(view, 0.0, float(PITCH_MAX - 60) + 0.5).y()
-        columns[division] = {x for x in range(image.width()) if image.pixelColor(x, y) in (SPECTRUM_BEAT, SPECTRUM_BAR)}
+        columns[division] = {
+            x
+            for x in range(image.width())
+            if image.pixelColor(x, y) in (theme.canvas().spectrum_beat, theme.canvas().spectrum_bar)
+        }
     assert columns["beats"] and columns["seconds"]
     assert columns["beats"] != columns["seconds"]
 
@@ -622,7 +629,7 @@ def test_the_buttons_that_do_something_carry_a_frame(window) -> None:
     assert window.transport.suggestion.isVisible()
 
     image = window.grab().toImage()
-    frame = QColor(theme.TOKENS["BUTTON_BG"])
+    frame = QColor(theme.tokens()["BUTTON_BG"])
     commands = (
         window.transport.open,
         window.transport.save,
@@ -639,7 +646,7 @@ def test_the_buttons_that_do_something_carry_a_frame(window) -> None:
 def test_the_switches_and_the_transport_stay_bare(window) -> None:
     window.transport.channels.setChecked(True)  # the cards, and their switches, have to be drawn
     image = window.grab().toImage()
-    frame = QColor(theme.TOKENS["BUTTON_BG"])
+    frame = QColor(theme.tokens()["BUTTON_BG"])
     card_switches = tuple(
         button
         for button in window.channel_panel.findChildren(QToolButton)
@@ -712,7 +719,7 @@ def test_hover_turns_the_key_of_that_row_red_in_either_mode(window) -> None:
         window.view.set_hover_pitch(pitch)
         image = window.keyboard.grab().toImage()
         window.view.set_hover_pitch(None)
-        return {y for y in range(image.height()) if image.pixelColor(2, y) == HOVER_KEY}
+        return {y for y in range(image.height()) if image.pixelColor(2, y) == theme.canvas().hover_key}
 
     def red_bands(pitch: int) -> int:
         rows = sorted(red_rows(pitch))
@@ -725,7 +732,7 @@ def test_hover_turns_the_key_of_that_row_red_in_either_mode(window) -> None:
 
     window.view.set_hover_pitch(None)
     plain = window.keyboard.grab().toImage()
-    assert not {y for y in range(plain.height()) if plain.pixelColor(2, y) == HOVER_KEY}
+    assert not {y for y in range(plain.height()) if plain.pixelColor(2, y) == theme.canvas().hover_key}
 
     window.view.overtone_highlight = True  # the overtones mark the keyboard as well, in either mode
     assert red_bands(55) == 4
@@ -739,7 +746,7 @@ def test_playhead_is_drawn_at_the_play_position(window) -> None:
     window.view.set_playhead(2.0)  # 2 s at 120 BPM = 4 beats
     image = window.view.grab().toImage()
     row = window.view.viewport().mapTo(window.view, QPoint(0, window.view.viewport().height() // 2)).y()
-    marks = [x for x in range(image.width()) if image.pixelColor(x, row) == PLAYHEAD]
+    marks = [x for x in range(image.width()) if image.pixelColor(x, row) == theme.canvas().playhead]
     window.view.set_playhead(None)
     assert marks
     assert min(abs(x - device_point(window.view, 4.0, 0.0).x()) for x in marks) <= 1
@@ -2071,7 +2078,7 @@ def test_octave_lines_sit_on_the_b_and_c_boundary() -> None:
     def line_fraction(scene_y: float) -> float:
         y = device_point(view, 0.0, scene_y).y()
         row = [image.pixelColor(x, y) for x in range(3, image.width() - 3, 7)]
-        return sum(colour == SPECTRUM_OCTAVE for colour in row) / len(row)
+        return sum(colour == theme.canvas().spectrum_octave for colour in row) / len(row)
 
     assert line_fraction(PITCH_MAX - MIDI_OFFSET + 1) > 0.8  # below C1, where B0 ends
     assert line_fraction(PITCH_MAX - MIDI_OFFSET) < 0.05  # the C1 / C#1 edge stays black
@@ -2161,11 +2168,14 @@ def test_selected_notes_use_the_wavetone_highlight(window) -> None:
     image = window.view.grab().toImage()
     top_left = device_point(window.view, note.start, top)
     bottom_right = device_point(window.view, note.end, bottom)
-    assert pixel_at(window.view, image, note.start + 1.0, (top + bottom) / 2) == NOTE_SELECTED
+    assert pixel_at(window.view, image, note.start + 1.0, (top + bottom) / 2) == theme.canvas().note_selected
 
     mid_x = (top_left.x() + bottom_right.x()) // 2
     column = [image.pixelColor(mid_x, y) for y in range(top_left.y(), bottom_right.y())]
-    assert {colour.name() for colour in column} == {NOTE_SELECTED.name(), NOTE_SELECTED_EDGE.name()}
+    assert {colour.name() for colour in column} == {
+        theme.canvas().note_selected.name(),
+        theme.canvas().note_selected_edge.name(),
+    }
     window.edit.mode.click()
 
 
@@ -2244,7 +2254,7 @@ def test_the_settings_window_lists_every_visible_field(own_window) -> None:
     }
     assert names == expected
     pages = [dialog.findChild(QTabWidget).tabText(index) for index in range(dialog.findChild(QTabWidget).count())]
-    assert pages == ["Analysis", "Tempo", "Advanced"]  # the rest of the spec is what the program remembers
+    assert pages == ["Analysis", "Display", "Tempo", "Advanced"]  # the rest of the spec is what the program remembers
     dialog.close()
 
 

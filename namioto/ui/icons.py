@@ -4,7 +4,8 @@
 from __future__ import annotations
 
 import qtawesome as qta
-from PyQt6.QtGui import QIcon
+from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtGui import QIcon, QIconEngine, QPainter, QPixmap
 
 from namioto.ui import theme
 
@@ -45,11 +46,45 @@ GLYPHS = {
 def icon(kind: str, color: str = "") -> QIcon:
     """The glyph named by our own word for it, so a call site never spells out a font name.
 
-    The disabled shade comes with it: a plain pixmap has no greyed mode of its own, so without it a
+    The colours are not in the icon: it paints itself in the ones the theme in force holds, so a
+    button keeps up with a theme switch instead of wearing what was current when it was built. The
+    disabled shade comes with it: a plain pixmap has no greyed mode of its own, so without it a
     button that is off looks exactly like one that is on.
     """
-    return qta.icon(
-        GLYPHS[kind],
-        color=color or theme.TOKENS["TEXT"],
-        color_disabled=theme.TOKENS["DISABLED"],
-    )
+    return QIcon(_Glyph(kind, color))
+
+
+def _drawn(kind: str, color: str = "") -> QIcon:
+    """The qtawesome icon behind a glyph, kept for as long as its colours are the ones in force."""
+    key = (kind, color, theme.current())
+    if key not in _drawn_icons:
+        _drawn_icons[key] = qta.icon(
+            GLYPHS[kind],
+            color=color or theme.tokens()["TEXT"],
+            color_disabled=theme.tokens()["DISABLED"],
+        )
+    return _drawn_icons[key]
+
+
+_drawn_icons: dict[tuple[str, str, str], QIcon] = {}
+
+
+class _Glyph(QIconEngine):
+    """An icon that asks the theme for its colours every time it is drawn."""
+
+    def __init__(self, kind: str, color: str = ""):
+        super().__init__()
+        self.kind = kind
+        self.color = color
+
+    def paint(self, painter: QPainter, rect, mode: QIcon.Mode, state: QIcon.State) -> None:
+        _drawn(self.kind, self.color).paint(painter, rect, Qt.AlignmentFlag.AlignCenter, mode, state)
+
+    def pixmap(self, size: QSize, mode: QIcon.Mode, state: QIcon.State) -> QPixmap:
+        return _drawn(self.kind, self.color).pixmap(size, mode, state)
+
+    def actualSize(self, size: QSize, mode: QIcon.Mode, state: QIcon.State) -> QSize:
+        return _drawn(self.kind, self.color).actualSize(size, mode)
+
+    def clone(self) -> QIconEngine:
+        return _Glyph(self.kind, self.color)

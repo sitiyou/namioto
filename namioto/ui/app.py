@@ -119,6 +119,8 @@ class MainWindow(QMainWindow):
         self.settings_store.source = self._file_settings
         self.settings_store.changed.connect(self._on_settings_changed)
         self.settings_store.failed.connect(lambda message: self.statusBar().showMessage(message))
+        self._theme = theme.apply(theme.running_app(), self.settings.appearance.theme)
+        theme.hints().colorSchemeChanged.connect(self._on_color_scheme)
         self.overrides = dict(overrides or {})  # values this run was asked for, never written back
         self._display_overrides: dict[str, float] = {}
         self._seeding = False
@@ -420,6 +422,25 @@ class MainWindow(QMainWindow):
         self._remember_configuration()
         self.settings_store.touch()
 
+    def _apply_theme(self) -> None:
+        """Dress the window in the theme the setting asks for.
+
+        The colour the roll, the ruler and the keys draw with is read while they paint, so a switch
+        is those three painting again; everything else follows the sheet and the palette by itself.
+        """
+        name = theme.apply(theme.running_app(), self.settings.appearance.theme)
+        if name == self._theme:
+            return
+        self._theme = name
+        self.view.refresh()
+        self.ruler.update()
+        self.keyboard.update()
+
+    def _on_color_scheme(self, _scheme) -> None:
+        """The desktop switched between light and dark; only a theme set to Auto follows it."""
+        if self.settings.appearance.theme == "auto":
+            self._apply_theme()
+
     def _on_settings_changed(self, settings) -> None:
         """Take a settings object over the running one: a project was opened, or the window applied.
 
@@ -439,6 +460,7 @@ class MainWindow(QMainWindow):
                 self._rebuild_player()
         finally:
             self._seeding = False
+        self._apply_theme()
         self._update_status()
 
     def _rebuild_player(self) -> None:
@@ -1091,7 +1113,6 @@ def main() -> int:
     multiprocessing.freeze_support()  # a frozen build has to hand the child back the same bootstrap
     args = parse_args()
     app = QApplication(sys.argv)
-    theme.apply(app)
     window = MainWindow(audio=args.audio, overrides={"channels": args.channels, "t_num": args.t_num})
     window.apply_overrides(gain=args.gain, contrast=args.contrast)
     window.show()

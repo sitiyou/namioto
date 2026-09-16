@@ -101,17 +101,19 @@ since a file whose notes start before that bar was never WaveTone's and is read 
 
 The gear at the right end of the Mix row opens the settings window, and it is short on purpose: it
 holds only what has no control in the bars - the analysis parameters (channels, frames per second,
-FFT size, A4), the two windows the beat tracker fits, and **WaveTone compatibility** - a page per
-group, with the beat tracker's tuning under an `ADVANCED` heading. `Restore defaults` puts everything
+FFT size, A4), the two windows the beat tracker fits, **Theme** (Auto follows the desktop's light or
+dark look, or pins one of the two) and **WaveTone compatibility** - a page per group, with the beat
+tracker's tuning under an `ADVANCED` heading. `Restore defaults` puts everything
 back, and `Apply` lets the change go live without closing the window. Analysis parameters reach the
 spectrum the next time a file is loaded, and the Analysis page has a `Re-analyse now` button for
 jumping the gun.
 
 ![settings](docs/settings.png)
 
-Everything else is remembered rather than configured. The gain, the contrast, the audio and MIDI
-volumes, the speed, the snap grid, the division, the zoom, the two switches beside the transport
-readout and the window's own size and position are written to `~/.config/namioto/settings.json`
+Everything else is remembered rather than configured. The theme, the gain, the contrast, the audio
+and MIDI volumes, the speed, the snap grid, the division, the zoom, the two switches beside the
+transport readout and the window's own size and position are written to
+`~/.config/namioto/settings.json`
 (`$NAMIOTO_SETTINGS` points somewhere else) as they change on screen, and are back the way they were
 next time. The tempo and the latency are not among them: they describe one song, so they start from
 their defaults (120 BPM, 0 ms) whenever another file is loaded, and a project carries them - opening

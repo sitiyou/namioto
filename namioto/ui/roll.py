@@ -34,32 +34,12 @@ PAGE_TURN_LEAD = 0.2  # where on the fresh page the playhead then sits
 
 SNAP_CHOICES = (("1/1", 4.0), ("1/2", 2.0), ("1/4", 1.0), ("1/8", 0.5), ("1/16", 0.25), ("1/32", 0.125))
 
-# The theme is picked at startup, so the canvas is read once and the names below are what this module
-# paints with: the colours live in one place, and a second theme only has to add its own canvas.
-_CANVAS = theme.canvas()
-
-BG = _CANVAS.background
-ROW_WHITE = _CANVAS.row_white
-ROW_BLACK = _CANVAS.row_black
-GRID_LINE = _CANVAS.grid_line
-GRID_BEAT = _CANVAS.grid_beat
-GRID_BAR = _CANVAS.grid_bar
-NOTE_COLORS = _CANVAS.note_colors
-NOTE_SELECTED = _CANVAS.note_selected
-NOTE_SELECTED_EDGE = _CANVAS.note_selected_edge
-TEXT = _CANVAS.text
-PANEL = _CANVAS.panel
-SPECTRUM_BG = _CANVAS.spectrum_background
-SPECTRUM_OCTAVE = _CANVAS.spectrum_octave
-SPECTRUM_BEAT = _CANVAS.spectrum_beat
-SPECTRUM_BAR = _CANVAS.spectrum_bar
+# The colours are read while painting rather than once at import: a window outlives a theme switch,
+# and a name read early would keep painting the theme that was in force when it was read.
 SPECTRUM_TOP = PITCH_MAX - (MIDI_OFFSET + NOTE_COUNT - 1)
 MIN_LINE_SPACING = 16.0
 OVERTONES = (2, 3, 4)  # f, 2f, 3f and 4f: the four partials WaveTone marks over the row under the mouse
-HOVER_BAND = _CANVAS.hover_band
-HOVER_KEY = _CANVAS.hover_key
 EDIT_DIM = 0.65  # the spectrum steps back while editing so the notes stand out over it
-PLAYHEAD = _CANVAS.playhead
 MIN_GRID_SPACING = 9.0
 CLICK_SLOP_PX = 4
 HISTORY_LIMIT = 50  # snapshots of the whole document, so the depth trades memory for how far back undo goes
@@ -139,7 +119,7 @@ class NoteItem(QGraphicsRectItem):
     def __init__(self, note: Note):
         super().__init__()
         self.note = note
-        self.fill, self.edge_light, self.edge_dark = theme.note_shades(NOTE_COLORS[0])
+        self.fill, self.edge_light, self.edge_dark = theme.note_shades(QColor(theme.NOTE_PALETTE[0]))
         self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
         self._sync()
@@ -179,9 +159,10 @@ class NoteItem(QGraphicsRectItem):
 
     def paint(self, painter: QPainter, option, widget=None) -> None:
         selected = self.isSelected()
-        body = NOTE_SELECTED if selected else self.fill
-        light = NOTE_SELECTED_EDGE if selected else self.edge_light
-        dark = NOTE_SELECTED_EDGE if selected else self.edge_dark
+        colors = theme.canvas()
+        body = colors.note_selected if selected else self.fill
+        light = colors.note_selected_edge if selected else self.edge_light
+        dark = colors.note_selected_edge if selected else self.edge_dark
         rect = self.rect()
         transform = painter.transform()
         px, py = 1.0 / transform.m11(), 1.0 / transform.m22()  # one device pixel in scene units
@@ -469,7 +450,7 @@ class PianoRollView(QGraphicsView):
         channel = self._channel(number)
         color = QColor(channel.color) if channel is not None else QColor()
         if not color.isValid():
-            color = NOTE_COLORS[number % len(NOTE_COLORS)]
+            color = QColor(theme.NOTE_PALETTE[number % len(theme.NOTE_PALETTE)])
         return color
 
     def _sync_channel_visuals(self) -> None:
@@ -750,35 +731,36 @@ class PianoRollView(QGraphicsView):
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
         first_row = max(0, int(math.floor(rect.top())))
         last_row = min(PITCH_COUNT, int(math.ceil(rect.bottom())) + 1)
+        colors = theme.canvas()
 
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)  # keeps 1px grid lines on one pixel
 
         if self.spectrum is None:
-            painter.fillRect(rect, BG)
+            painter.fillRect(rect, colors.background)
             for row in range(first_row, last_row):
-                color = ROW_BLACK if is_black_key(PITCH_MAX - row) else ROW_WHITE
+                color = colors.row_black if is_black_key(PITCH_MAX - row) else colors.row_white
                 painter.fillRect(QRectF(rect.left(), float(row), rect.width(), 1.0), color)
-            painter.setPen(QPen(GRID_LINE, 0))
+            painter.setPen(QPen(colors.grid_line, 0))
             for row in range(first_row, last_row + 1):
                 y = float(row)
                 painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
             for x, level in self.division_lines(rect, MIN_GRID_SPACING, snap=True):
-                painter.setPen(QPen((GRID_LINE, GRID_BEAT, GRID_BAR)[level], 0))
+                painter.setPen(QPen((colors.grid_line, colors.grid_beat, colors.grid_bar)[level], 0))
                 painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
             self._draw_cursor(painter, rect)
             painter.restore()
             return
 
-        painter.fillRect(rect, SPECTRUM_BG)
+        painter.fillRect(rect, colors.spectrum_background)
         self._draw_spectrum(painter, rect)
-        painter.setPen(QPen(SPECTRUM_OCTAVE, 0))
+        painter.setPen(QPen(colors.spectrum_octave, 0))
         for pitch in range(MIDI_OFFSET, MIDI_OFFSET + NOTE_COUNT + 1, 12):
             y = float(PITCH_MAX - pitch + 1)  # the C row's lower edge (B sits below C)
             if first_row <= y <= last_row:
                 painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
         for x, level in self.division_lines(rect, MIN_LINE_SPACING):
-            painter.setPen(QPen(SPECTRUM_BAR if level == 2 else SPECTRUM_BEAT, 0))
+            painter.setPen(QPen(colors.spectrum_bar if level == 2 else colors.spectrum_beat, 0))
             painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
         self._draw_cursor(painter, rect)
         painter.restore()
@@ -786,7 +768,7 @@ class PianoRollView(QGraphicsView):
     def _draw_cursor(self, painter: QPainter, rect: QRectF) -> None:
         """The rows highlighted under the mouse; the playback position goes over the notes."""
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(HOVER_BAND)
+        painter.setBrush(theme.canvas().hover_band)
         for pitch in self.highlight_pitches():
             painter.drawRect(QRectF(rect.left(), float(PITCH_MAX - pitch), rect.width(), 1.0))
         painter.setBrush(Qt.BrushStyle.NoBrush)
@@ -800,7 +782,7 @@ class PianoRollView(QGraphicsView):
             return
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        painter.setPen(QPen(PLAYHEAD, 0))
+        painter.setPen(QPen(theme.canvas().playhead, 0))
         painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
         painter.restore()
 
@@ -1132,7 +1114,8 @@ class TimelineRuler(_ViewportStrip):
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        painter.fillRect(self.rect(), PANEL)
+        colors = theme.canvas()
+        painter.fillRect(self.rect(), colors.panel)
         viewport = self.view.viewport()
         left_offset = self.origin().x()
         painter.setClipRect(QRect(int(left_offset), 0, viewport.width(), self.height()))
@@ -1149,26 +1132,26 @@ class TimelineRuler(_ViewportStrip):
             stride *= 2
         for bar in range(int(left // BAR_BEATS), int(right // BAR_BEATS) + 1):
             px = left_offset + self.view.mapFromScene(QPointF(bar * BAR_BEATS, 0.0)).x()
-            painter.setPen(QPen(GRID_BAR, 1))
+            painter.setPen(QPen(colors.grid_bar, 1))
             painter.drawLine(px, RULER_TIME_ROW, px, self.height())
             if bar % stride == 0:
-                painter.setPen(TEXT)
+                painter.setPen(colors.text)
                 painter.drawText(px + 4, RULER_TIME_ROW + 15, str(bar + 1))
 
         for x, level in self.view.division_lines(visible, MIN_GRID_SPACING, snap=True):
             px = left_offset + self.view.mapFromScene(QPointF(x, 0.0)).x()
-            painter.setPen(QPen(GRID_LINE if level == 0 else GRID_BEAT, 1))
+            painter.setPen(QPen(colors.grid_line if level == 0 else colors.grid_beat, 1))
             painter.drawLine(px, self.height() - (4, 8, 10)[level], px, self.height())
 
         for x, seconds, _major in self.view.seconds_lines(visible, TIME_LABEL_SPACING):
             px = left_offset + self.view.mapFromScene(QPointF(x, 0.0)).x()
-            painter.setPen(QPen(GRID_BEAT, 1))
+            painter.setPen(QPen(colors.grid_beat, 1))
             painter.drawLine(px, RULER_TIME_ROW - 6, px, RULER_TIME_ROW - 1)
             label = format_time(seconds)
-            painter.setPen(TEXT)
+            painter.setPen(colors.text)
             painter.drawText(QPointF(px - painter.fontMetrics().horizontalAdvance(label) / 2, 14), label)
 
-        painter.setPen(QPen(_CANVAS.ruler_line, 1))
+        painter.setPen(QPen(colors.ruler_line, 1))
         right_edge = viewport.width() + int(left_offset)
         painter.drawLine(int(left_offset), RULER_TIME_ROW - 1, right_edge, RULER_TIME_ROW - 1)
         painter.drawLine(int(left_offset), self.height() - 1, right_edge, self.height() - 1)
@@ -1216,15 +1199,16 @@ class PianoKeyboard(_ViewportStrip):
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        painter.fillRect(self.rect(), PANEL)
+        colors = theme.canvas()
+        painter.fillRect(self.rect(), colors.panel)
         viewport = self.view.viewport()
         top_offset = self.origin().y()
         painter.setClipRect(QRect(0, int(top_offset), self.width(), viewport.height()))
         font = QFont()
         font.setPixelSize(9)
         painter.setFont(font)
-        white = _CANVAS.key_white
-        black = _CANVAS.key_black
+        white = colors.key_white
+        black = colors.key_black
         highlighted = set(self.view.highlight_pitches())
 
         for pitch in range(PITCH_MIN, PITCH_MAX + 1):
@@ -1239,12 +1223,12 @@ class PianoKeyboard(_ViewportStrip):
             else:
                 painter.fillRect(QRect(0, top, self.width(), bottom - top), white)
             if pitch in highlighted:
-                painter.fillRect(QRect(0, top, self.width(), bottom - top), HOVER_KEY)
+                painter.fillRect(QRect(0, top, self.width(), bottom - top), colors.hover_key)
             if pitch % 12 == 0:
-                painter.setPen(_CANVAS.key_text)
+                painter.setPen(colors.key_text)
                 painter.drawText(4, (top + bottom) // 2 + 3, note_name(pitch))
 
-        painter.setPen(QPen(_CANVAS.key_line, 1))
+        painter.setPen(QPen(colors.key_line, 1))
         for pitch in range(PITCH_MIN, PITCH_MAX + 2):
             y = top_offset + self.view.mapFromScene(QPointF(0.0, float(PITCH_MAX - pitch))).y()
             painter.drawLine(0, y, self.width(), y)

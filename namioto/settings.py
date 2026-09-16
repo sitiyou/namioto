@@ -25,6 +25,8 @@ from namioto.spectrum import CHANNEL_MODES
 VERSION = 2
 TEXT_LIMIT = 4096
 DIVISIONS = ("beats", "seconds")
+THEMES = ("auto", "light", "dark")
+THEME_LABELS = ("Auto", "Light", "Dark")
 # the General MIDI program list, in the order the program change is meant to select them in
 GM_PROGRAMS = (
     "Acoustic Grand Piano",
@@ -237,6 +239,23 @@ SECTIONS: tuple[Section, ...] = (
                 high=480,
                 step=0.5,
                 decimals=1,
+            ),
+        ),
+    ),
+    Section(
+        "appearance",
+        "Display",
+        "Appearance",
+        (
+            Field(
+                "theme",
+                "choice",
+                "auto",
+                "Theme",
+                "Which theme the window wears; Auto follows the light or dark look of the desktop, "
+                "and a desktop that has no preference gets the dark one",
+                choices=THEMES,
+                labels=THEME_LABELS,
             ),
         ),
     ),
