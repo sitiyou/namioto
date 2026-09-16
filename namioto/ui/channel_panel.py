@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt
-from PyQt6.QtGui import QColor, QPainter
+from PyQt6.QtGui import QPainter, QPalette
 from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
@@ -20,7 +20,7 @@ from PyQt6.QtWidgets import (
 
 from namioto import settings as store
 from namioto.channels import Channel, free_channel
-from namioto.ui import icons, theme
+from namioto.ui import icons
 from namioto.ui.controls import FIELD_HEIGHT, icon_button
 from namioto.ui.roll import PianoRollView
 
@@ -40,7 +40,7 @@ class _NameLabel(QLabel):
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
         metrics = painter.fontMetrics()
-        painter.setPen(QColor(theme.tokens()["TEXT"]))
+        painter.setPen(self.palette().color(QPalette.ColorRole.WindowText))
         painter.drawText(
             self.rect(),
             Qt.AlignmentFlag.AlignVCenter,
@@ -55,7 +55,6 @@ class _Card(QWidget):
         super().__init__()
         self._panel = panel
         self._number = channel.channel
-        self.setObjectName("channelCard")
 
         self.swatch = QFrame()
         self.swatch.setFixedSize(SWATCH_WIDTH, 34)
@@ -166,7 +165,6 @@ class ChannelPanel(QWidget):
         super().__init__(parent)
         self.view = view
         self.default_program = default_program
-        self.setObjectName("channelPanel")
         self.setFixedWidth(CARD_WIDTH)
         view.channels_changed.connect(self._sync)
         view.active_channel_changed.connect(self._on_active_changed)

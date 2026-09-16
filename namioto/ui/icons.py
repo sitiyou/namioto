@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import qtawesome as qta
 from PyQt6.QtCore import QSize, Qt
-from PyQt6.QtGui import QIcon, QIconEngine, QPainter, QPixmap
+from PyQt6.QtGui import QIcon, QIconEngine, QPainter, QPalette, QPixmap
 
 from namioto.ui import theme
 
@@ -46,23 +46,26 @@ GLYPHS = {
 def icon(kind: str, color: str = "") -> QIcon:
     """The glyph named by our own word for it, so a call site never spells out a font name.
 
-    The colours are not in the icon: it paints itself in the ones the theme in force holds, so a
-    button keeps up with a theme switch instead of wearing what was current when it was built. The
-    disabled shade comes with it: a plain pixmap has no greyed mode of its own, so without it a
-    button that is off looks exactly like one that is on.
+    The colours are not in the icon: it paints itself in the ones the palette holds, so a button
+    keeps up with the desktop's own light or dark look instead of wearing what was current when it
+    was built. The disabled shade comes with it: a plain pixmap has no greyed mode of its own, so
+    without it a button that is off looks exactly like one that is on.
     """
     return QIcon(_Glyph(kind, color))
 
 
+def _palette_colour(group: QPalette.ColorGroup) -> str:
+    """The colour the widgets around an icon wear, so the desktop's own scheme reaches the icon too."""
+    return theme.running_app().palette().color(group, QPalette.ColorRole.WindowText).name()
+
+
 def _drawn(kind: str, color: str = "") -> QIcon:
-    """The qtawesome icon behind a glyph, kept for as long as its colours are the ones in force."""
-    key = (kind, color, theme.current())
+    """The qtawesome icon behind a glyph, kept for as long as its two colours are the ones in force."""
+    text = color or _palette_colour(QPalette.ColorGroup.Active)
+    dim = _palette_colour(QPalette.ColorGroup.Disabled)
+    key = (kind, text, dim)
     if key not in _drawn_icons:
-        _drawn_icons[key] = qta.icon(
-            GLYPHS[kind],
-            color=color or theme.tokens()["TEXT"],
-            color_disabled=theme.tokens()["DISABLED"],
-        )
+        _drawn_icons[key] = qta.icon(GLYPHS[kind], color=text, color_disabled=dim)
     return _drawn_icons[key]
 
 

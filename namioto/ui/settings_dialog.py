@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QSpinBox,
+    QStyleFactory,
     QTabWidget,
     QToolButton,
     QVBoxLayout,
@@ -32,6 +33,7 @@ from PyQt6.QtWidgets import (
 
 from namioto import settings as store
 from namioto.settings import Field
+from namioto.ui import theme
 from namioto.ui.controls import text_button
 
 SAVE_DELAY_MS = 1000
@@ -109,6 +111,8 @@ def field_editor(value: Any, field: Field) -> tuple[QWidget, Callable[[], Any], 
     elif field.kind == "choice":
         labels = field.labels or tuple(str(choice) for choice in field.choices)
         return combo_editor(list(zip(labels, field.choices, strict=True)), value)
+    elif field.kind == "style":
+        return style_editor(value)
     elif field.kind == "int":
         widget = QSpinBox()
         widget.setRange(int(field.low), int(field.high))
@@ -137,10 +141,17 @@ def combo_editor(entries: Sequence[tuple[str, Any]], value: Any):
     return widget, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
 
 
+def style_editor(value: Any):
+    """Every widget style this build can draw with, the one the desktop hands out named first."""
+    available = QStyleFactory.keys()
+    entries = [(f"System default ({theme.platform_style()})", "")]
+    entries += [(name, name) for name in available]
+    return combo_editor(entries, value)
+
+
 def advanced_section(form: QFormLayout) -> QToolButton:
     """The heading over a form of advanced rows, folded away until it is clicked."""
     button = QToolButton()
-    button.setObjectName("sectionHeader")
     button.setText("Advanced")
     button.setCheckable(True)
     button.setAutoRaise(True)

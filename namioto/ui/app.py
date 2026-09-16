@@ -119,7 +119,7 @@ class MainWindow(QMainWindow):
         self.settings_store.source = self._file_settings
         self.settings_store.changed.connect(self._on_settings_changed)
         self.settings_store.failed.connect(lambda message: self.statusBar().showMessage(message))
-        self._theme = theme.apply(theme.running_app(), self.settings.appearance.theme)
+        self._theme = theme.apply(theme.running_app(), self.settings.appearance.style)
         theme.hints().colorSchemeChanged.connect(self._on_color_scheme)
         self.overrides = dict(overrides or {})  # values this run was asked for, never written back
         self._display_overrides: dict[str, float] = {}
@@ -156,7 +156,6 @@ class MainWindow(QMainWindow):
 
         corner = QWidget()
         corner.setFixedSize(self.keyboard.width(), self.ruler.height())
-        corner.setObjectName("corner")
 
         layout = QGridLayout()
         layout.setSpacing(0)
@@ -256,7 +255,6 @@ class MainWindow(QMainWindow):
             QShortcut(QKeySequence(standard), self).activated.connect(slot)
         QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.view.redo)
         self.cursor_note = QLabel()
-        self.cursor_note.setObjectName("cursorNote")
         self.statusBar().addPermanentWidget(self.cursor_note)
         self._restore_session()
         if audio is None:
@@ -423,12 +421,12 @@ class MainWindow(QMainWindow):
         self.settings_store.touch()
 
     def _apply_theme(self) -> None:
-        """Dress the window in the theme the setting asks for.
+        """Dress the window the way the settings ask, and follow the colours the desktop hands out.
 
         The colour the roll, the ruler and the keys draw with is read while they paint, so a switch
-        is those three painting again; everything else follows the sheet and the palette by itself.
+        is those three painting again; everything else is the style's to draw.
         """
-        name = theme.apply(theme.running_app(), self.settings.appearance.theme)
+        name = theme.apply(theme.running_app(), self.settings.appearance.style)
         if name == self._theme:
             return
         self._theme = name
@@ -437,9 +435,8 @@ class MainWindow(QMainWindow):
         self.keyboard.update()
 
     def _on_color_scheme(self, _scheme) -> None:
-        """The desktop switched between light and dark; only a theme set to Auto follows it."""
-        if self.settings.appearance.theme == "auto":
-            self._apply_theme()
+        """The desktop switched between light and dark, so the canvas follows it."""
+        self._apply_theme()
 
     def _on_settings_changed(self, settings) -> None:
         """Take a settings object over the running one: a project was opened, or the window applied.

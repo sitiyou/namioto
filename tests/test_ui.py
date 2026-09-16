@@ -358,9 +358,11 @@ def test_keyboard_rows_line_up_with_the_roll(window) -> None:
     keyboard, viewport = window.keyboard, window.view.viewport()
     keyboard_image, view_image = keyboard.grab().toImage(), window.view.grab().toImage()
     centre = viewport.mapTo(window.view, QPoint(viewport.width() // 2, 0)).x()
-    # a vertical grid line covers the whole height of the roll, so the column read has to miss it
+    # a vertical grid line covers the whole height of the roll, so the column read has to miss every one
     column = next(
-        x for x in range(centre, centre + 8) if view_image.pixelColor(x, 0).name() != theme.canvas().grid_line.name()
+        x
+        for x in range(centre, centre + 8)
+        if any(view_image.pixelColor(x, y) == theme.canvas().row_white for y in range(view_image.height()))
     )
     white_keys = [
         y for y in range(keyboard_image.height()) if keyboard_image.pixelColor(2, y) == theme.canvas().key_white
@@ -624,54 +626,6 @@ def drawn_pixels(window, image: QImage, button: QToolButton) -> list[QColor]:
     return [image.pixelColor(top.x() + x, top.y() + y) for x in range(button.width()) for y in range(button.height())]
 
 
-def test_the_buttons_that_do_something_carry_a_frame(window) -> None:
-    window._on_tempo_loaded(fake_estimate())
-    assert window.transport.suggestion.isVisible()
-
-    image = window.grab().toImage()
-    frame = QColor(theme.tokens()["BUTTON_BG"])
-    commands = (
-        window.transport.open,
-        window.transport.save,
-        window.transport.settings_button,
-        window.transport.detect,
-        window.transport.speed_reset,
-        window.transport.suggestion.dismiss_button,
-    )
-    for button in commands:
-        assert frame in drawn_pixels(window, image, button), f"{button.toolTip()} wears no frame"
-    window.transport.suggestion.hide()
-
-
-def test_the_switches_and_the_transport_stay_bare(window) -> None:
-    window.transport.channels.setChecked(True)  # the cards, and their switches, have to be drawn
-    image = window.grab().toImage()
-    frame = QColor(theme.tokens()["BUTTON_BG"])
-    card_switches = tuple(
-        button
-        for button in window.channel_panel.findChildren(QToolButton)
-        if button.toolTip().startswith(("Lock:", "Show or hide", "Mute this channel"))
-    )
-    assert card_switches, "the cards are drawn"
-    bare = (
-        window.transport.rewind,
-        window.transport.play_pause,
-        window.transport.auto_page,
-        window.transport.overtone,
-        window.edit.mode,
-        window.edit.select,
-        window.transport.channels,
-        window.transport.division,
-        *card_switches,
-    )
-    for button in bare:
-        assert frame not in drawn_pixels(window, image, button), f"{button.toolTip()} wears a frame"
-
-    tinted = drawn_pixels(window, image, window.transport.division)
-    assert max(colour.blue() - colour.red() for colour in tinted) > 40, "a switch that is on keeps the accent"
-    window.transport.channels.setChecked(False)
-
-
 def test_a_button_that_cannot_be_clicked_reads_as_off(window) -> None:
     button = window.transport.detect
     button.setEnabled(True)
@@ -705,7 +659,7 @@ def test_hover_marks_the_row_and_its_overtones(window) -> None:
     marked = {pitch: row_brightness(pitch) for pitch in rows}
     window.view.set_hover_pitch(None)
     plain = {pitch: row_brightness(pitch) for pitch in rows}
-    assert all(marked[pitch] > plain[pitch] for pitch in (55, 67, 74, 79))
+    assert all(abs(marked[pitch] - plain[pitch]) > 5 for pitch in (55, 67, 74, 79)), "the row is marked"
     assert marked[54] == plain[54]  # the row above stays as it was
     assert window.cursor_note.text() == ""
     window.view.overtone_highlight = False

@@ -6,7 +6,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 
 from PyQt6.QtCore import QObject, QPoint, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QAction
+from PyQt6.QtGui import QAction, QColor, QFontMetrics, QPainter, QPalette
 from PyQt6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -31,16 +31,36 @@ from namioto.ui.text import format_time
 ICON_SIZE = 17
 BUTTON_HEIGHT = 24
 FIELD_HEIGHT = 24
+CORNER_RADIUS = 4  # of a block's outline
 
 
-class Cluster(QWidget):
+def _outline_colour(palette: QPalette) -> QColor:
+    """The shade a block is outlined in: nearest the page, so a block reads apart without shouting.
+
+    A style's own frame is not an option: the older ones draw every one of them with a raised or
+    sunken bevel - Qt's Windows style sinks a plain panel - which makes a row of blocks look
+    pressed into the window.
+    """
+    dark = palette.color(QPalette.ColorRole.Window).lightness() < 128
+    return palette.color(QPalette.ColorRole.Light if dark else QPalette.ColorRole.Mid)
+
+
+class _Card(QWidget):
+    """A block of controls, outlined by this app rather than by the widget style."""
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(_outline_colour(self.palette()))
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), CORNER_RADIUS, CORNER_RADIUS)
+
+
+class Cluster(_Card):
     """A block of related controls, the WaveTone grouping, with a rule where kinds of control meet."""
 
     def __init__(self, name: str, spacing: int = 6):
         super().__init__()
         self.name = name
-        self.setObjectName("cluster")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
         self.body = QGridLayout()
         self.body.setContentsMargins(0, 0, 0, 0)
         self.body.setSpacing(spacing)
@@ -69,11 +89,17 @@ class Cluster(QWidget):
             self.add(slider, row=row)
 
 
+class _Rule(QWidget):
+    """A one-pixel rule between the kinds of control that share one block."""
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), _outline_colour(self.palette()))
+
+
 def separator() -> QWidget:
     """A vertical rule that tells apart the kinds of control sharing one block."""
-    rule = QWidget()
-    rule.setObjectName("separator")
-    rule.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+    rule = _Rule()
     rule.setFixedSize(1, 16)
     return rule
 
@@ -155,7 +181,6 @@ class ValueSlider(QWidget):
         self.caption = QLabel(caption)
         self.caption.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         self.value_label = QLabel()
-        self.value_label.setObjectName("sliderValue")
         self.value_label.setFixedWidth(self._value_width(minimum, maximum))
         self.value_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
 
@@ -218,11 +243,10 @@ def text_button(caption: str, tooltip: str, checkable: bool = False) -> QToolBut
     button.setCheckable(checkable)
     button.setAutoRaise(True)
     button.setFixedHeight(BUTTON_HEIGHT)
-    button.setObjectName("textButton")
     return button
 
 
-class TempoSuggestion(QWidget):
+class TempoSuggestion(_Card):
     """The tempo the analyser found, in a balloon under the BPM field.
 
     A suggestion is not worth a row of its own, and it is not worth resizing the field for either, so
@@ -236,8 +260,8 @@ class TempoSuggestion(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setObjectName("suggestion")
-        self.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        # it floats over the roll, so its own body has to hide what is behind it
+        self.setAutoFillBackground(True)
         self._bpm = 0.0
         self.label = QLabel()
         self.apply_button = icon_button("check", "Use this tempo")
@@ -438,13 +462,11 @@ class TransportBar(_Group):
         self.play_from_start.clicked.connect(self.play_from_start_requested)
         self.play_pause.clicked.connect(self.play_pause_requested)
         self.forward.clicked.connect(self.forward_requested)
-        for button in (self.rewind, self.stop, self.play_from_start, self.play_pause, self.forward):
-            button.setObjectName("playbackButton")
 
         self.position = QLabel("00:00.000")
-        self.position.setObjectName("position")
         self.position.setToolTip("Playback position")
-        self.position.setFixedWidth(84)
+        # a fixed width keeps the layout steady as the clock runs; the font is the desktop's to pick
+        self.position.setFixedWidth(QFontMetrics(self.position.font()).horizontalAdvance("00:00.000") + 6)
         self.position.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.speed = ValueSlider("Speed", 0.1, 2.0, 1.0, suffix="x", scale=100, step=0.05)

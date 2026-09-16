@@ -183,6 +183,22 @@ class NoteItem(QGraphicsRectItem):
         painter.restore()
 
 
+class _SelectionBox(QWidget):
+    """The rectangle dragged over the roll, in the accent the palette carries.
+
+    Painted, not styled: it belongs to the roll, which this app draws itself.
+    """
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        accent = self.palette().highlight().color()
+        fill = QColor(accent)
+        fill.setAlpha(40)
+        painter.fillRect(self.rect(), fill)
+        painter.setPen(accent)
+        painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
+
+
 class PianoRollView(QGraphicsView):
     """The roll: the note grid, the interaction with it and the drawn extras (spectrum, cursor)."""
 
@@ -243,9 +259,7 @@ class PianoRollView(QGraphicsView):
         self.setMouseTracking(True)
         self.setTransform(QTransform.fromScale(self._zoom_x, self._zoom_y))
 
-        self._rubber = QWidget(self.viewport())
-        self._rubber.setObjectName("rubber")
-        self._rubber.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        self._rubber = _SelectionBox(self.viewport())
         self._rubber.hide()
         self._rubber_origin = QPoint()
         self._initialized = False
