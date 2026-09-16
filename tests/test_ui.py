@@ -11,7 +11,17 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
-from PyQt6.QtGui import QColor, QFocusEvent, QFont, QImage, QKeyEvent, QMouseEvent, QPalette, QWheelEvent
+from PyQt6.QtGui import (
+    QColor,
+    QContextMenuEvent,
+    QFocusEvent,
+    QFont,
+    QImage,
+    QKeyEvent,
+    QMouseEvent,
+    QPalette,
+    QWheelEvent,
+)
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import (
     QApplication,
@@ -19,6 +29,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QLabel,
+    QMenu,
     QMessageBox,
     QSlider,
     QTabWidget,
@@ -118,6 +129,24 @@ def roll_mouse(
         window.view.mouseMoveEvent(event)
     else:
         window.view.mouseReleaseEvent(event)
+
+
+def roll_context_menu(window, scene_pos: QPointF) -> None:
+    """Open the roll's context menu at a scene position, as a real right click would."""
+    position = window.view.mapFromScene(scene_pos)
+    event = QContextMenuEvent(
+        QContextMenuEvent.Reason.Mouse,
+        position,
+        window.view.viewport().mapToGlobal(position),
+    )
+    QApplication.sendEvent(window.view.viewport(), event)
+
+
+def pick_menu(monkeypatch, data) -> None:
+    """Make the next context menu answer with the entry carrying `data`."""
+    monkeypatch.setattr(
+        QMenu, "exec", lambda self, *args, **kwargs: next((a for a in self.actions() if a.data() == data), None)
+    )
 
 
 def ruler_mouse(window, kind, x: float) -> None:
@@ -1376,20 +1405,72 @@ def test_deleting_the_selection_is_one_undo_step(window) -> None:
     window.view.clear_notes()
 
 
-def test_a_right_click_delete_can_be_undone(window) -> None:
+def test_the_note_menu_lists_the_other_channels_and_a_new_one(window, monkeypatch) -> None:
     window.edit.pen.click()
     window.view.set_channels((Channel(channel=0),))
     window.view.clear_notes()
-    window.view.add_note(69, 2.0, 2.0)
+    window.view.add_note(60, 2.0, 2.0, 0)
+    window.view.add_channel()
+    window.view.centerOn(QPointF(3.0, PITCH_MAX - 60 + 0.5))
+    seen: dict[str, list] = {}
+
+    def fake_exec(self, *args, **kwargs):
+        seen["entries"] = [(action.text(), action.data()) for action in self.actions() if not action.isSeparator()]
+        return None
+
+    monkeypatch.setattr(QMenu, "exec", fake_exec)
+    roll_context_menu(window, QPointF(3.0, PITCH_MAX - 60 + 0.5))
+    assert seen["entries"] == [(Channel(channel=1).label, 1), ("New channel", -1)]
+    assert [item.channel for item in window.view.notes()] == [0]  # and nothing moves until an entry is picked
+    window.view.clear_notes()
+
+
+def test_the_note_menu_leaves_a_locked_channel_out(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0), Channel(channel=1, lock=True)))
+    window.view.clear_notes()
+    window.view.add_note(60, 2.0, 2.0, 0)
+    window.view.centerOn(QPointF(3.0, PITCH_MAX - 60 + 0.5))
+
+    menu = window.view.channel_menu(QPointF(3.0, PITCH_MAX - 60 + 0.5))
+    assert [action.data() for action in menu.actions() if not action.isSeparator()] == [-1]
+    window.view.clear_notes()
+
+
+def test_a_note_moves_to_another_channel_from_the_menu(window, monkeypatch) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.add_note(60, 2.0, 2.0, 0)
+    window.view.add_channel()
+    window.view.centerOn(QPointF(3.0, PITCH_MAX - 60 + 0.5))
     window.view.undo_stack.clear()
 
-    row = float(PITCH_MAX - 69) + 0.5
-    scene_pos = QPointF(3.0, row)
-    roll_mouse(window, QEvent.Type.MouseButtonPress, scene_pos, button=Qt.MouseButton.RightButton)
-    roll_mouse(window, QEvent.Type.MouseButtonRelease, scene_pos, button=Qt.MouseButton.RightButton)
-    assert window.view.notes() == []
+    pick_menu(monkeypatch, 1)
+    roll_context_menu(window, QPointF(3.0, PITCH_MAX - 60 + 0.5))
+    assert [item.channel for item in window.view.notes()] == [1]
+    assert window.view.undo_stack.count() == 1
     window.view.undo()
-    assert [note.pitch for note in window.view.notes()] == [69]
+    assert [item.channel for item in window.view.notes()] == [0]
+    window.view.clear_notes()
+
+
+def test_a_note_moves_to_a_fresh_channel_in_one_step(window, monkeypatch) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.add_note(60, 2.0, 2.0, 0)
+    window.view.centerOn(QPointF(3.0, PITCH_MAX - 60 + 0.5))
+    window.view.undo_stack.clear()
+
+    pick_menu(monkeypatch, -1)
+    roll_context_menu(window, QPointF(3.0, PITCH_MAX - 60 + 0.5))
+    assert [channel.channel for channel in window.view.channels] == [0, 1]
+    assert [item.channel for item in window.view.notes()] == [1]
+    assert window.view.undo_stack.count() == 1  # creating the channel and the move are one step
+    window.view.undo()
+    assert [channel.channel for channel in window.view.channels] == [0]
+    assert [item.channel for item in window.view.notes()] == [0]
     window.view.clear_notes()
 
 
@@ -3049,9 +3130,8 @@ def test_a_locked_channel_cannot_be_edited(window) -> None:
     scene_pos = QPointF(3.0, PITCH_MAX - 60 + 0.5)
     window.view.set_channel_field(0, lock=True)
 
-    roll_mouse(window, QEvent.Type.MouseButtonPress, scene_pos, button=Qt.MouseButton.RightButton)
-    roll_mouse(window, QEvent.Type.MouseButtonRelease, scene_pos, button=Qt.MouseButton.RightButton)
-    assert window.view.notes() == [note]  # a right click does not delete on a locked channel
+    assert window.view.channel_menu(scene_pos) is None  # the lock leaves nothing to move
+    assert window.view.notes() == [note]
 
     draw_note(window, QPointF(6.0, 30.0))  # and the pen stays silent on it too
     assert window.view.notes() == [note]

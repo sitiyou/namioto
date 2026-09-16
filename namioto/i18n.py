@@ -268,12 +268,12 @@ CATALOGS: dict[str, dict[str, str]] = {
         "{document} — Namioto — {notes} notes": "{document} — Namioto — {notes} 个音符",
         "space: play or pause  |  click (outside edit mode): move the playhead  |  "
         "pen: drag an empty row to draw  |  select: drag a box, ctrl-click to add  |  "
-        "shift drag a note: trim its start (left half) or end (right half)  |  right click: delete  |  "
+        "shift drag a note: trim its start (left half) or end (right half)  |  right click: move to a channel  |  "
         "ctrl C: copy the selection, ctrl V: paste it at the playhead  |  "
         "ctrl Z: undo, ctrl shift Z: redo  |  "
         "middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y  |  gear: settings": "空格：播放或暂停  |  点击（编辑模式之外）：移动播放头  |  "
         "画笔：在空白行拖动绘制  |  选择：拖框选择，Ctrl 点击加选  |  "
-        "Shift 拖动音符：修剪起点（左半）或终点（右半）  |  右键：删除  |  "
+        "Shift 拖动音符：修剪起点（左半）或终点（右半）  |  右键：移入其他通道  |  "
         "Ctrl+C：复制选区，Ctrl+V：在播放头处粘贴  |  "
         "Ctrl+Z：撤销，Ctrl+Shift+Z：重做  |  "
         "中键拖动：平移  |  Ctrl 滚轮：横向缩放，Ctrl+Shift 滚轮：纵向缩放  |  齿轮：设置",

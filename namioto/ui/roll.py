@@ -14,11 +14,13 @@ from PyQt6.QtWidgets import (
     QGraphicsRectItem,
     QGraphicsScene,
     QGraphicsView,
+    QMenu,
     QWidget,
 )
 
 from namioto.channels import Channel, free_channel
 from namioto.document import MIN_DURATION, PITCH_COUNT, PITCH_MAX, PITCH_MIN, Document, Note
+from namioto.i18n import tr
 from namioto.interaction import Interaction, Tool
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.ui import theme
@@ -43,6 +45,7 @@ EDIT_DIM = 0.65  # the spectrum steps back while editing so the notes stand out 
 MIN_GRID_SPACING = 9.0
 CLICK_SLOP_PX = 4
 HISTORY_LIMIT = 50  # snapshots of the whole document, so the depth trades memory for how far back undo goes
+NEW_CHANNEL = -1  # the channel menu's "make one" entry, since no channel number is negative
 RULER_TIME_ROW = 24
 RULER_HEIGHT = 46
 TIME_LABEL_SPACING = 84.0
@@ -357,13 +360,6 @@ class PianoRollView(QGraphicsView):
             self._scene.removeItem(item)
         self._items.clear()
 
-    def _remove_item(self, item: NoteItem) -> None:
-        with self._edit("Delete note"):
-            self.document.remove_note(item.note)
-            self._drop_item(item)
-            self.notes_changed.emit()
-            self.view_changed.emit()
-
     # --- history ----------------------------------------------------------
 
     @property
@@ -472,12 +468,13 @@ class PianoRollView(QGraphicsView):
         return color
 
     def _sync_channel_visuals(self) -> None:
-        """Body colour, bevel and visibility all come from the channel list; the notes only show while
-        editing, the way WaveTone keeps its graph to the spectrum outside note edit mode."""
+        """Body colour, bevel, stacking and visibility all come from the channel list; the notes only
+        show while editing, the way WaveTone keeps its graph to the spectrum outside note edit mode."""
         for note in self.notes():
             note.fill, note.edge_light, note.edge_dark = theme.note_shades(self._channel_color(note.channel))
             channel = self._channel(note.channel)
             note.setVisible(self.edit_mode and (channel.visible if channel else True))
+            note.setZValue(note.channel)
 
     def set_channels(self, channels) -> None:
         """Replace the channel list in one go, the way a project hands it over.
@@ -535,6 +532,34 @@ class PianoRollView(QGraphicsView):
         if number in {channel.channel for channel in self.channels} and number != self.active_channel:
             self.active_channel = number
             self.active_channel_changed.emit(number)
+
+    def move_selection_to_channel(self, number: int | None) -> bool:
+        """File the selected notes under a channel; None makes a fresh one for them instead.
+
+        Only what the lock leaves alone moves, the notes keep their place and take the target's
+        colour and stacking order, and creating the channel is part of the same undo step.
+        """
+        if not self.edit_mode:
+            return False
+        selection = [item for item in self.selected_notes() if not self._locked(item.channel)]
+        if not selection:
+            return False
+        if number is not None and self._locked(number):
+            return False
+        with self._edit("Move notes to channel"):
+            if number is None:
+                created = self.add_channel()
+                if created is None:
+                    return False
+                number = created.channel
+            elif self._channel(number) is None:
+                return False
+            for item in selection:
+                item.note.channel = number
+            self._sync_channel_visuals()
+            self.notes_changed.emit()
+            self.view_changed.emit()
+        return True
 
     def _locked(self, number: int) -> bool:
         channel = self._channel(number)
@@ -857,6 +882,42 @@ class PianoRollView(QGraphicsView):
         for note in self.notes():
             note.setSelected(False)
 
+    def channel_menu(self, scene_pos: QPointF) -> QMenu | None:
+        """The menu that moves the selected notes onto another channel, a fresh one included.
+
+        A right click over an unselected note selects it first, so a note can be filed without a
+        trip to the select tool. Nothing comes back outside edit mode or with nothing to move.
+        """
+        if not self.edit_mode:
+            return None
+        note = self._note_at(scene_pos)
+        if note is not None and not note.isSelected() and not self._locked(note.channel):
+            self._clear_selection()
+            note.setSelected(True)
+        selection = [item for item in self.selected_notes() if not self._locked(item.channel)]
+        if not selection:
+            return None
+        current = {item.channel for item in selection}
+        menu = QMenu(self)
+        others = [channel for channel in self.channels if channel.channel not in current and not channel.lock]
+        for channel in others:
+            menu.addAction(channel.label).setData(channel.channel)
+        if others:
+            menu.addSeparator()
+        new = menu.addAction(tr("New channel"))
+        new.setData(NEW_CHANNEL)
+        new.setEnabled(free_channel(self.channels) is not None)
+        return menu
+
+    def contextMenuEvent(self, event) -> None:
+        menu = self.channel_menu(self.mapToScene(event.pos()))
+        if menu is None:
+            return
+        action = menu.exec(event.globalPos())
+        if action is not None:
+            number = action.data()
+            self.move_selection_to_channel(None if number == NEW_CHANNEL else number)
+
     def mouseDoubleClickEvent(self, event) -> None:
         # Qt files the second of two quick clicks as a double-click, and that press has to seek and
         # audition like any other: the roll has no double-click gesture for it to mean instead
@@ -887,9 +948,8 @@ class PianoRollView(QGraphicsView):
                 return
 
         if event.button() == Qt.MouseButton.RightButton:
-            note = self._note_at(scene_pos)
-            if note is not None and self.edit_mode and not self._locked(note.channel):
-                self._remove_item(note)
+            # the context menu is what a right click opens; without this the scene would drop the
+            # selection before `contextMenuEvent` ever sees it
             return
 
         if event.button() != Qt.MouseButton.LeftButton:

@@ -1162,7 +1162,8 @@ class MainWindow(QMainWindow):
             i18n.tr(
                 "space: play or pause  |  click (outside edit mode): move the playhead  |  "
                 "pen: drag an empty row to draw  |  select: drag a box, ctrl-click to add  |  "
-                "shift drag a note: trim its start (left half) or end (right half)  |  right click: delete  |  "
+                "shift drag a note: trim its start (left half) or end (right half)  |  "
+                "right click: move to a channel  |  "
                 "ctrl C: copy the selection, ctrl V: paste it at the playhead  |  "
                 "ctrl Z: undo, ctrl shift Z: redo  |  "
                 "middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y  |  gear: settings"
