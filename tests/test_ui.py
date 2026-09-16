@@ -3286,6 +3286,55 @@ def test_opening_a_midi_file_imports_it(own_window, monkeypatch, tmp_path) -> No
     assert [note.pitch for note in own_window.view.notes()] == [60]
 
 
+def test_the_open_dialog_shows_every_file_type_by_default(own_window, monkeypatch) -> None:
+    shown: list[str] = []
+
+    def fake(_parent, _caption, _directory, filters, *_args, **_kwargs):
+        shown.append(filters)
+        return ("", "")
+
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", fake)
+    own_window._on_open()
+
+    assert shown[0].split(";;")[0] == "All files (*)"
+
+
+def test_opening_an_audio_file_analyses_it(own_window, monkeypatch, tmp_path) -> None:
+    path = tmp_path / "song.flac"
+    path.write_bytes(b"")
+    fake_loaders(monkeypatch)
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(path), ""))
+
+    own_window._on_open()
+
+    assert own_window.audio_path == str(path)
+    assert own_window.project_path is None
+
+
+def test_the_command_line_takes_audio_midi_and_projects_alike(qt_app, monkeypatch, tmp_path) -> None:
+    fake_loaders(monkeypatch)
+    audio = tmp_path / "clip.flac"
+    audio.write_bytes(b"")
+    midi_path = tmp_path / "tune.mid"
+    midi.write(midi_path, (Channel(channel=0),), (project.Note(0.5, 0.5, 60, 0),), 120.0)
+    project_path = tmp_path / "work.nto"
+    project.save(
+        project.Project(values=store.project_values(store.Settings()), notes=(project.Note(1.0, 0.5, 62),)),
+        project_path,
+    )
+
+    opened = [MainWindow(audio=str(audio)), MainWindow(audio=str(midi_path)), MainWindow(audio=str(project_path))]
+    try:
+        assert opened[0].audio_path == str(audio)
+        assert [note.pitch for note in opened[1].view.notes()] == [60]
+        assert opened[2].project_path == project_path
+        assert [note.pitch for note in opened[2].view.notes()] == [62]
+    finally:
+        for window in opened:
+            window.project_dirty = False
+            window.close()
+
+
 def test_the_export_button_writes_a_midi_file(own_window, monkeypatch, tmp_path) -> None:
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0),))

@@ -71,10 +71,12 @@ overwrite the program's own defaults, which are what the next file starts from.
 
 ## MIDI files
 
-`Open` (`Ctrl+O`) takes a `.mid`/`.midi` file as well as a project, and `Export MIDI` writes the roll
-out for a DAW, a score program or a synth, saving the project separately. A MIDI is read by channel:
-every MIDI channel with notes in it becomes one channel here, carrying its instrument and channel
-volume, and one track chunk holding several channels is read as several. A channel carries no name -
+`Open` (`Ctrl+O`) takes audio files, `.mid`/`.midi` files and `.nto` projects alike — the suffix
+picks whether the file is analysed behind the roll, imported as notes, or opened as a project — and
+`Export MIDI` writes the roll out for a DAW, a score program or a synth, saving the project
+separately. A MIDI is read by channel: every MIDI channel with notes in it becomes one channel here,
+carrying its instrument and channel volume, and one track chunk holding several channels is read as
+several. A channel carries no name -
 a name belongs to a track chunk, which may hold any number of channels - so names live in the project
 file only, and none is read from or written to MIDI. Importing into a window that already has audio
 loaded keeps the audio, the view and the snap grid, which is how a transcription made elsewhere is

@@ -50,6 +50,24 @@ from namioto.ui.transcription_dialog import TranscriptionDialog
 POSITION_INTERVAL_MS = 40
 SPEED_SETTLE_MS = 100
 PROJECT_FILTER = f"Namioto project (*{project.SUFFIX})"
+# common libsndfile formats; anything rarer is reachable through All files
+AUDIO_SUFFIXES = (
+    ".wav",
+    ".wave",
+    ".flac",
+    ".mp3",
+    ".ogg",
+    ".oga",
+    ".opus",
+    ".aiff",
+    ".aif",
+    ".aifc",
+    ".au",
+    ".caf",
+    ".w64",
+    ".rf64",
+)
+AUDIO_FILTER = f"Audio file ({' '.join(f'*{suffix}' for suffix in AUDIO_SUFFIXES)})"
 MIDI_FILTER = f"MIDI file ({' '.join(f'*{suffix}' for suffix in midi.SUFFIXES)})"
 
 
@@ -259,12 +277,8 @@ class MainWindow(QMainWindow):
         self._restore_session()
         if audio is None:
             self._show_hint()
-        elif project.looks_like_project(audio):
-            self.load_project(audio)
-        elif midi.looks_like_midi(audio):
-            self.import_midi(audio)
         else:
-            self.load_audio(audio)
+            self.open_file(audio)
         self._update_status()
         self.view.setFocus()  # the roll holds the keyboard, so the bar opens without a focus ring on its first button
 
@@ -569,15 +583,25 @@ class MainWindow(QMainWindow):
             return
         chosen, _filter = QFileDialog.getOpenFileName(
             self,
-            "Open project",
+            "Open",
             self._start_directory(),
-            f"{PROJECT_FILTER};;{MIDI_FILTER};;All files (*)",
+            f"All files (*);;{PROJECT_FILTER};;{AUDIO_FILTER};;{MIDI_FILTER}",
         )
         if chosen:
-            if midi.looks_like_midi(chosen):
-                self.import_midi(chosen)
-            else:
-                self.load_project(chosen)
+            self.open_file(chosen)
+
+    def open_file(self, path: str | Path) -> bool:
+        """Open a file by what it is - a project, a MIDI file to import, or audio to analyse.
+
+        The command line and the Open dialog both come through here, so a file behaves the same
+        whichever way it arrives.
+        """
+        if project.looks_like_project(path):
+            return self.load_project(path)
+        if midi.looks_like_midi(path):
+            return self.import_midi(path)
+        self.load_audio(str(path))
+        return True
 
     def _on_save(self) -> bool:
         if self.project_path is None:
