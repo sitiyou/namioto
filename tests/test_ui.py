@@ -42,11 +42,13 @@ from namioto.ui.roll import (
     MIN_DURATION,
     NOTE_INSET,
     PITCH_MAX,
+    PITCH_MIN,
     RULER_HEIGHT,
     RULER_TIME_ROW,
     SNAP_CHOICES,
     SPECTRUM_TOP,
     PianoRollView,
+    is_black_key,
 )
 from namioto.ui.settings_dialog import SettingsDialog
 from namioto.ui.spectrogram import SpectrumImage, SpectrumLoader
@@ -365,12 +367,32 @@ def test_keyboard_rows_line_up_with_the_roll(window) -> None:
         if any(view_image.pixelColor(x, y) == theme.canvas().row_white for y in range(view_image.height()))
     )
     white_keys = [
-        y for y in range(keyboard_image.height()) if keyboard_image.pixelColor(2, y) == theme.canvas().key_white
+        y for y in range(keyboard_image.height()) if keyboard_image.pixelColor(2, y) == theme.CANVAS["light"].key_white
     ]
     white_rows = [y for y in range(view_image.height()) if view_image.pixelColor(column, y) == theme.canvas().row_white]
     offset = keyboard.mapToGlobal(QPoint(0, 0)).y() - window.view.mapToGlobal(QPoint(0, 0)).y()
     assert white_keys and white_rows
     assert [y + offset for y in white_keys] == white_rows
+
+
+def test_the_black_keys_span_the_whole_keyboard(window) -> None:
+    window.view.set_hover_pitch(None)
+    keyboard = window.keyboard
+    image = keyboard.grab().toImage()
+    origin = keyboard.origin().y()
+    for pitch in range(PITCH_MIN, PITCH_MAX + 1):
+        if not is_black_key(pitch):
+            continue
+        row = PITCH_MAX - pitch
+        top = origin + window.view.mapFromScene(QPointF(0.0, float(row))).y()
+        bottom = origin + window.view.mapFromScene(QPointF(0.0, float(row) + 1.0)).y()
+        if top < 0 or bottom > image.height():
+            continue
+        y = (top + bottom) // 2
+        black = theme.CANVAS["light"].key_black
+        assert all(image.pixelColor(x, y) == black for x in range(keyboard.width()))
+        return
+    raise AssertionError("no black key is fully on screen")
 
 
 def test_the_division_button_flips_between_beats_and_seconds(window) -> None:

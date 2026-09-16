@@ -3,13 +3,16 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QIcon, QPalette
 from PyQt6.QtWidgets import QApplication
 
+from namioto.spectrum import NOTE_COUNT, NoteSpectrum
 from namioto.ui import icons, theme
 from namioto.ui.app import MainWindow
+from namioto.ui.roll import RULER_HEIGHT, PianoKeyboard, PianoRollView, TimelineRuler
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -45,6 +48,81 @@ def test_the_canvas_follows_the_palette_the_desktop_handed_out(qt_app) -> None:
             assert theme.canvas() is theme.CANVAS[name]
     finally:
         qt_app.setPalette(colours)
+
+
+def a_spectrum() -> NoteSpectrum:
+    return NoteSpectrum(
+        table=np.zeros((2, NOTE_COUNT), dtype=np.float32),
+        frame_ms=50.0,
+        sample_rate=44100,
+        fft_points=8192,
+        hop=2205,
+        a4=440.0,
+        sigma=1.0,
+    )
+
+
+def test_the_roll_uses_the_fixed_dark_canvas_once_a_spectrum_covers_it(qt_app) -> None:
+    view = PianoRollView()
+    saved = qt_app.palette()
+    try:
+        palette = qt_app.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor("#ffffff"))
+        qt_app.setPalette(palette)
+        assert theme.apply(qt_app) == "light"
+        assert view.canvas() is theme.CANVAS["light"]
+
+        view.set_spectrum(a_spectrum())
+        assert view.canvas() is theme.CANVAS["dark"]
+
+        view.set_spectrum(None)
+        assert view.canvas() is theme.CANVAS["light"]
+    finally:
+        qt_app.setPalette(saved)
+        view.close()
+
+
+def test_the_time_ruler_keeps_the_palette_canvas_over_a_spectrum(qt_app) -> None:
+    view = PianoRollView()
+    ruler = TimelineRuler(view)
+    ruler.resize(400, RULER_HEIGHT)
+    saved = qt_app.palette()
+    try:
+        palette = qt_app.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor("#ffffff"))
+        qt_app.setPalette(palette)
+        assert theme.apply(qt_app) == "light"
+        view.set_spectrum(a_spectrum())
+
+        image = ruler.grab().toImage()
+        tones = {image.pixelColor(x, y).name() for x in range(image.width()) for y in range(image.height())}
+        assert theme.CANVAS["light"].panel.name() in tones
+        assert theme.CANVAS["dark"].panel.name() not in tones
+    finally:
+        qt_app.setPalette(saved)
+        ruler.close()
+        view.close()
+
+
+def test_the_keyboard_keeps_one_fixed_canvas(qt_app) -> None:
+    view = PianoRollView()
+    keyboard = PianoKeyboard(view)
+    keyboard.resize(66, 300)
+    saved = qt_app.palette()
+    try:
+        palette = qt_app.palette()
+        palette.setColor(QPalette.ColorRole.Window, QColor("#202020"))
+        qt_app.setPalette(palette)
+        assert theme.apply(qt_app) == "dark"
+
+        image = keyboard.grab().toImage()
+        tones = {image.pixelColor(x, y).name() for x in range(image.width()) for y in range(image.height())}
+        assert theme.CANVAS["light"].key_white.name() in tones
+        assert theme.CANVAS["dark"].key_white.name() not in tones
+    finally:
+        qt_app.setPalette(saved)
+        keyboard.close()
+        view.close()
 
 
 def test_the_style_setting_puts_the_style_it_names_in_force(qt_app) -> None:

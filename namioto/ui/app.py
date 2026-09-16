@@ -437,8 +437,9 @@ class MainWindow(QMainWindow):
     def _apply_theme(self) -> None:
         """Dress the window the way the settings ask, and follow the colours the desktop hands out.
 
-        The colour the roll, the ruler and the keys draw with is read while they paint, so a switch
-        is those three painting again; everything else is the style's to draw.
+        The colour the roll and the ruler draw with is read while they paint, so a switch is those
+        two painting again; the keyboard keeps its fixed colours, and everything else is the
+        style's to draw.
         """
         name = theme.apply(theme.running_app(), self.settings.appearance.style)
         if name == self._theme:
@@ -446,7 +447,6 @@ class MainWindow(QMainWindow):
         self._theme = name
         self.view.refresh()
         self.ruler.update()
-        self.keyboard.update()
 
     def _on_color_scheme(self, _scheme) -> None:
         """The desktop switched between light and dark, so the canvas follows it."""

@@ -603,6 +603,11 @@ class PianoRollView(QGraphicsView):
         self.viewport().update()
         self.view_changed.emit()
 
+    def canvas(self) -> theme.Canvas:
+        """The colours the roll paints with: the fixed dark set once a spectrum covers it, else the
+        desktop's own light or dark."""
+        return theme.canvas("dark") if self.spectrum is not None else theme.canvas()
+
     @property
     def interaction(self) -> Interaction:
         return self._interaction
@@ -745,7 +750,7 @@ class PianoRollView(QGraphicsView):
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
         first_row = max(0, int(math.floor(rect.top())))
         last_row = min(PITCH_COUNT, int(math.ceil(rect.bottom())) + 1)
-        colors = theme.canvas()
+        colors = self.canvas()
 
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)  # keeps 1px grid lines on one pixel
@@ -782,7 +787,7 @@ class PianoRollView(QGraphicsView):
     def _draw_cursor(self, painter: QPainter, rect: QRectF) -> None:
         """The rows highlighted under the mouse; the playback position goes over the notes."""
         painter.setPen(Qt.PenStyle.NoPen)
-        colors = theme.canvas()
+        colors = self.canvas()
         # the spectrum is dark in either canvas, so the row over it takes the band that shows there
         band = colors.spectrum_hover_band if self.spectrum is not None else colors.hover_band
         painter.setBrush(band)
@@ -799,7 +804,7 @@ class PianoRollView(QGraphicsView):
             return
         painter.save()
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-        painter.setPen(QPen(theme.canvas().playhead, 0))
+        painter.setPen(QPen(self.canvas().playhead, 0))
         painter.drawLine(QPointF(x, rect.top()), QPointF(x, rect.bottom()))
         painter.restore()
 
@@ -1216,7 +1221,7 @@ class PianoKeyboard(_ViewportStrip):
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
-        colors = theme.canvas()
+        colors = theme.canvas("light")  # a piano's keys stay white, whatever the desktop or the spectrum
         painter.fillRect(self.rect(), colors.panel)
         viewport = self.view.viewport()
         top_offset = self.origin().y()
@@ -1234,11 +1239,8 @@ class PianoKeyboard(_ViewportStrip):
             bottom = top_offset + self.view.mapFromScene(QPointF(0.0, float(row) + 1.0)).y()
             if bottom < top_offset or top > viewport.height() + top_offset:
                 continue
-            if is_black_key(pitch):
-                width = int(self.width() * 0.62)
-                painter.fillRect(QRect(0, top, width, bottom - top), black)
-            else:
-                painter.fillRect(QRect(0, top, self.width(), bottom - top), white)
+            color = black if is_black_key(pitch) else white
+            painter.fillRect(QRect(0, top, self.width(), bottom - top), color)
             if pitch in highlighted:
                 painter.fillRect(QRect(0, top, self.width(), bottom - top), colors.hover_key)
             if pitch % 12 == 0:
