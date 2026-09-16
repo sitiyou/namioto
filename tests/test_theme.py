@@ -136,6 +136,17 @@ def test_the_style_setting_puts_the_style_it_names_in_force(qt_app) -> None:
     assert qt_app.style().objectName() == theme.platform_style(), "an empty name puts the desktop's back"
 
 
+def test_an_override_does_not_become_the_remembered_desktop_style(qt_app, monkeypatch) -> None:
+    theme.apply_style("Fusion")  # stand in for the style the desktop handed out
+    monkeypatch.setattr(theme, "_desktop_style", "")
+    assert qt_app.style().objectName() == "fusion"
+
+    theme.apply_style("Windows")
+
+    assert theme.platform_style() == "fusion", "the desktop's own, not the style just put in force"
+    theme.apply_style("")
+
+
 def test_an_icon_takes_its_colours_from_the_palette_in_force(qt_app) -> None:
     play = icons.icon("play")  # built before any palette was applied, and still follows it
 

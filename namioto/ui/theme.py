@@ -164,7 +164,8 @@ def apply_style(name: str = "") -> None:
     no style for is ignored, the way Qt ignores one it cannot find.
     """
     app = running_app()
-    wanted = name or platform_style()
+    desktop = platform_style()  # remembered before a choice of ours replaces it
+    wanted = name or desktop
     if wanted == app.style().objectName():
         return
     style = QStyleFactory.create(wanted)
