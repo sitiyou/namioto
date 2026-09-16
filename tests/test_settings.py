@@ -216,6 +216,7 @@ def test_only_the_settings_without_a_control_keep_a_row() -> None:
         ("analysis", "t_num"),
         ("analysis", "fft_points"),
         ("analysis", "a4"),
+        ("general", "auto_save"),
         ("general", "language"),
         ("general", "style"),
         ("tempo", "estimator"),

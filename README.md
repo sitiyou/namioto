@@ -104,9 +104,11 @@ since a file whose notes start before that bar was never WaveTone's and is read 
 The gear at the right end of the Mix row opens the settings window, and it is short on purpose: it
 holds only what has no control in the bars - the analysis parameters (channels, frames per second,
 FFT size, A4), the two windows the beat tracker fits, **General** (the interface **Language**, where
-the default `Follow system` takes the machine's own and a change takes effect on the next run, and
-**Style**, the widget style that draws the window) and **WaveTone compatibility** - a page per
-group, with the beat tracker's tuning under an `ADVANCED` heading. `Restore defaults` puts everything
+the default `Follow system` takes the machine's own and a change takes effect on the next run,
+**Auto-save**, off by default, which writes the open project once editing stops and when the window
+loses focus, and **Style**, the widget style that draws the window) and **WaveTone compatibility** -
+a page per group, with the beat tracker's tuning under an `ADVANCED` heading. `Restore defaults`
+puts everything
 back, and `Apply` lets the change go live without closing the window. Analysis parameters reach the
 spectrum the next time a file is loaded, and the Analysis page has a `Re-analyse now` button for
 jumping the gun.

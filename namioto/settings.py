@@ -206,6 +206,13 @@ SECTIONS: tuple[Section, ...] = (
                 labels=LANGUAGE_LABELS,
             ),
             Field(
+                "auto_save",
+                "bool",
+                False,
+                "Auto-save",
+                "Save the open project once editing stops, and when the window loses focus",
+            ),
+            Field(
                 "style",
                 "style",
                 "",

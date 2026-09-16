@@ -2841,6 +2841,86 @@ def test_drawing_marks_the_document_that_has_a_name(own_window) -> None:
     assert own_window._document_name() == "Untitled*"  # nothing to ask about until it has a file
 
 
+def test_auto_save_is_off_until_it_is_turned_on(own_window, tmp_path) -> None:
+    path = tmp_path / "song.nto"
+    own_window.project_path = path
+    own_window.project_dirty = False
+
+    own_window.view.set_notes([(64, 0.0, 1.0)])
+
+    assert own_window.settings.general.auto_save is False
+    assert own_window.project_dirty is True
+    assert own_window.autosave_timer.isActive() is False
+    assert path.exists() is False
+
+
+def test_auto_save_writes_the_project_once_editing_stops(own_window, tmp_path) -> None:
+    own_window.settings.general.auto_save = True
+    path = tmp_path / "song.nto"
+    assert own_window.save_project(path) is True
+
+    own_window.view.set_notes([(64, 0.0, 1.0)])
+    assert own_window.project_dirty is True
+    assert own_window.autosave_timer.interval() == 3000
+    assert own_window.autosave_timer.isActive() is True
+
+    own_window.autosave_timer.stop()
+    own_window._autosave()
+
+    assert own_window.project_dirty is False
+    assert project.load(path).notes == (project.Note(0.0, 0.5, 64),)
+
+
+def test_losing_focus_writes_the_project_too(own_window, tmp_path, monkeypatch) -> None:
+    own_window.settings.general.auto_save = True
+    path = tmp_path / "song.nto"
+    own_window.save_project(path)
+    own_window.view.set_notes([(60, 0.0, 1.0)])
+    own_window.autosave_timer.stop()
+
+    monkeypatch.setattr(own_window, "isActiveWindow", lambda: False)
+    own_window.changeEvent(QEvent(QEvent.Type.ActivationChange))
+
+    assert own_window.project_dirty is False
+    assert project.load(path).notes == (project.Note(0.0, 0.5, 60),)
+
+
+def test_auto_save_leaves_a_document_without_a_file_alone(own_window) -> None:
+    own_window.settings.general.auto_save = True
+    own_window.view.set_notes([(60, 0.0, 1.0)])
+    assert own_window.project_path is None
+
+    own_window.autosave_timer.stop()
+    own_window._autosave()
+
+    assert own_window.project_dirty is True  # a sketch waits for Save As
+
+
+def test_a_modal_dialog_holds_auto_save_back(own_window, tmp_path, monkeypatch) -> None:
+    own_window.settings.general.auto_save = True
+    path = tmp_path / "song.nto"
+    own_window.save_project(path)
+    own_window.view.set_notes([(60, 0.0, 1.0)])
+    own_window.autosave_timer.stop()
+
+    monkeypatch.setattr(QApplication, "activeModalWidget", staticmethod(lambda: object()))
+    own_window._autosave()
+
+    assert own_window.project_dirty is True
+    assert project.load(path).notes == ()  # the prompt, not the timer, is what decides
+
+
+def test_moving_a_note_counts_as_a_change(own_window) -> None:
+    note = own_window.view.add_note(69, 2.0, 2.0)
+    own_window.project_dirty = False
+
+    own_window.view._begin_gesture("Move notes")
+    note.set_range(3.0, 69)
+    own_window.view._commit_gesture()
+
+    assert own_window.project_dirty is True
+
+
 def test_unsaved_notes_are_asked_about_once(own_window, monkeypatch) -> None:
     asked: list[tuple] = []
 

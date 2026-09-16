@@ -12,7 +12,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QByteArray, QLibraryInfo, QTimer, QTranslator, pyqtSignal
+from PyQt6.QtCore import QByteArray, QEvent, QLibraryInfo, QTimer, QTranslator, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
@@ -49,6 +49,7 @@ from namioto.ui.transcription_dialog import TranscriptionDialog
 
 POSITION_INTERVAL_MS = 40
 SPEED_SETTLE_MS = 100
+AUTOSAVE_DELAY_MS = 3000
 # common libsndfile formats; anything rarer is reachable through All files
 AUDIO_SUFFIXES = (
     ".wav",
@@ -204,6 +205,10 @@ class MainWindow(QMainWindow):
         self.speed_timer.setSingleShot(True)
         self.speed_timer.setInterval(SPEED_SETTLE_MS)
         self.speed_timer.timeout.connect(self._apply_speed)
+        self.autosave_timer = QTimer(self)
+        self.autosave_timer.setSingleShot(True)
+        self.autosave_timer.setInterval(AUTOSAVE_DELAY_MS)
+        self.autosave_timer.timeout.connect(self._autosave)
 
         corner = QWidget()
         corner.setFixedSize(self.keyboard.width(), self.ruler.height())
@@ -586,10 +591,28 @@ class MainWindow(QMainWindow):
     def _mark_dirty(self, *_args) -> None:
         """What a save would otherwise lose: the notes, the tempo and the audio. The view and the
         listening values are written with a project, but do not mark it as changed."""
-        if self._loading or self.project_dirty:
+        if self._loading:
             return
-        self.project_dirty = True
-        self._update_status()
+        if not self.project_dirty:
+            self.project_dirty = True
+            self._update_status()
+        if self.settings.general.auto_save:
+            self.autosave_timer.start()
+
+    def _autosave(self) -> None:
+        """Write the open project out once editing stops, and when the window loses focus.
+
+        Only a document that already has a file is written: a sketch with no name waits for Save As.
+        A modal dialog is asking something of its own, so the window losing focus to it is not a
+        reason to write - the save-on-close prompt would otherwise answer itself.
+        """
+        if not self.settings.general.auto_save or self._loading:
+            return
+        if not self.project_dirty or self.project_path is None:
+            return
+        if QApplication.activeModalWidget() is not None:
+            return
+        self.save_project(self.project_path)
 
     def _start_directory(self) -> str:
         """Where a file dialog opens: the folder of the project in use, else the last one opened."""
@@ -693,6 +716,7 @@ class MainWindow(QMainWindow):
             self.settings_store.apply(self.settings, save=False)
             self.project_path = Path(path)
             self.project_dirty = False
+            self.autosave_timer.stop()
             missing = self._open_audio(project.resolve_audio(self.project_path, opened.audio))
             per_beat = self.view.seconds_per_beat  # scene units are beats, the file keeps seconds
             self.view.set_channels(opened.channels)
@@ -735,6 +759,7 @@ class MainWindow(QMainWindow):
             return False
         self.project_path = target
         self.project_dirty = False
+        self.autosave_timer.stop()
         store.set_value(self.settings, "paths", "last_audio_dir", str(target.parent))
         self.settings_store.touch()
         self._update_status()
@@ -904,10 +929,16 @@ class MainWindow(QMainWindow):
         self.transport.suggestion.hide()
         self._show_position()
 
+    def changeEvent(self, event) -> None:
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.ActivationChange and not self.isActiveWindow():
+            self._autosave()
+
     def closeEvent(self, event) -> None:
         if not self._confirm_discard():
             event.ignore()
             return
+        self.autosave_timer.stop()
         self._remember_configuration()
         self._remember_session()
         self.settings_store.flush()

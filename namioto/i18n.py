@@ -49,6 +49,8 @@ CATALOGS: dict[str, dict[str, str]] = {
         "Style": "样式",
         "Which widget style draws the window; the desktop's own unless another one is picked": "绘制窗口的控件样式；未选择时使用桌面自身的样式",
         "Follow system": "跟随系统",
+        "Auto-save": "自动保存",
+        "Save the open project once editing stops, and when the window loses focus": "停止编辑后，以及窗口失去焦点时，自动保存已打开的工程",
         "Channels": "声道",
         "Which channels the analysis reads": "分析读取哪些声道",
         "Frames/s": "帧/秒",

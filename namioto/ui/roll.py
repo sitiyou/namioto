@@ -387,9 +387,12 @@ class PianoRollView(QGraphicsView):
             active_channel=self.active_channel,
         )
 
-    def _push(self, before: _RollState, after: _RollState, text: str) -> None:
-        if _state_data(before) != _state_data(after):
-            self._stack.push(_RollEdit(self, before, after, text))
+    def _push(self, before: _RollState, after: _RollState, text: str) -> bool:
+        """Record one step, and say whether it changed anything worth a step."""
+        if _state_data(before) == _state_data(after):
+            return False
+        self._stack.push(_RollEdit(self, before, after, text))
+        return True
 
     @contextmanager
     def _edit(self, text: str):
@@ -417,7 +420,8 @@ class PianoRollView(QGraphicsView):
             return
         self._gesture_before = None
         self._gesture_text = ""
-        self._push(before, self._capture(), text)
+        if self._push(before, self._capture(), text):
+            self.notes_changed.emit()  # a move or a trim is a change of the notes like any other
 
     def _restore_state(self, state: _RollState) -> None:
         """Put a snapshot back in one rebuild, selecting the same notes by position again.
