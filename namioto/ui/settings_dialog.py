@@ -128,6 +128,9 @@ def field_editor(value: Any, field: Field) -> tuple[QWidget, Callable[[], Any], 
         widget.setKeyboardTracking(False)
     elif field.kind == "text":
         widget = QLineEdit()
+    elif field.kind == "secret":
+        widget = QLineEdit()
+        widget.setEchoMode(QLineEdit.EchoMode.Password)
     else:
         raise TypeError(f"no editor for a {field.kind} field")
     _write(widget, value)

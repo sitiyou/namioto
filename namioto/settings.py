@@ -165,7 +165,7 @@ class Field:
     """One setting: its default, how to read it back, and how the dialog shows it."""
 
     name: str
-    kind: str  # bool, int, float, choice or text
+    kind: str  # bool, int, float, choice, text, style or secret
     default: Any
     caption: str
     tooltip: str = ""
@@ -480,6 +480,64 @@ SECTIONS: tuple[Section, ...] = (
                 high=60,
                 step=1,
                 advanced=True,
+            ),
+        ),
+    ),
+    Section(
+        "lyrics",
+        "Lyrics",
+        "Lyrics",
+        (
+            Field(
+                "api_base",
+                "text",
+                "",
+                "API base",
+                "OpenAI-compatible endpoint up to its /v1, such as https://api.deepseek.com/v1",
+            ),
+            Field(
+                "api_key",
+                "secret",
+                "",
+                "API key",
+                "Bearer token sent to that endpoint; the settings file keeps it in plain text",
+            ),
+            Field(
+                "model",
+                "text",
+                "",
+                "Model",
+                "Model name the endpoint serves, such as deepseek-chat",
+            ),
+            Field(
+                "temperature",
+                "float",
+                0.2,
+                "Temperature",
+                "How far the model may wander; the annotation wants it low",
+                low=0.0,
+                high=2.0,
+                step=0.1,
+                decimals=1,
+                advanced=True,
+            ),
+            Field(
+                "timeout",
+                "float",
+                120.0,
+                "Timeout (s)",
+                "How long one request may take before it is given up on",
+                low=1.0,
+                high=600.0,
+                step=1.0,
+                advanced=True,
+            ),
+            Field(
+                "editor",
+                "text",
+                "",
+                "External editor",
+                "Command that opens a .krc, such as code; empty picks the platform's own",
             ),
         ),
     ),

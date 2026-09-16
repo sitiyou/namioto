@@ -33,6 +33,7 @@ GLYPHS = {
     "save": "mdi.content-save",
     "export": "mdi.file-music-outline",
     "transcribe": "mdi.auto-fix",
+    "lyrics": "mdi.text-box-outline",
     "channels": "mdi.layers",
     "lock": "mdi.lock",
     "unlock": "mdi.lock-open-variant",

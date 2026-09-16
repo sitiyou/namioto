@@ -108,16 +108,15 @@ since a file whose notes start before that bar was never WaveTone's and is read 
 ## Settings
 
 The gear at the right end of the Mix row opens the settings window, and it is short on purpose: it
-holds only what has no control in the bars - the analysis parameters (channels, frames per second,
-FFT size, A4), the two windows the beat tracker fits, **General** (the interface **Language**, where
-the default `Follow system` takes the machine's own and a change takes effect on the next run,
-**Auto-save**, off by default, which writes the open project once editing stops and when the window
-loses focus, and **Style**, the widget style that draws the window) and **WaveTone compatibility** -
-a page per group, with the beat tracker's tuning under an `ADVANCED` heading. `Restore defaults`
-puts everything
-back, and `Apply` lets the change go live without closing the window. Analysis parameters reach the
-spectrum the next time a file is loaded, and the Analysis page has a `Re-analyse now` button for
-jumping the gun.
+holds only what has no control in the bars - the two windows the beat tracker fits, **General** (the
+interface **Language**, where the default `Follow system` takes the machine's own and a change takes
+effect on the next run, **Auto-save**, off by default, which writes the open project once editing
+stops and when the window loses focus, and **Style**, the widget style that draws the window),
+**WaveTone compatibility**, and **Lyrics** (the OpenAI-compatible endpoint the lyrics window may
+call - **API base** up to its `/v1`, **API key**, **Model**, the temperature and timeout under an
+`ADVANCED` heading - and the **External editor** command a `.krc` is opened with) - a page per
+group. `Restore defaults` puts everything back, and `Apply` lets the change go live without closing
+the window.
 
 ![settings](docs/settings.png)
 
@@ -190,7 +189,7 @@ The window has three control bars, each split into captioned blocks of related c
 | Bar | Blocks |
 | --- | --- |
 | Transport | **Project** (open, save, export MIDI), **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout, and the four display switches: auto page turn, overtone highlight, the channel sidebar, and the time division - the metronome icon checked means the time axis follows the beats of the tempo map, unchecked the seconds), **Speed** (0.10x-2.00x in 5% steps, pitch unchanged, with a reset icon back to 1.00x), **Tempo** (BPM, the estimated tempo of the audio, and the latency in ms) |
-| Edit | **Tools** (edit mode, pen, select, snap grid, quantize, the GAME transcription) |
+| Edit | **Tools** (edit mode, pen, select, snap grid, quantize, the GAME transcription, the lyrics importer) |
 | Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window (the few options the bars do not hold; the analysis parameters belong to the project) |
 
 **Volume** has a slider for each layer: the audio file is streamed at the level of the first one, and
@@ -290,6 +289,27 @@ provider that cannot be created is not an error - ONNX Runtime says so on stderr
 on the CPU. The code is MIT (Team OpenVPI, like GAME
 itself); the models are CC BY-NC-SA 4.0, so anything produced with them is non-commercial, and they
 are downloaded rather than redistributed here - see NOTICE.
+
+## Importing lyrics
+
+A project can carry readings for the words its notes sing, in a `.krc` file beside it - the same
+base name with the `.krc` suffix. The text-box button beside the GAME wand opens a window over that
+file: paste the lyrics into the upper box (or load a `.txt`, `.md` or `.lrc`), and either ask a
+model to annotate it or type the lower one by hand. `Save` writes the `.krc` as plain UTF-8 text -
+readable and editable on its own - and the editor reloads it whenever something else changes it, so
+a hand edit shows up without reopening the project. `Open in external editor` hands the file to the
+command named under **External editor** in the settings, or to the platform's own choice when that is
+left empty.
+
+The prompt is built in and does the readings: it is the same rule set an external `lyrics.md` role would
+carry, asking for the kana of each kanji in square brackets, grouped per word and comma-separated.
+`Copy prompt` puts it on the clipboard together with the lyrics, for a web model - paste it there,
+paste the answer back into the lower box and save. With an OpenAI-compatible endpoint set up under
+**Lyrics** in the settings, `Translate with the API` does that round trip in the background instead,
+and a box under the result streams the model's own output as it arrives - its reasoning first, then
+the answer. That box appears only once the API is asked for; the clipboard and hand-editing routes
+never need it. The key lives in `~/.config/namioto/settings.json` in plain text, and nothing here
+checks the `.krc` syntax: a file with a mistake in it is still one you can fix in an editor.
 
 ## Aligning lyrics to a vocal
 

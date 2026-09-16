@@ -219,6 +219,12 @@ def test_only_the_settings_without_a_control_keep_a_row() -> None:
         ("tempo", "window_seconds"),
         ("tempo", "window_hop_seconds"),
         ("midi", "wavetone"),
+        ("lyrics", "api_base"),
+        ("lyrics", "api_key"),
+        ("lyrics", "model"),
+        ("lyrics", "temperature"),
+        ("lyrics", "timeout"),
+        ("lyrics", "editor"),
     }
     assert ("editor", "zoom_x") not in shown  # the wheel has it, so the window does not
     assert ("playback", "latency_ms") not in shown

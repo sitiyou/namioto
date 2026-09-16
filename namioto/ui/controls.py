@@ -569,6 +569,7 @@ class EditBar(_Group):
     interaction_changed = pyqtSignal(object)
     quantize_requested = pyqtSignal()
     transcribe_requested = pyqtSignal()
+    lyrics_requested = pyqtSignal()
 
     def __init__(self, snap_choices, parent=None):
         super().__init__(parent)
@@ -608,6 +609,9 @@ class EditBar(_Group):
         self.transcribe = icon_button("transcribe", tr("Transcribe the singing voice of the loaded audio with GAME"))
         self.transcribe.setEnabled(False)
         self.transcribe.clicked.connect(self.transcribe_requested)
+        self.lyrics = icon_button("lyrics", tr("Import lyrics: have a model add the readings and keep them in a .krc"))
+        self.lyrics.setEnabled(False)
+        self.lyrics.clicked.connect(self.lyrics_requested)
 
         tools = Cluster("tools")
         tools.add(self.mode)
@@ -617,6 +621,7 @@ class EditBar(_Group):
         tools.add(self.snap)
         tools.add(self.quantize)
         tools.add(self.transcribe)
+        tools.add(self.lyrics)
 
         self.place(tools, 1, 0, 2)
         self._render()

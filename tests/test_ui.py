@@ -10,12 +10,13 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
+from PyQt6.QtCore import QEvent, QPoint, QPointF, QProcess, Qt
 from PyQt6.QtGui import (
     QColor,
     QContextMenuEvent,
     QFocusEvent,
     QFont,
+    QGuiApplication,
     QImage,
     QKeyEvent,
     QMouseEvent,
@@ -28,6 +29,7 @@ from PyQt6.QtWidgets import (
     QDialog,
     QFileDialog,
     QLabel,
+    QLineEdit,
     QMenu,
     QMessageBox,
     QSlider,
@@ -35,7 +37,7 @@ from PyQt6.QtWidgets import (
     QToolButton,
 )
 
-from namioto import midi, project, transcription
+from namioto import lyrics, midi, project, transcription
 from namioto import settings as store
 from namioto.bpm import BpmEstimate
 from namioto.channels import Channel
@@ -45,6 +47,7 @@ from namioto.ui import theme
 from namioto.ui.app import MainWindow, TempoLoader
 from namioto.ui.audio import MidiPortOut, MidiSink, find_port, find_synth_port
 from namioto.ui.controls import Cluster, EditBar, TransportBar, ValueSlider
+from namioto.ui.lyrics_dialog import LyricsDialog, LyricsTranslator
 from namioto.ui.midi_dialog import MidiImportDialog
 from namioto.ui.roll import (
     CONTENT_MARGIN,
@@ -60,7 +63,7 @@ from namioto.ui.roll import (
     PianoRollView,
     is_black_key,
 )
-from namioto.ui.settings_dialog import SettingsDialog
+from namioto.ui.settings_dialog import SettingsDialog, field_editor
 from namioto.ui.spectrogram import SpectrumImage, SpectrumLoader
 from namioto.ui.transcription_dialog import TranscriptionDialog
 
@@ -2385,7 +2388,7 @@ def test_the_settings_window_lists_every_visible_field(own_window) -> None:
     }
     assert names == expected
     pages = [dialog.findChild(QTabWidget).tabText(index) for index in range(dialog.findChild(QTabWidget).count())]
-    assert pages == ["General", "Tempo", "Advanced"]  # the rest of the spec is what the program remembers
+    assert pages == ["General", "Tempo", "Lyrics", "Advanced"]  # the rest of the spec is what it remembers
     dialog.close()
 
 
@@ -2873,6 +2876,200 @@ def test_a_transcription_over_the_active_channel_replaces_only_that_channel(own_
 
     assert len(own_window.view.channels) == 2
     assert sorted((note.pitch, note.channel) for note in own_window.view.notes()) == [(62, 1), (64, 0)]
+
+
+@pytest.fixture
+def lyrics_window(own_window, tmp_path):
+    """A window with a project open, so the lyrics have a file to sit beside."""
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._watch_lyrics()
+    return own_window
+
+
+def lyrics_dialog(lyrics_window, **settings):
+    config = store.clone(lyrics_window.settings).lyrics
+    for name, value in settings.items():
+        setattr(config, name, value)
+    return LyricsDialog(lyrics_window.lyrics_path(), config, parent=lyrics_window)
+
+
+def test_the_lyrics_button_waits_for_a_project(own_window) -> None:
+    assert own_window.lyrics_path() is None
+    assert own_window.edit.lyrics.isEnabled() is False
+
+
+def test_the_lyrics_button_opens_the_window(lyrics_window, monkeypatch) -> None:
+    opened: list[LyricsDialog] = []
+    monkeypatch.setattr(LyricsDialog, "exec", lambda self: opened.append(self) or QDialog.DialogCode.Rejected)
+
+    lyrics_window.edit.lyrics.click()
+
+    assert len(opened) == 1
+    assert opened[0].path == lyrics_window.lyrics_path()
+    assert opened[0].parent() is lyrics_window
+
+
+def test_the_window_opens_with_the_lyrics_already_there(lyrics_window) -> None:
+    lyrics.save(lyrics_window.lyrics_path(), "歌[うた]")
+    dialog = lyrics_dialog(lyrics_window)
+    assert dialog.result.toPlainText() == "歌[うた]"
+    dialog.close()
+
+
+def test_copying_the_prompt_puts_it_on_the_clipboard(lyrics_window) -> None:
+    dialog = lyrics_dialog(lyrics_window)
+    dialog.source.setPlainText("君の名は")
+    dialog.copy_button.click()
+    assert QGuiApplication.clipboard().text() == lyrics.build_prompt("君の名は")
+    assert "web model" in dialog.status_label.text()
+    dialog.close()
+
+
+def test_saving_writes_the_lyrics_beside_the_project(lyrics_window) -> None:
+    dialog = lyrics_dialog(lyrics_window)
+    dialog.result.setPlainText("季節[き,せつ]は移[うつ]ろい")
+    dialog.save_button.click()
+    assert lyrics.load(lyrics_window.lyrics_path()) == "季節[き,せつ]は移[うつ]ろい"
+    assert "Saved to song.krc" in dialog.status_label.text()
+    dialog.close()
+
+
+def test_the_api_button_waits_for_the_settings(lyrics_window) -> None:
+    dialog = lyrics_dialog(lyrics_window)
+    assert dialog.translate_button.isEnabled() is False
+    dialog.close()
+
+    dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
+    assert dialog.translate_button.isEnabled() is True
+    dialog.close()
+
+
+def test_a_missing_source_is_not_sent(lyrics_window, monkeypatch) -> None:
+    monkeypatch.setattr(lyrics, "translate", lambda *args, **kwargs: pytest.fail("must not call"))
+    dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
+    dialog.translate_button.click()
+    assert "Paste the lyrics" in dialog.status_label.text()
+    dialog.close()
+
+
+def test_the_translator_asks_the_model_and_reports_it_back(lyrics_window, monkeypatch) -> None:
+    asked: dict = {}
+
+    def fake(source, **fields):
+        asked.update(fields, source=source)
+        return "歌[うた]"
+
+    monkeypatch.setattr(lyrics, "translate", fake)
+    dialog = lyrics_dialog(
+        lyrics_window,
+        api_base="https://api.example.com/v1",
+        api_key="k",
+        model="m",
+        temperature=0.5,
+        timeout=30.0,
+    )
+    translator = LyricsTranslator("歌", dialog.config, dialog.path)
+    translator.translated.connect(dialog._translated)
+    translator.load()
+
+    assert asked["source"] == "歌"
+    assert asked["base_url"] == "https://api.example.com/v1"
+    assert asked["api_key"] == "k"
+    assert asked["model"] == "m"
+    assert asked["temperature"] == 0.5
+    assert asked["timeout"] == 30.0
+    assert asked["stream"] is True
+    assert callable(asked["on_delta"])
+    assert dialog.result.toPlainText() == "歌[うた]"
+    assert "Translated" in dialog.status_label.text()
+    dialog.close()
+
+
+def test_a_failed_translation_shows_why(lyrics_window) -> None:
+    dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
+    dialog._failed("HTTP 401 Unauthorized")
+    assert "HTTP 401" in dialog.status_label.text()
+    assert dialog.translate_button.isEnabled() is True
+    dialog.close()
+
+
+def test_the_output_box_is_only_shown_once_the_api_is_asked(lyrics_window, monkeypatch) -> None:
+    monkeypatch.setattr(LyricsTranslator, "start", lambda self: None)
+    dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
+    assert dialog.log.isHidden() is True
+
+    dialog.source.setPlainText("歌")
+    dialog.translate_button.click()
+
+    assert dialog.log.isHidden() is False
+    assert dialog.log.toPlainText() == ""  # it starts empty, waiting for the model
+    dialog.close()
+
+
+def test_the_streamed_output_is_logged_as_it_comes(lyrics_window) -> None:
+    dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
+    dialog.log.show()
+
+    dialog._on_delta("reasoning", "考え")
+    dialog._on_delta("reasoning", "て")
+    dialog._on_delta("content", "歌[うた]を")
+
+    text = dialog.log.toPlainText()
+    assert "考えて" in text
+    assert text.index("考えて") < text.index("歌[うた]を")  # the reasoning runs before the answer
+    assert text.count("歌[うた]を") == 1
+    dialog.close()
+
+
+def test_the_api_key_is_typed_back_hidden() -> None:
+    spec = store.FIELD_SPECS[("lyrics", "api_key")]
+    widget, read, write = field_editor("hunter2", spec)
+    assert isinstance(widget, QLineEdit)
+    assert widget.echoMode() == QLineEdit.EchoMode.Password
+    write("secret")
+    assert read() == "secret"
+    widget.deleteLater()
+
+
+def test_the_lyrics_open_in_an_external_editor(lyrics_window, monkeypatch) -> None:
+    calls: list[tuple] = []
+    monkeypatch.setattr(QProcess, "startDetached", lambda program, args: calls.append((program, args)) or True)
+    lyrics_window.settings.lyrics.editor = "code --wait"
+
+    lyrics_window._open_lyrics_editor()
+
+    assert calls == [("code", ["--wait", str(lyrics_window.lyrics_path())])]
+
+
+def test_an_outside_change_is_reloaded(lyrics_window) -> None:
+    lyrics_window.statusBar().clearMessage()
+    lyrics.save(lyrics_window.lyrics_path(), "歌[うた]")
+
+    lyrics_window._on_lyrics_file_changed()
+
+    assert lyrics_window.lyrics_text == "歌[うた]"
+    assert "reloaded" in lyrics_window.statusBar().currentMessage().lower()
+
+
+def test_a_save_of_our_own_is_not_read_back(lyrics_window) -> None:
+    lyrics_window._on_lyrics_saved("歌[うた]")
+    lyrics.save(lyrics_window.lyrics_path(), "歌[うた]")
+    lyrics_window.statusBar().clearMessage()
+
+    lyrics_window._on_lyrics_file_changed()
+
+    assert lyrics_window.statusBar().currentMessage() == ""
+
+
+def test_the_watcher_moves_with_the_project(lyrics_window, tmp_path) -> None:
+    other = tmp_path / "other.nto"
+    other.write_text("{}")
+
+    lyrics_window.project_path = other
+    lyrics_window._watch_lyrics()
+
+    assert lyrics_window.lyrics_path() == tmp_path / "other.krc"
+    assert lyrics_window.lyrics_text == ""
 
 
 def test_saving_a_project_takes_the_notes_and_the_values_with_it(own_window, tmp_path) -> None:

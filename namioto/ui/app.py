@@ -12,7 +12,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QByteArray, QEvent, QLibraryInfo, QTimer, QTranslator, pyqtSignal
+from PyQt6.QtCore import QByteArray, QEvent, QLibraryInfo, QProcess, QTimer, QTranslator, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from namioto import bpm, i18n, midi, project
+from namioto import bpm, i18n, lyrics, midi, project
 from namioto import settings as store
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
@@ -39,6 +39,7 @@ from namioto.ui.audio import open_player
 from namioto.ui.channel_panel import ChannelPanel
 from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
 from namioto.ui.loading import LoadingThread
+from namioto.ui.lyrics_dialog import LyricsDialog, LyricsWatcher
 from namioto.ui.midi_dialog import MidiImportDialog
 from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler
 from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
@@ -181,6 +182,7 @@ class MainWindow(QMainWindow):
         self.project_path: Path | None = None
         self.project_dirty = False
         self.audio_path: str | None = None
+        self.lyrics_text = ""
         self.loader: SpectrumLoader | None = None
         self.tempo_loader: TempoLoader | None = None
         self._tempo_manual = False
@@ -198,6 +200,8 @@ class MainWindow(QMainWindow):
         self._current_player_key = self._player_key()
         self.player.gain = self.settings.playback.midi_volume / 100.0
         self.song = SongPlayer(self)
+        self.lyrics_watcher = LyricsWatcher(self)
+        self.lyrics_watcher.changed.connect(self._on_lyrics_file_changed)
         self.position_timer = QTimer(self)
         self.position_timer.setInterval(POSITION_INTERVAL_MS)
         self.position_timer.timeout.connect(self._show_position)
@@ -275,6 +279,7 @@ class MainWindow(QMainWindow):
         self.transport.save_requested.connect(self._on_save)
         self.transport.export_midi_requested.connect(self._on_export_midi)
         self.edit.transcribe_requested.connect(self._open_transcription)
+        self.edit.lyrics_requested.connect(self._open_lyrics)
         self.player.finished.connect(self._on_playback_finished)
         self.song.finished.connect(self._on_playback_finished)
         self.view.seek_requested.connect(self._seek)
@@ -316,6 +321,7 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self.cursor_note)
         self._restore_session()
         self._show_hint()
+        self._watch_lyrics()
         self._update_status()
         self.view.setFocus()  # the roll holds the keyboard, so the bar opens without a focus ring on its first button
 
@@ -742,6 +748,7 @@ class MainWindow(QMainWindow):
             self.project_path = Path(path)
             self.project_dirty = False
             self.autosave_timer.stop()
+            self._watch_lyrics()
             missing = self._open_audio(project.resolve_audio(self.project_path, opened.audio))
             per_beat = self.view.seconds_per_beat  # scene units are beats, the file keeps seconds
             self.view.set_channels(opened.channels)
@@ -785,6 +792,7 @@ class MainWindow(QMainWindow):
         self.project_path = target
         self.project_dirty = False
         self.autosave_timer.stop()
+        self._watch_lyrics()
         store.set_value(self.settings, "paths", "last_audio_dir", str(target.parent))
         self.settings_store.touch()
         self._update_status()
@@ -938,6 +946,48 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(
             i18n.tr("GAME found {notes} notes on channel {channel}", notes=len(arriving), channel=number + 1)
         )
+
+    def lyrics_path(self) -> Path | None:
+        """The sidecar the lyrics live in: `song.nto` keeps them in `song.krc` beside it."""
+        return lyrics.path_for(self.project_path) if self.project_path is not None else None
+
+    def _watch_lyrics(self) -> None:
+        """Point the lyrics at the open project, taking what is already there as the known text."""
+        path = self.lyrics_path()
+        self.edit.lyrics.setEnabled(path is not None)
+        self.lyrics_text = lyrics.load(path) if path is not None else ""
+        self.lyrics_watcher.watch(path)
+
+    def _open_lyrics(self) -> None:
+        """Read a text into a `.krc` with a model, or by pasting what a web model answered."""
+        path = self.lyrics_path()
+        if path is None:
+            return
+        dialog = LyricsDialog(path, self.settings.lyrics, parent=self)
+        dialog.saved.connect(self._on_lyrics_saved)
+        dialog.open_requested.connect(self._open_lyrics_editor)
+        dialog.exec()
+
+    def _on_lyrics_saved(self, text: str) -> None:
+        """A write of our own, so the watcher's next event does not read it back as a change."""
+        self.lyrics_text = text
+
+    def _on_lyrics_file_changed(self) -> None:
+        path = self.lyrics_path()
+        if path is None:
+            return
+        text = lyrics.load(path)
+        if text == self.lyrics_text:
+            return  # our own save, or a change to another file in the project's folder
+        self.lyrics_text = text
+        self.statusBar().showMessage(i18n.tr("Lyrics reloaded from {name}", name=path.name))
+
+    def _open_lyrics_editor(self) -> None:
+        path = self.lyrics_path()
+        if path is None:
+            return
+        command = lyrics.editor_command(self.settings.lyrics.editor)
+        QProcess.startDetached(command[0], [*command[1:], str(path)])
 
     def _open_audio(self, target: Path | None) -> str:
         """Load the audio a project names, or say why there is none: its notes are worth having either way."""
