@@ -56,6 +56,7 @@ class Canvas:
     spectrum_octave: QColor
     spectrum_beat: QColor
     spectrum_bar: QColor
+    spectrum_hover_band: QColor
     hover_band: QColor
     hover_key: QColor
     playhead: QColor
@@ -83,6 +84,7 @@ CANVAS: dict[str, Canvas] = {
         spectrum_octave=QColor("#c0c0c0"),
         spectrum_beat=QColor("#606060"),
         spectrum_bar=QColor("#c0c0c0"),
+        spectrum_hover_band=QColor(255, 255, 255, 85),
         hover_band=QColor(255, 255, 255, 85),
         hover_key=QColor("#ff4040"),
         playhead=QColor("#e6ecf5"),
@@ -110,6 +112,7 @@ CANVAS: dict[str, Canvas] = {
         spectrum_octave=QColor("#c0c0c0"),
         spectrum_beat=QColor("#606060"),
         spectrum_bar=QColor("#c0c0c0"),
+        spectrum_hover_band=QColor(255, 255, 255, 85),
         hover_band=QColor(0, 0, 0, 26),
         hover_key=QColor("#ff4040"),
         playhead=QColor("#20252e"),

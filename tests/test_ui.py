@@ -11,7 +11,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PyQt6.QtCore import QEvent, QPoint, QPointF, Qt
-from PyQt6.QtGui import QColor, QFocusEvent, QFont, QImage, QKeyEvent, QMouseEvent, QWheelEvent
+from PyQt6.QtGui import QColor, QFocusEvent, QFont, QImage, QKeyEvent, QMouseEvent, QPalette, QWheelEvent
 from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import (
     QApplication,
@@ -663,6 +663,34 @@ def test_hover_marks_the_row_and_its_overtones(window) -> None:
     assert marked[54] == plain[54]  # the row above stays as it was
     assert window.cursor_note.text() == ""
     window.view.overtone_highlight = False
+
+
+def test_hover_marks_the_row_over_the_spectrum_in_either_canvas(window, qt_app) -> None:
+    window.view.overtone_highlight = False
+    window.view.clear_notes()
+    window.view.set_spectrum(make_spectrum(frames=400, value=0.0))  # black cells: only the band shows
+    original = qt_app.palette()
+    try:
+        for name, window_colour in (("light", "#ffffff"), ("dark", "#202020")):
+            palette = qt_app.palette()
+            palette.setColor(QPalette.ColorRole.Window, QColor(window_colour))
+            qt_app.setPalette(palette)
+            assert theme.apply(qt_app) == name
+            window.view.centerOn(QPointF(8.3, float(PITCH_MAX - 62)))
+
+            def row_lightness(pitch: int) -> int:
+                return pixel_at(window.view, window.view.grab().toImage(), 8.3, PITCH_MAX - pitch + 0.5).lightness()
+
+            window.view.set_hover_pitch(62)
+            marked = row_lightness(62)
+            window.view.set_hover_pitch(None)
+            plain = row_lightness(62)
+            assert marked > plain, f"the hovered row has to show over the spectrum in the {name} canvas"
+    finally:
+        window.view.set_hover_pitch(None)
+        window.view.set_spectrum(None)
+        qt_app.setPalette(original)
+        theme.apply(qt_app)
 
 
 def test_hover_turns_the_key_of_that_row_red_in_either_mode(window) -> None:

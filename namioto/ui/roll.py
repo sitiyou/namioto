@@ -782,7 +782,10 @@ class PianoRollView(QGraphicsView):
     def _draw_cursor(self, painter: QPainter, rect: QRectF) -> None:
         """The rows highlighted under the mouse; the playback position goes over the notes."""
         painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(theme.canvas().hover_band)
+        colors = theme.canvas()
+        # the spectrum is dark in either canvas, so the row over it takes the band that shows there
+        band = colors.spectrum_hover_band if self.spectrum is not None else colors.hover_band
+        painter.setBrush(band)
         for pitch in self.highlight_pitches():
             painter.drawRect(QRectF(rect.left(), float(PITCH_MAX - pitch), rect.width(), 1.0))
         painter.setBrush(Qt.BrushStyle.NoBrush)
