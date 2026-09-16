@@ -32,7 +32,7 @@ from namioto.channels import Channel
 from namioto.interaction import Interaction, Tool
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.ui import theme
-from namioto.ui.app import MIDI_FILTER, MainWindow, TempoLoader
+from namioto.ui.app import MainWindow, TempoLoader
 from namioto.ui.audio import MidiPortOut, MidiSink, find_port, find_synth_port
 from namioto.ui.controls import Cluster, EditBar, TransportBar, ValueSlider
 from namioto.ui.midi_dialog import MidiImportDialog
@@ -2258,7 +2258,7 @@ def test_the_settings_window_lists_every_visible_field(own_window) -> None:
     }
     assert names == expected
     pages = [dialog.findChild(QTabWidget).tabText(index) for index in range(dialog.findChild(QTabWidget).count())]
-    assert pages == ["Analysis", "Display", "Tempo", "Advanced"]  # the rest of the spec is what the program remembers
+    assert pages == ["General", "Analysis", "Tempo", "Advanced"]  # the rest of the spec is what the program remembers
     dialog.close()
 
 
@@ -3360,7 +3360,9 @@ def test_the_command_line_takes_audio_midi_and_projects_alike(qt_app, monkeypatc
 def test_the_export_button_writes_a_midi_file(own_window, monkeypatch, tmp_path) -> None:
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0),))
-    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "exported"), MIDI_FILTER))
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "exported"), "MIDI file (*.mid)")
+    )
 
     assert own_window._on_export_midi() is True
     target = tmp_path / "exported.mid"  # the export adds its own suffix

@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from namioto.i18n import tr
 from namioto.interaction import Interaction, Tool, pick_tool, toggle_mode
 from namioto.ui import icons
 from namioto.ui.text import format_time
@@ -236,16 +237,6 @@ def icon_button(kind: str, tooltip: str, checkable: bool = False) -> QToolButton
     return button
 
 
-def text_button(caption: str, tooltip: str, checkable: bool = False) -> QToolButton:
-    button = QToolButton()
-    button.setText(caption)
-    button.setToolTip(tooltip)
-    button.setCheckable(checkable)
-    button.setAutoRaise(True)
-    button.setFixedHeight(BUTTON_HEIGHT)
-    return button
-
-
 class TempoSuggestion(_Card):
     """The tempo the analyser found, in a balloon under the BPM field.
 
@@ -264,8 +255,8 @@ class TempoSuggestion(_Card):
         self.setAutoFillBackground(True)
         self._bpm = 0.0
         self.label = QLabel()
-        self.apply_button = icon_button("check", "Use this tempo")
-        self.dismiss_button = icon_button("cross", "Dismiss this estimate")
+        self.apply_button = icon_button("check", tr("Use this tempo"))
+        self.dismiss_button = icon_button("cross", tr("Dismiss this estimate"))
         self.apply_button.clicked.connect(lambda: self.applied.emit(self._bpm))
         self.dismiss_button.clicked.connect(self.dismissed)
 
@@ -286,13 +277,17 @@ class TempoSuggestion(_Card):
     ) -> None:
         """Offer `bpm`, and say how the algorithm that measured it saw the result."""
         self._bpm = bpm
-        self.label.setText(f"≈{bpm:.0f} BPM")
-        detail = source
+        self.label.setText(tr("≈{bpm} BPM", bpm=f"{bpm:.0f}"))
+        detail = tr(source)
         if windows:
-            detail += f", over {windows} windows: {agreement:.0%} of them agree."
+            detail += tr(
+                ", over {windows} windows: {agreement} of them agree.",
+                windows=windows,
+                agreement=f"{agreement:.0%}",
+            )
         if residual is not None:
-            detail += f"\nBeat fit residual {1000 * residual:.0f} ms."
-        self.setToolTip(f"{detail}\nNothing changes until you click the tick.")
+            detail += tr("\nBeat fit residual {ms} ms.", ms=f"{1000 * residual:.0f}")
+        self.setToolTip(tr("{detail}\nNothing changes until you click the tick.", detail=detail))
 
     def show_under(self, anchor: QWidget) -> None:
         """Float under `anchor`, inside its window, where it takes neither the focus nor the clicks."""
@@ -325,8 +320,8 @@ class TempoBox(_SelectAll, QDoubleSpinBox):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.double_action = QAction("Double tempo  (*)", self)
-        self.half_action = QAction("Halve tempo  (/)", self)
+        self.double_action = QAction(tr("Double tempo  (*)"), self)
+        self.half_action = QAction(tr("Halve tempo  (/)"), self)
         self.double_action.triggered.connect(lambda: self.scale(2.0))
         self.half_action.triggered.connect(lambda: self.scale(0.5))
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -446,17 +441,17 @@ class TransportBar(_Group):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("transportBar")
-        self.open = icon_button("open", "Open a project (.nto) — Ctrl+O")
-        self.save = icon_button("save", "Save the project — Ctrl+S, with Shift for Save As")
-        self.export_midi = icon_button("export", "Export the notes as a MIDI file — every channel")
+        self.open = icon_button("open", tr("Open a project (.nto) — Ctrl+O"))
+        self.save = icon_button("save", tr("Save the project — Ctrl+S, with Shift for Save As"))
+        self.export_midi = icon_button("export", tr("Export the notes as a MIDI file — every channel"))
         self.open.clicked.connect(self.open_requested)
         self.save.clicked.connect(self.save_requested)
         self.export_midi.clicked.connect(self.export_midi_requested)
-        self.rewind = icon_button("rewind", "Rewind to the beginning")
-        self.stop = icon_button("stop", "Stop")
-        self.play_from_start = icon_button("playstart", "Play from the beginning")
-        self.play_pause = icon_button("play", "Play from the cursor")
-        self.forward = icon_button("forward", "Go to the end")
+        self.rewind = icon_button("rewind", tr("Rewind to the beginning"))
+        self.stop = icon_button("stop", tr("Stop"))
+        self.play_from_start = icon_button("playstart", tr("Play from the beginning"))
+        self.play_pause = icon_button("play", tr("Play from the cursor"))
+        self.forward = icon_button("forward", tr("Go to the end"))
         self.rewind.clicked.connect(self.rewind_requested)
         self.stop.clicked.connect(self.stop_requested)
         self.play_from_start.clicked.connect(self.play_from_start_requested)
@@ -464,16 +459,16 @@ class TransportBar(_Group):
         self.forward.clicked.connect(self.forward_requested)
 
         self.position = QLabel("00:00.000")
-        self.position.setToolTip("Playback position")
+        self.position.setToolTip(tr("Playback position"))
         # a fixed width keeps the layout steady as the clock runs; the font is the desktop's to pick
         self.position.setFixedWidth(QFontMetrics(self.position.font()).horizontalAdvance("00:00.000") + 6)
         self.position.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        self.speed = ValueSlider("Speed", 0.1, 2.0, 1.0, suffix="x", scale=100, step=0.05)
+        self.speed = ValueSlider(tr("Speed"), 0.1, 2.0, 1.0, suffix="x", scale=100, step=0.05)
         self.speed.slider.setToolTip(
-            "Playback speed in 5% steps, 0.10x to 2.00x: the song is rerendered, so the pitch stays"
+            tr("Playback speed in 5% steps, 0.10x to 2.00x: the song is rerendered, so the pitch stays")
         )
-        self.speed_reset = icon_button("restore", "Reset the playback speed to 1.00x")
+        self.speed_reset = icon_button("restore", tr("Reset the playback speed to 1.00x"))
         self.speed_reset.clicked.connect(lambda: self.speed.set_value(1.0))
 
         self.bpm = TempoBox()
@@ -481,43 +476,43 @@ class TransportBar(_Group):
         self.bpm.setDecimals(1)
         self.bpm.setValue(120.0)
         self.bpm.setToolTip(
-            "Tempo of the beat grid in BPM, until a tempo map is analysed\nRight-click to double or halve it"
+            tr("Tempo of the beat grid in BPM, until a tempo map is analysed\nRight-click to double or halve it")
         )
         self.bpm.setFixedWidth(self.bpm.sizeHint().width())
         self.bpm.setFixedHeight(FIELD_HEIGHT)
         self.bpm.setKeyboardTracking(False)
 
-        self.detect = icon_button("refresh", "Estimate the tempo of the loaded audio")
+        self.detect = icon_button("refresh", tr("Estimate the tempo of the loaded audio"))
         self.detect.setEnabled(False)
         self.suggestion = TempoSuggestion()
-        self.settings_button = icon_button("gear", "Settings: the advanced options the bars have no control for")
+        self.settings_button = icon_button("gear", tr("Settings: the advanced options the bars have no control for"))
 
         self.latency = LatencyBox()
         self.latency.setRange(-500, 500)
         self.latency.setValue(0)
-        self.latency.setToolTip("Global offset between audio playback and the displayed waveform")
+        self.latency.setToolTip(tr("Global offset between audio playback and the displayed waveform"))
         self.latency.setFixedWidth(self.latency.sizeHint().width())
         self.latency.setFixedHeight(FIELD_HEIGHT)
         self.latency.setKeyboardTracking(False)
 
         self.auto_page = icon_button(
             "page",
-            "Auto page turn: take the next page of the roll once the playhead reaches the right",
+            tr("Auto page turn: take the next page of the roll once the playhead reaches the right"),
             checkable=True,
         )
         self.overtone = icon_button(
             "overtone",
-            "Overtone highlight: paint f, 2f, 3f and 4f of the row under the mouse, the way WaveTone marks them",
+            tr("Overtone highlight: paint f, 2f, 3f and 4f of the row under the mouse, the way WaveTone marks them"),
             checkable=True,
         )
         self.auto_page.toggled.connect(self.auto_page_toggled)
         self.overtone.toggled.connect(self.overtone_toggled)
         self.channels = icon_button(
-            "channels", "Channels: colours, mute and instruments, one card per channel", checkable=True
+            "channels", tr("Channels: colours, mute and instruments, one card per channel"), checkable=True
         )
         self.division = icon_button(
             "beat",
-            "Time division: checked follows the beats of the tempo map, unchecked follows seconds",
+            tr("Time division: checked follows the beats of the tempo map, unchecked follows seconds"),
             checkable=True,
         )
         self.division.setChecked(True)  # beats by default; a click flips it to seconds
@@ -561,7 +556,7 @@ class TransportBar(_Group):
         """Playing and pausing share one button the way WaveTone shows it, so it turns into a
         pause button while the sound runs."""
         self.play_pause.setIcon(icons.icon("pause" if playing else "play"))
-        self.play_pause.setToolTip("Pause playback (Space)" if playing else "Play from the cursor (Space)")
+        self.play_pause.setToolTip(tr("Pause playback (Space)") if playing else tr("Play from the cursor (Space)"))
 
     def set_position(self, seconds: float) -> None:
         self.position.setText(format_time(seconds))
@@ -581,13 +576,13 @@ class EditBar(_Group):
         self._interaction = Interaction.viewing()
         self.mode = icon_button(
             "edit",
-            "Edit mode: draw, move and select notes (off: a click in the roll moves the playhead)",
+            tr("Edit mode: draw, move and select notes (off: a click in the roll moves the playhead)"),
             checkable=True,
         )
         self.mode.clicked.connect(self._toggle_mode)
-        self.pen = icon_button("pen", "Pen: click or drag an empty row to draw a note", checkable=True)
+        self.pen = icon_button("pen", tr("Pen: click or drag an empty row to draw a note"), checkable=True)
         self.select = icon_button(
-            "select", "Select: drag a box, ctrl-click a note to add, drag a note to move", checkable=True
+            "select", tr("Select: drag a box, ctrl-click a note to add, drag a note to move"), checkable=True
         )
         self.tools = QButtonGroup(self)
         self.tools.setExclusive(True)
@@ -601,16 +596,16 @@ class EditBar(_Group):
         for label, beats in snap_choices:
             self.snap.addItem(glyph, label, beats)
         self.snap.setCurrentIndex(self.snap.findText("1/8"))
-        self.snap.setToolTip("Snap grid for the pen tool: the note the grid is divided by")
+        self.snap.setToolTip(tr("Snap grid for the pen tool: the note the grid is divided by"))
         self.snap.setFixedWidth(self.snap.sizeHint().width())
         self.snap.setFixedHeight(FIELD_HEIGHT)
 
         self.quantize = icon_button(
             "quantize",
-            "Quantize: put the starts and ends of the notes on the snap grid, the selection if there is one",
+            tr("Quantize: put the starts and ends of the notes on the snap grid, the selection if there is one"),
         )
         self.quantize.clicked.connect(self.quantize_requested)
-        self.transcribe = icon_button("transcribe", "Transcribe the singing voice of the loaded audio with GAME")
+        self.transcribe = icon_button("transcribe", tr("Transcribe the singing voice of the loaded audio with GAME"))
         self.transcribe.setEnabled(False)
         self.transcribe.clicked.connect(self.transcribe_requested)
 
@@ -657,14 +652,14 @@ class MixBar(_Group):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setObjectName("mixBar")
-        self.gain = ValueSlider("Gain", 10, 600, 240)
-        self.gain.slider.setToolTip("Spectrum gain: how much energy it takes to reach full red")
-        self.contrast = ValueSlider("Contrast", 0.2, 4.0, 1.0, scale=10)
-        self.contrast.slider.setToolTip("Spectrum contrast: exponent applied to the energy")
-        self.audio_volume = ValueSlider("Audio", 0, 100, 80, suffix="%")
-        self.audio_volume.slider.setToolTip("Volume of the analysed audio track")
+        self.gain = ValueSlider(tr("Gain"), 10, 600, 240)
+        self.gain.slider.setToolTip(tr("Spectrum gain: how much energy it takes to reach full red"))
+        self.contrast = ValueSlider(tr("Contrast"), 0.2, 4.0, 1.0, scale=10)
+        self.contrast.slider.setToolTip(tr("Spectrum contrast: exponent applied to the energy"))
+        self.audio_volume = ValueSlider(tr("Audio"), 0, 100, 80, suffix="%")
+        self.audio_volume.slider.setToolTip(tr("Volume of the analysed audio track"))
         self.midi_volume = ValueSlider("MIDI", 0, 100, 80, suffix="%")
-        self.midi_volume.slider.setToolTip("Volume of the note playback")
+        self.midi_volume.slider.setToolTip(tr("Volume of the note playback"))
 
         spectrum = Cluster("spectrum")
         spectrum.add_sliders((self.gain, self.contrast))

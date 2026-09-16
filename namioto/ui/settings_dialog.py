@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QPushButton,
     QSpinBox,
     QStyleFactory,
     QTabWidget,
@@ -32,9 +33,9 @@ from PyQt6.QtWidgets import (
 )
 
 from namioto import settings as store
+from namioto.i18n import tr
 from namioto.settings import Field
 from namioto.ui import theme
-from namioto.ui.controls import text_button
 
 SAVE_DELAY_MS = 1000
 EDITOR_WIDTH = 300  # a form of numbers that stretch across the page is hard to read
@@ -74,7 +75,7 @@ class SettingsStore(QObject):
         try:
             store.save(self.source(), self.path)
         except OSError as error:  # a read-only home must not take the editor down
-            self.failed.emit(f"Settings could not be saved: {error}")
+            self.failed.emit(tr("Settings could not be saved: {error}", error=error))
 
 
 def _read(widget: QWidget) -> Any:
@@ -110,7 +111,7 @@ def field_editor(value: Any, field: Field) -> tuple[QWidget, Callable[[], Any], 
         widget = QCheckBox()
     elif field.kind == "choice":
         labels = field.labels or tuple(str(choice) for choice in field.choices)
-        return combo_editor(list(zip(labels, field.choices, strict=True)), value)
+        return combo_editor(list(zip((tr(label) for label in labels), field.choices, strict=True)), value)
     elif field.kind == "style":
         return style_editor(value)
     elif field.kind == "int":
@@ -144,7 +145,7 @@ def combo_editor(entries: Sequence[tuple[str, Any]], value: Any):
 def style_editor(value: Any):
     """Every widget style this build can draw with, the one the desktop hands out named first."""
     available = QStyleFactory.keys()
-    entries = [(f"System default ({theme.platform_style()})", "")]
+    entries = [(tr("System default ({name})", name=theme.platform_style()), "")]
     entries += [(name, name) for name in available]
     return combo_editor(entries, value)
 
@@ -152,7 +153,7 @@ def style_editor(value: Any):
 def advanced_section(form: QFormLayout) -> QToolButton:
     """The heading over a form of advanced rows, folded away until it is clicked."""
     button = QToolButton()
-    button.setText("Advanced")
+    button.setText(tr("Advanced"))
     button.setCheckable(True)
     button.setAutoRaise(True)
     button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
@@ -189,21 +190,21 @@ class SettingsDialog(QDialog):
         parent=None,
     ):
         super().__init__(parent)
-        self.setWindowTitle("Settings")
+        self.setWindowTitle(tr("Settings"))
         self.resize(560, 460)
         self._settings = store.clone(settings)
         self._rows: list[tuple[str, Field, Callable[[], Any], Callable[[Any], None]]] = []
 
         pages = QTabWidget()
         for page in _pages():
-            pages.addTab(self._page(page, can_reanalyse), page)
+            pages.addTab(self._page(page, can_reanalyse), tr(page))
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
             | QDialogButtonBox.StandardButton.Cancel
             | QDialogButtonBox.StandardButton.Apply
         )
-        restore = buttons.addButton("Restore defaults", QDialogButtonBox.ButtonRole.ResetRole)
+        restore = buttons.addButton(tr("Restore defaults"), QDialogButtonBox.ButtonRole.ResetRole)
         restore.clicked.connect(self.restore_defaults)
         buttons.button(QDialogButtonBox.StandardButton.Apply).clicked.connect(self.apply)
         buttons.accepted.connect(self._accept)
@@ -250,10 +251,10 @@ class SettingsDialog(QDialog):
                 editor, read, write = self._editor(section.name, field)
                 editor.setMaximumWidth(EDITOR_WIDTH)
                 self._rows.append((section.name, field, read, write))
-                label = QLabel(field.caption)
+                label = QLabel(tr(field.caption))
                 if field.tooltip:
-                    label.setToolTip(field.tooltip)
-                    editor.setToolTip(field.tooltip)
+                    label.setToolTip(tr(field.tooltip))
+                    editor.setToolTip(tr(field.tooltip))
                 form.addRow(label, editor)
             if advanced:
                 layout.addWidget(advanced_section(form))
@@ -269,10 +270,11 @@ class SettingsDialog(QDialog):
         widget = QWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
-        hint = QLabel("Analysis changes reach the spectrum the next time a file is loaded.")
+        hint = QLabel(tr("Analysis changes reach the spectrum the next time a file is loaded."))
         layout.addWidget(hint)
         if can_reanalyse:
-            again = text_button("Re-analyse now", "Run the analysis again with these settings")
+            again = QPushButton(tr("Re-analyse now"))
+            again.setToolTip(tr("Run the analysis again with these settings"))
             again.clicked.connect(self.reanalyse_requested)
             layout.addWidget(again)
         layout.addStretch(1)
@@ -282,11 +284,12 @@ class SettingsDialog(QDialog):
         widget = QWidget()
         layout = QHBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.addWidget(QLabel("File"))
+        layout.addWidget(QLabel(tr("Configuration file")))
         path = QLineEdit(str(store.default_path()))
         path.setReadOnly(True)
         layout.addWidget(path, 1)
-        folder = text_button("Show folder", "Open the directory holding the settings file")
+        folder = QPushButton(tr("Show folder"))
+        folder.setToolTip(tr("Open the directory holding the settings file"))
         folder.clicked.connect(lambda: QDesktopServices.openUrl(QUrl.fromLocalFile(str(store.default_path().parent))))
         layout.addWidget(folder)
         return widget

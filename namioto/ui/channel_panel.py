@@ -20,6 +20,7 @@ from PyQt6.QtWidgets import (
 
 from namioto import settings as store
 from namioto.channels import Channel, free_channel
+from namioto.i18n import tr
 from namioto.ui import icons
 from namioto.ui.controls import FIELD_HEIGHT, icon_button
 from namioto.ui.roll import PianoRollView
@@ -68,9 +69,9 @@ class _Card(QWidget):
         self.program.setFixedHeight(FIELD_HEIGHT)
         self.program.currentIndexChanged.connect(self._on_program)
 
-        self.lock_button = icon_button("unlock", "Lock: notes on this channel cannot be edited", checkable=True)
-        self.eye_button = icon_button("eye", "Show or hide the notes of this channel", checkable=True)
-        self.mute_button = icon_button("sound", "Mute this channel during playback", checkable=True)
+        self.lock_button = icon_button("unlock", tr("Lock: notes on this channel cannot be edited"), checkable=True)
+        self.eye_button = icon_button("eye", tr("Show or hide the notes of this channel"), checkable=True)
+        self.mute_button = icon_button("sound", tr("Mute this channel during playback"), checkable=True)
         for button, field in ((self.lock_button, "lock"), (self.eye_button, "visible"), (self.mute_button, "mute")):
             button.clicked.connect(lambda _c, field=field: self._toggle(field))
 
@@ -128,17 +129,17 @@ class _Card(QWidget):
     def contextMenuEvent(self, event) -> None:
         panel, channel = self._panel, self._channel
         menu = QMenu(self)
-        rename = menu.addAction("Rename…")
-        volume = menu.addAction("Volume…")
-        remove = menu.addAction("Delete channel")
+        rename = menu.addAction(tr("Rename…"))
+        volume = menu.addAction(tr("Volume…"))
+        remove = menu.addAction(tr("Delete channel"))
         chosen = menu.exec(event.globalPos())
         view = panel.view
         if chosen is rename:
-            name, ok = QInputDialog.getText(self, "Rename channel", "Name:", text=channel.name)
+            name, ok = QInputDialog.getText(self, tr("Rename channel"), tr("Name:"), text=channel.name)
             if ok and name.strip():
                 view.set_channel_field(self._number, name=name.strip())
         elif chosen is volume:
-            value, ok = QInputDialog.getInt(self, "Channel volume", "Volume (0-127):", channel.volume, 0, 127)
+            value, ok = QInputDialog.getInt(self, tr("Channel volume"), tr("Volume (0-127):"), channel.volume, 0, 127)
             if ok:
                 view.set_channel_field(self._number, volume=value)
         elif chosen is remove:
@@ -214,7 +215,7 @@ class ChannelPanel(QWidget):
 
     def contextMenuEvent(self, event) -> None:
         menu = QMenu(self)
-        add = menu.addAction("Add channel")
+        add = menu.addAction(tr("Add channel"))
         add.setEnabled(free_channel(self.view.channels) is not None)
         if menu.exec(event.globalPos()) is add:
             self.view.add_channel(program=self.default_program)

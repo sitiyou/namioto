@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
 )
 
 from namioto import transcription
+from namioto.i18n import tr
 from namioto.settings import Field
 from namioto.ui.settings_dialog import advanced_section, field_editor
 
@@ -57,7 +58,7 @@ class TranscriptionDialog(QDialog):
 
     def __init__(self, audio: str, tempo: float, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Transcribe the singing voice with GAME")
+        self.setWindowTitle(tr("Transcribe the singing voice with GAME"))
         self.resize(600, 640)
         self.audio = str(audio)
         self.tempo = float(tempo)
@@ -76,16 +77,16 @@ class TranscriptionDialog(QDialog):
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
-        self.progress_label = QLabel("Ready")
+        self.progress_label = QLabel(tr("Ready"))
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setFixedHeight(LOG_HEIGHT)
-        self.run_button = QPushButton("Transcribe")
+        self.run_button = QPushButton(tr("Transcribe"))
         self.run_button.clicked.connect(self._start)
-        self.insert_button = QPushButton("Insert")
+        self.insert_button = QPushButton(tr("Insert"))
         self.insert_button.setEnabled(False)
         self.insert_button.clicked.connect(self.accept)
-        self.close_button = QPushButton("Close")
+        self.close_button = QPushButton(tr("Close"))
         self.close_button.clicked.connect(self.reject)
 
         buttons = QHBoxLayout()
@@ -124,10 +125,10 @@ class TranscriptionDialog(QDialog):
             for item in items:
                 editor, read, write = field_editor(self._parameters[item.name], item)
                 editor.setMaximumWidth(FIELD_WIDTH)
-                label = QLabel(item.caption)
+                label = QLabel(tr(item.caption))
                 if item.tooltip:
-                    label.setToolTip(item.tooltip)
-                    editor.setToolTip(item.tooltip)
+                    label.setToolTip(tr(item.tooltip))
+                    editor.setToolTip(tr(item.tooltip))
                 form.addRow(label, editor)
                 self._fields.append((item, read, write))
             if advanced:
@@ -141,7 +142,7 @@ class TranscriptionDialog(QDialog):
         transcription.save_parameters(self._parameters)
         cached = transcription.find_run(self.audio, self._parameters, self.tempo)
         if cached is not None and self._use_cache(len(cached)):
-            self._log_line(f"saved run reused: {len(cached)} notes")
+            self._log_line(tr("saved run reused: {count} notes", count=len(cached)))
             self._settle(cached, save=False)
             return
         self._launch()
@@ -150,21 +151,24 @@ class TranscriptionDialog(QDialog):
         """Ask before a repeat run is skipped; the notes are never listed anywhere, only offered back."""
         answer = QMessageBox.question(
             self,
-            "Transcribe with GAME",
-            f"A run with these exact parameters already found {count} notes.\n"
-            "Use it instead of running the model again?",
+            tr("Transcribe with GAME"),
+            tr(
+                "A run with these exact parameters already found {count} notes.\n"
+                "Use it instead of running the model again?",
+                count=count,
+            ),
         )
         return answer == QMessageBox.StandardButton.Yes
 
     def _launch(self) -> None:
         self.log.clear()
-        self._log_line(f"Transcribing {pathlib.Path(self.audio).name} …")
+        self._log_line(tr("Transcribing {name} …", name=pathlib.Path(self.audio).name))
         self._notes = []
         self._settled = False
         self._downloading = False
         self.progress.setRange(0, 1)
         self.progress.setValue(0)
-        self.progress_label.setText("Starting GAME …")
+        self.progress_label.setText(tr("Starting GAME …"))
         self._set_running(True)
         try:
             self._process, self._queue = start_job(self.audio, self._parameters, self.tempo)
@@ -207,10 +211,12 @@ class TranscriptionDialog(QDialog):
     def _show_progress(self, stage: str, done: int, total: int) -> None:
         if stage == "download":
             self._downloading = True
-            where = f" of {total // (1 << 20)}" if total else ""
-            self.progress_label.setText(f"Downloading the model … {done // (1 << 20)}{where} MB")
+            where = tr(" of {total}", total=total // (1 << 20)) if total else ""
+            self.progress_label.setText(
+                tr("Downloading the model … {done}{where} MB", done=done // (1 << 20), where=where)
+            )
         else:
-            self.progress_label.setText(f"Extracting … {done}/{total}")
+            self.progress_label.setText(tr("Extracting … {done}/{total}", done=done, total=total))
         self.progress.setRange(0, max(1, total))
         self.progress.setValue(done)
 
@@ -224,11 +230,11 @@ class TranscriptionDialog(QDialog):
             try:
                 transcription.save_run(self.audio, self._parameters, self.tempo, self._notes)
             except OSError as error:
-                self._log_line(f"the result could not be saved: {error}")
+                self._log_line(tr("the result could not be saved: {error}", error=error))
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
-        self.progress_label.setText(f"{len(self._notes)} notes")
-        self._log_line(f"{len(self._notes)} notes")
+        self.progress_label.setText(tr("{count} notes", count=len(self._notes)))
+        self._log_line(tr("{count} notes", count=len(self._notes)))
         self._set_running(False)
         self.insert_button.setEnabled(bool(self._notes))
         self.insert_button.setDefault(True)
@@ -241,19 +247,19 @@ class TranscriptionDialog(QDialog):
         for line in str(message).strip().splitlines()[-8:]:
             self._log_line(line)
         self.progress.setValue(0)
-        self.progress_label.setText("Failed")
+        self.progress_label.setText(tr("Failed"))
         self._set_running(False)
 
     def _crash(self, exitcode) -> None:
-        self._log_line(f"GAME stopped unexpectedly (exit code {exitcode})")
+        self._log_line(tr("GAME stopped unexpectedly (exit code {code})", code=exitcode))
         self.progress.setValue(0)
-        self.progress_label.setText("Failed")
+        self.progress_label.setText(tr("Failed"))
         self._set_running(False)
 
     def _set_running(self, running: bool) -> None:
         self.form.setEnabled(not running)
         self.run_button.setEnabled(not running)
-        self.run_button.setText("Transcribing …" if running else "Transcribe")
+        self.run_button.setText(tr("Transcribing …") if running else tr("Transcribe"))
         self.insert_button.setEnabled(False if running else bool(self._notes))
 
     def _log_line(self, text: str) -> None:

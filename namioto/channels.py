@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, replace
 
+from namioto.i18n import tr
+
 CHANNEL_COUNT = 16
 COLOR_HEX = 7
 
@@ -29,7 +31,7 @@ class Channel:
 
     @property
     def label(self) -> str:
-        return self.name or f"Channel {self.channel + 1}"
+        return self.name or tr("Channel {number}", number=self.channel + 1)
 
 
 def set_field(channel: Channel, **fields) -> Channel:

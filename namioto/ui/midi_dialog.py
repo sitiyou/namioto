@@ -15,11 +15,17 @@ from PyQt6.QtWidgets import (
 )
 
 from namioto.channels import CHANNEL_COUNT, Channel
+from namioto.i18n import tr
 
 
 def _title(channel: Channel) -> str:
     """A channel as the dialog names it: its own name when it has one, its number either way."""
-    return f"{channel.name} (channel {channel.channel + 1})" if channel.name else f"Channel {channel.channel + 1}"
+    number = channel.channel + 1
+    return (
+        tr("{name} (channel {number})", name=channel.name, number=number)
+        if channel.name
+        else tr("Channel {number}", number=number)
+    )
 
 
 class MidiImportDialog(QDialog):
@@ -33,26 +39,35 @@ class MidiImportDialog(QDialog):
 
     def __init__(self, imported, channels, source: str, occupied: Collection[int] = (), parent=None):
         super().__init__(parent)
-        self.setWindowTitle("Import MIDI")
+        self.setWindowTitle(tr("Import MIDI"))
         self._channels = list(channels)
         self._occupied = set(occupied)
         self._mode = "merge"
         self._targets: list[QComboBox] = []
 
         layout = QVBoxLayout(self)
-        layout.addWidget(QLabel(f"{len(imported.notes)} notes in {len(imported.channels)} channels from {source}."))
-        layout.addWidget(QLabel("The notes already on the roll are replaced, or merged into the channels below."))
+        layout.addWidget(
+            QLabel(
+                tr(
+                    "{notes} notes in {channels} channels from {source}.",
+                    notes=len(imported.notes),
+                    channels=len(imported.channels),
+                    source=source,
+                )
+            )
+        )
+        layout.addWidget(QLabel(tr("The notes already on the roll are replaced, or merged into the channels below.")))
 
         grid = QGridLayout()
-        grid.addWidget(QLabel("File channel"), 0, 0)
-        grid.addWidget(QLabel("Lands on"), 0, 1)
+        grid.addWidget(QLabel(tr("File channel")), 0, 0)
+        grid.addWidget(QLabel(tr("Lands on")), 0, 1)
         defaults = self._default_mapping(len(imported.channels))
         for row, channel in enumerate(imported.channels, start=1):
             grid.addWidget(QLabel(_title(channel)), row, 0)
             combo = QComboBox()
             for current in self._channels:
                 combo.addItem(_title(current), current.channel)
-            combo.addItem("New channel", -1)
+            combo.addItem(tr("New channel"), -1)
             combo.setCurrentIndex(max(0, combo.findData(defaults[row - 1])))
             combo.currentIndexChanged.connect(self._refresh)
             self._targets.append(combo)
@@ -60,8 +75,8 @@ class MidiImportDialog(QDialog):
         layout.addLayout(grid)
 
         buttons = QDialogButtonBox()
-        self.merge_button = buttons.addButton("Merge", QDialogButtonBox.ButtonRole.AcceptRole)
-        self.replace_button = buttons.addButton("Replace", QDialogButtonBox.ButtonRole.DestructiveRole)
+        self.merge_button = buttons.addButton(tr("Merge"), QDialogButtonBox.ButtonRole.AcceptRole)
+        self.replace_button = buttons.addButton(tr("Replace"), QDialogButtonBox.ButtonRole.DestructiveRole)
         buttons.addButton(QDialogButtonBox.StandardButton.Cancel)
         self.merge_button.setDefault(True)
         self.merge_button.clicked.connect(self._on_merge)
@@ -93,7 +108,7 @@ class MidiImportDialog(QDialog):
         room = len(self._channels) + fresh <= CHANNEL_COUNT
         self.merge_button.setEnabled(room)
         self.merge_button.setToolTip(
-            "" if room else f"Point the file at existing channels to stay within {CHANNEL_COUNT}"
+            "" if room else tr("Point the file at existing channels to stay within {count}", count=CHANNEL_COUNT)
         )
 
     def _on_merge(self) -> None:

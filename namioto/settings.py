@@ -20,9 +20,10 @@ from typing import Any
 import platformdirs
 
 from namioto.bpm import ALGORITHMS
+from namioto.i18n import LANGUAGE_CODES, LANGUAGE_LABELS, SYSTEM
 from namioto.spectrum import CHANNEL_MODES
 
-VERSION = 2
+VERSION = 3
 TEXT_LIMIT = 4096
 DIVISIONS = ("beats", "seconds")
 # the General MIDI program list, in the order the program change is meant to select them in
@@ -191,6 +192,29 @@ class Section:
 
 SECTIONS: tuple[Section, ...] = (
     Section(
+        "general",
+        "General",
+        "General",
+        (
+            Field(
+                "language",
+                "choice",
+                SYSTEM,
+                "Language",
+                "Which language the interface speaks; a change takes effect the next time it starts",
+                choices=LANGUAGE_CODES,
+                labels=LANGUAGE_LABELS,
+            ),
+            Field(
+                "style",
+                "style",
+                "",
+                "Style",
+                "Which widget style draws the window; the desktop's own unless another one is picked",
+            ),
+        ),
+    ),
+    Section(
         "analysis",
         "Analysis",
         "Analysis",
@@ -237,20 +261,6 @@ SECTIONS: tuple[Section, ...] = (
                 high=480,
                 step=0.5,
                 decimals=1,
-            ),
-        ),
-    ),
-    Section(
-        "appearance",
-        "Display",
-        "Appearance",
-        (
-            Field(
-                "style",
-                "style",
-                "",
-                "Style",
-                "Which widget style draws the window; the desktop's own unless another one is picked",
             ),
         ),
     ),

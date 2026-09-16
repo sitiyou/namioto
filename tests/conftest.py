@@ -12,6 +12,11 @@ import pytest
 # assigned, not setdefault: a desktop session usually exports QT_QPA_PLATFORM=wayland;xcb, and the
 # tests must not care which session, or whether there is one at all
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
+# the suite asserts English text, so the language the interface follows the machine for must be
+# decided here rather than by whoever runs it
+os.environ["LANG"] = "C"
+os.environ.pop("LC_ALL", None)
+os.environ.pop("LC_MESSAGES", None)
 
 
 @pytest.fixture(scope="session", autouse=True)

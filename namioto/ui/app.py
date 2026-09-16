@@ -12,7 +12,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QByteArray, QTimer, pyqtSignal
+from PyQt6.QtCore import QByteArray, QLibraryInfo, QTimer, QTranslator, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from namioto import bpm, midi, project
+from namioto import bpm, i18n, midi, project
 from namioto import settings as store
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
@@ -49,7 +49,6 @@ from namioto.ui.transcription_dialog import TranscriptionDialog
 
 POSITION_INTERVAL_MS = 40
 SPEED_SETTLE_MS = 100
-PROJECT_FILTER = f"Namioto project (*{project.SUFFIX})"
 # common libsndfile formats; anything rarer is reachable through All files
 AUDIO_SUFFIXES = (
     ".wav",
@@ -67,8 +66,40 @@ AUDIO_SUFFIXES = (
     ".w64",
     ".rf64",
 )
-AUDIO_FILTER = f"Audio file ({' '.join(f'*{suffix}' for suffix in AUDIO_SUFFIXES)})"
-MIDI_FILTER = f"MIDI file ({' '.join(f'*{suffix}' for suffix in midi.SUFFIXES)})"
+
+
+def _project_filter() -> str:
+    return i18n.tr("Namioto project (*{suffix})", suffix=project.SUFFIX)
+
+
+def _audio_filter() -> str:
+    return i18n.tr("Audio file ({patterns})", patterns=" ".join(f"*{suffix}" for suffix in AUDIO_SUFFIXES))
+
+
+def _midi_filter() -> str:
+    return i18n.tr("MIDI file ({patterns})", patterns=" ".join(f"*{suffix}" for suffix in midi.SUFFIXES))
+
+
+_translators: list[QTranslator] = []
+
+
+def _install_translations(language: str) -> None:
+    """Load Qt's own translations, so standard buttons and file dialogs follow the chosen language."""
+    app = QApplication.instance()
+    if not isinstance(app, QApplication):
+        return
+    for translator in _translators:
+        app.removeTranslator(translator)
+    _translators.clear()
+    locale = i18n.LOCALES.get(language)
+    if language == i18n.DEFAULT or locale is None:
+        return
+    folder = QLibraryInfo.path(QLibraryInfo.LibraryPath.TranslationsPath)
+    for name in (f"qtbase_{locale}", f"qt_{locale}"):
+        translator = QTranslator()
+        if translator.load(name, folder):
+            app.installTranslator(translator)
+            _translators.append(translator)
 
 
 @dataclass(frozen=True)
@@ -133,11 +164,13 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Namioto")
         self.resize(1200, 720)
         self.settings = settings if settings is not None else store.load()
+        i18n.set_language(self.settings.general.language)
+        _install_translations(i18n.current())
         self.settings_store = SettingsStore(self.settings, parent=self)
         self.settings_store.source = self._file_settings
         self.settings_store.changed.connect(self._on_settings_changed)
         self.settings_store.failed.connect(lambda message: self.statusBar().showMessage(message))
-        self._theme = theme.apply(theme.running_app(), self.settings.appearance.style)
+        self._theme = theme.apply(theme.running_app(), self.settings.general.style)
         theme.hints().colorSchemeChanged.connect(self._on_color_scheme)
         self.overrides = dict(overrides or {})  # values this run was asked for, never written back
         self._display_overrides: dict[str, float] = {}
@@ -244,7 +277,9 @@ class MainWindow(QMainWindow):
         self.view.note_preview.connect(self._on_note_preview)
         self.keyboard.key_preview.connect(self._on_note_preview)
         self.transport.settings_button.clicked.connect(self._open_settings)
-        self.mix.midi_volume.slider.setToolTip(f"Volume of the note playback through {self.player_name}")
+        self.mix.midi_volume.slider.setToolTip(
+            i18n.tr("Volume of the note playback through {player}", player=self.player_name)
+        )
         self.view.gain = self.mix.gain.value()
         self.view.contrast = self.mix.contrast.value()
         self.view.bpm = self.transport.bpm.value()
@@ -441,7 +476,7 @@ class MainWindow(QMainWindow):
         two painting again; the keyboard keeps its fixed colours, and everything else is the
         style's to draw.
         """
-        name = theme.apply(theme.running_app(), self.settings.appearance.style)
+        name = theme.apply(theme.running_app(), self.settings.general.style)
         if name == self._theme:
             return
         self._theme = name
@@ -483,7 +518,9 @@ class MainWindow(QMainWindow):
         self._current_player_key = self._player_key()
         self.player.gain = self.mix.midi_volume.value() / 100.0
         self.player.finished.connect(self._on_playback_finished)
-        self.mix.midi_volume.slider.setToolTip(f"Volume of the note playback through {self.player_name}")
+        self.mix.midi_volume.slider.setToolTip(
+            i18n.tr("Volume of the note playback through {player}", player=self.player_name)
+        )
         self._send_program()
         if playing:
             self.player.play(position)
@@ -543,7 +580,7 @@ class MainWindow(QMainWindow):
         return kept
 
     def _document_name(self) -> str:
-        name = self.project_path.stem if self.project_path is not None else "Untitled"
+        name = self.project_path.stem if self.project_path is not None else i18n.tr("Untitled")
         return f"{name}*" if self.project_dirty else name
 
     def _mark_dirty(self, *_args) -> None:
@@ -568,7 +605,7 @@ class MainWindow(QMainWindow):
         choice = QMessageBox.warning(
             self,
             "Namioto",
-            f"Save the changes to {self.project_path.name}?",
+            i18n.tr("Save the changes to {name}?", name=self.project_path.name),
             QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Save,
         )
@@ -583,9 +620,9 @@ class MainWindow(QMainWindow):
             return
         chosen, _filter = QFileDialog.getOpenFileName(
             self,
-            "Open",
+            i18n.tr("Open"),
             self._start_directory(),
-            f"All files (*);;{PROJECT_FILTER};;{AUDIO_FILTER};;{MIDI_FILTER}",
+            ";;".join((i18n.tr("All files (*)"), _project_filter(), _audio_filter(), _midi_filter())),
         )
         if chosen:
             self.open_file(chosen)
@@ -613,9 +650,9 @@ class MainWindow(QMainWindow):
         suggested = Path(self._start_directory()) / f"{name}{project.SUFFIX}"
         chosen, _filter = QFileDialog.getSaveFileName(
             self,
-            "Save project",
+            i18n.tr("Save project"),
             str(self.project_path or suggested),
-            PROJECT_FILTER,
+            _project_filter(),
         )
         if not chosen:
             return False
@@ -630,9 +667,9 @@ class MainWindow(QMainWindow):
         suggested = Path(self._start_directory()) / f"{name}{midi.SUFFIXES[0]}"
         chosen, _filter = QFileDialog.getSaveFileName(
             self,
-            "Export MIDI",
+            i18n.tr("Export MIDI"),
             str(suggested),
-            MIDI_FILTER,
+            _midi_filter(),
         )
         if not chosen:
             return False
@@ -646,7 +683,7 @@ class MainWindow(QMainWindow):
         try:
             opened = project.load(path)
         except (OSError, ValueError) as error:
-            self.statusBar().showMessage(f"Project could not be opened: {error}")
+            self.statusBar().showMessage(i18n.tr("Project could not be opened: {error}", error=error))
             return False
         self._loading = True
         try:
@@ -667,7 +704,9 @@ class MainWindow(QMainWindow):
         finally:
             self._loading = False
         self._update_status()
-        self.statusBar().showMessage(f"Opened {self.project_path.name} — {len(opened.notes)} notes{missing}")
+        self.statusBar().showMessage(
+            i18n.tr("Opened {name} — {notes} notes", name=self.project_path.name, notes=len(opened.notes)) + missing
+        )
         return True
 
     def save_project(self, path: str | Path) -> bool:
@@ -692,14 +731,14 @@ class MainWindow(QMainWindow):
         try:
             project.save(payload, target)
         except OSError as error:
-            self.statusBar().showMessage(f"Project could not be saved: {error}")
+            self.statusBar().showMessage(i18n.tr("Project could not be saved: {error}", error=error))
             return False
         self.project_path = target
         self.project_dirty = False
         store.set_value(self.settings, "paths", "last_audio_dir", str(target.parent))
         self.settings_store.touch()
         self._update_status()
-        self.statusBar().showMessage(f"Saved {target.name} — {len(notes)} notes")
+        self.statusBar().showMessage(i18n.tr("Saved {name} — {notes} notes", name=target.name, notes=len(notes)))
         return True
 
     def import_midi(self, path: str | Path) -> bool:
@@ -712,7 +751,7 @@ class MainWindow(QMainWindow):
         try:
             imported = midi.read(path, wavetone=self.settings.midi.wavetone)
         except (OSError, EOFError, ValueError) as error:
-            self.statusBar().showMessage(f"MIDI file could not be read: {error}")
+            self.statusBar().showMessage(i18n.tr("MIDI file could not be read: {error}", error=error))
             return False
         # the file's notes land on the roll's channels, keeping the instrument and volume the file
         # gave them; a name is not among them, because a MIDI channel cannot carry one
@@ -739,14 +778,17 @@ class MainWindow(QMainWindow):
         finally:
             self._loading = False
         self._mark_dirty()
-        verb = "Merged" if mode == "merge" else "Imported"
-        message = [f"{verb} {len(imported.notes)} notes from {origin}"]
+        verb = i18n.tr("Merged") if mode == "merge" else i18n.tr("Imported")
+        message = [i18n.tr("{verb} {notes} notes from {origin}", verb=verb, notes=len(imported.notes), origin=origin)]
         if imported.tempo_changes:
-            message.append(f"{imported.tempo_changes} tempo changes; the grid takes the first tempo")
+            message.append(
+                i18n.tr("{notes} tempo changes; the grid takes the first tempo", notes=imported.tempo_changes)
+            )
         if imported.dropped:
-            message.append(f"{imported.dropped} note events left out")
+            message.append(i18n.tr("{notes} note events left out", notes=imported.dropped))
         if imported.left_out:
-            message.append(f"channels {' '.join(str(channel + 1) for channel in imported.left_out)} left out")
+            numbers = " ".join(str(channel + 1) for channel in imported.left_out)
+            message.append(i18n.tr("channels {numbers} left out", numbers=numbers))
         self.statusBar().showMessage(" — ".join(message))
         return True
 
@@ -799,9 +841,9 @@ class MainWindow(QMainWindow):
                 wavetone=self.settings.midi.wavetone,
             )
         except OSError as error:
-            self.statusBar().showMessage(f"MIDI file could not be written: {error}")
+            self.statusBar().showMessage(i18n.tr("MIDI file could not be written: {error}", error=error))
             return False
-        self.statusBar().showMessage(f"Exported {Path(path).name} — {len(notes)} notes")
+        self.statusBar().showMessage(i18n.tr("Exported {name} — {notes} notes", name=Path(path).name, notes=len(notes)))
         return True
 
     def _open_transcription(self) -> None:
@@ -815,7 +857,7 @@ class MainWindow(QMainWindow):
     def _adopt_transcription(self, notes, target: str) -> None:
         """Put a run's notes in the roll, on a channel of their own unless the dialog says otherwise."""
         if not notes:
-            self.statusBar().showMessage("GAME found no notes in the loaded audio")
+            self.statusBar().showMessage(i18n.tr("GAME found no notes in the loaded audio"))
             return
         beats = self.view.seconds_per_beat
         arriving = [
@@ -831,12 +873,16 @@ class MainWindow(QMainWindow):
         if target == "new":
             free = free_channel(channels)
             if free is None:
-                self.statusBar().showMessage("All 16 channels are in use; the notes went to the active channel")
+                self.statusBar().showMessage(
+                    i18n.tr("All 16 channels are in use; the notes went to the active channel")
+                )
             else:
                 number = free
                 channels.append(Channel(name="GAME", channel=number, program=53))
         self.view.replace(channels, kept + [(*note, number) for note in arriving], "Transcribe with GAME")
-        self.statusBar().showMessage(f"GAME found {len(arriving)} notes on channel {number + 1}")
+        self.statusBar().showMessage(
+            i18n.tr("GAME found {notes} notes on channel {channel}", notes=len(arriving), channel=number + 1)
+        )
 
     def _open_audio(self, target: Path | None) -> str:
         """Load the audio a project names, or say why there is none: its notes are worth having either way."""
@@ -844,7 +890,7 @@ class MainWindow(QMainWindow):
             self.load_audio(str(target))
             return ""
         self._clear_audio()
-        return f" (audio not found: {target})" if target is not None else ""
+        return i18n.tr(" (audio not found: {path})", path=target) if target is not None else ""
 
     def _clear_audio(self) -> None:
         """Forget the analysed file, for a project that names one this machine does not have."""
@@ -897,12 +943,16 @@ class MainWindow(QMainWindow):
         self.loader = SpectrumLoader(path, parent=self, **self._analysis_options())
         self.loader.progress.connect(self._on_analysis_progress)
         self.loader.loaded.connect(self._on_spectrum_loaded)
-        self.loader.failed.connect(lambda message: self.statusBar().showMessage(f"Spectrum failed: {message}"))
-        self.statusBar().showMessage(f"Analysing {path} …")
+        self.loader.failed.connect(
+            lambda message: self.statusBar().showMessage(i18n.tr("Spectrum failed: {error}", error=message))
+        )
+        self.statusBar().showMessage(i18n.tr("Analysing {path} …", path=path))
         self.loader.start()
         self.song_loader = SongLoader(path, parent=self)
         self.song_loader.loaded.connect(self._on_song_loaded)
-        self.song_loader.failed.connect(lambda message: self.statusBar().showMessage(f"Playback failed: {message}"))
+        self.song_loader.failed.connect(
+            lambda message: self.statusBar().showMessage(i18n.tr("Playback failed: {error}", error=message))
+        )
         self.song_loader.start()
         self._start_tempo()
 
@@ -938,7 +988,7 @@ class MainWindow(QMainWindow):
 
     def _on_active_channel_changed(self, number: int) -> None:
         channel = next(channel for channel in self.view.channels if channel.channel == number)
-        self.statusBar().showMessage(f"Drawing into {channel.label}", 2000)
+        self.statusBar().showMessage(i18n.tr("Drawing into {channel}", channel=channel.label), 2000)
 
     def _start_tempo(self, manual: bool = False) -> None:
         """Estimate the tempo of the loaded audio in the background, as a suggestion only.
@@ -978,18 +1028,18 @@ class MainWindow(QMainWindow):
 
     def _on_tempo_failed(self, message: str) -> None:
         self.transport.detect.setEnabled(self.audio_path is not None)
-        self.statusBar().showMessage(f"Tempo estimation failed: {message}")
+        self.statusBar().showMessage(i18n.tr("Tempo estimation failed: {error}", error=message))
 
     def _apply_tempo(self, bpm: float) -> None:
         self.transport.suggestion.hide()
         self.transport.bpm.setValue(bpm)
-        self.statusBar().showMessage(f"Tempo set to {bpm:.0f} BPM from the audio")
+        self.statusBar().showMessage(i18n.tr("Tempo set to {bpm} BPM from the audio", bpm=f"{bpm:.0f}"))
 
     def _play(self) -> None:
         """Send the notes to the synth and start the audio file, both from where the cursor sits."""
         notes, _channels = self._program()
         if not notes and not self.song.is_loaded:
-            self.statusBar().showMessage("Nothing to play: load a file or draw some notes")
+            self.statusBar().showMessage(i18n.tr("Nothing to play: load a file or draw some notes"))
             return
         seconds = self._position()
         if seconds >= self._duration() - 1e-3:
@@ -1004,7 +1054,7 @@ class MainWindow(QMainWindow):
         if self._is_playing():
             self.position_timer.start()
         else:
-            self.statusBar().showMessage(f"{self.player_name} did not accept the notes")
+            self.statusBar().showMessage(i18n.tr("{player} did not accept the notes", player=self.player_name))
 
     def _toggle_play(self) -> None:
         """One button for both, so it asks the players what they are doing right now."""
@@ -1078,12 +1128,14 @@ class MainWindow(QMainWindow):
 
     def _show_hint(self) -> None:
         self.statusBar().showMessage(
-            "space: play or pause  |  click (outside edit mode): move the playhead  |  "
-            "pen: drag an empty row to draw  |  select: drag a box, ctrl-click to add  |  "
-            "shift drag a note: trim its start (left half) or end (right half)  |  right click: delete  |  "
-            "ctrl C: copy the selection, ctrl V: paste it at the playhead  |  "
-            "ctrl Z: undo, ctrl shift Z: redo  |  "
-            "middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y  |  gear: settings"
+            i18n.tr(
+                "space: play or pause  |  click (outside edit mode): move the playhead  |  "
+                "pen: drag an empty row to draw  |  select: drag a box, ctrl-click to add  |  "
+                "shift drag a note: trim its start (left half) or end (right half)  |  right click: delete  |  "
+                "ctrl C: copy the selection, ctrl V: paste it at the playhead  |  "
+                "ctrl Z: undo, ctrl shift Z: redo  |  "
+                "middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y  |  gear: settings"
+            )
         )
 
     def _on_division_changed(self, *_args) -> None:
@@ -1107,17 +1159,28 @@ class MainWindow(QMainWindow):
         self.view.refresh()
 
     def _on_analysis_progress(self, done: int, total: int) -> None:
-        self.statusBar().showMessage(f"Analysing … {done * 100 // max(1, total)}%")
+        self.statusBar().showMessage(i18n.tr("Analysing … {percent}%", percent=done * 100 // max(1, total)))
 
     def _on_spectrum_loaded(self, spectrum: NoteSpectrum) -> None:
         self.view.set_spectrum(spectrum)
         self.statusBar().showMessage(
-            f"{spectrum.frames} frames x {spectrum.table.shape[1]} bands, "
-            f"{spectrum.frame_ms:g} ms/frame, {spectrum.duration:.1f} s"
+            i18n.tr(
+                "{frames} frames x {bands} bands, {ms} ms/frame, {seconds} s",
+                frames=spectrum.frames,
+                bands=spectrum.table.shape[1],
+                ms=f"{spectrum.frame_ms:g}",
+                seconds=f"{spectrum.duration:.1f}",
+            )
         )
 
     def _update_status(self) -> None:
-        self.setWindowTitle(f"{self._document_name()} — Namioto — {len(self.view.notes())} notes")
+        self.setWindowTitle(
+            i18n.tr(
+                "{document} — Namioto — {notes} notes",
+                document=self._document_name(),
+                notes=len(self.view.notes()),
+            )
+        )
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
