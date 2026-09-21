@@ -29,6 +29,9 @@ namioto-align = "namioto.align:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]
+# torch/torchaudio/transformers/onnx are only for scripts/export_align_model.py; the program runs
+# the converted ONNX graph through onnxruntime and never imports them
+export = ["torch", "torchaudio", "transformers", "onnx"]
 
 [build-system]
 requires = ["hatchling"]

@@ -313,37 +313,38 @@ checks the `.krc` syntax: a file with a mistake in it is still one you can fix i
 
 ## Aligning lyrics to a vocal
 
-Given a separated vocal and the text of each line, `namioto-align` puts a time on every character:
-the text is forced onto the frames of a wav2vec2 CTC model, which never recognises anything, it only
+Given a separated vocal and the tokens of each line, `namioto-align` puts a time on every token: the
+tokens are forced onto the frames of a wav2vec2 CTC model, which never recognises anything, it only
 says where the words it is given fall. The vocal has to be the isolated singing voice and not the
-mix, the text its kana reading, and each line a roughly right window - a list of `{start, end, text}`
-in a JSON file - because the aligner refines a window and cannot find one: it is passed as a whole,
-only the model's own frames carry the times.
+mix, the tokens its romanised reading, and each line a roughly right window - a list of
+`{start, end, tokens}` in a JSON file, one token per mora - because the aligner refines a window and
+cannot find one: it is passed as a whole, only the model's own frames carry the times.
 
 ```bash
 uv run namioto-align vocal.wav lines.json --out aligned.json
 ```
 
-Each line comes back with one entry per input character - its onset, its end and the model's
-probability - and a space or a character the model could not place stays untimed. Only the onset is
-worth reading: a character's end is the next character's onset, so the last one before a rest
-reaches into the rest. Lines the run could not place are named on stderr: `empty` when nothing was
-timed, `nonmonotonic` when the times run backwards, `collapsed` when a run of characters was squeezed
-into no time at all, and `diverged` against reference times handed to the module's `problems()`. A
-line wearing one of them is worth running again with another window before it is believed.
+Each line comes back with one entry per input token - its onset, its end and the model's probability
+- and a token the model could not place stays untimed. Only the onset is worth reading: a token's end
+is the next token's onset, so the last one before a rest reaches into the rest. Lines the run could
+not place are named on stderr: `empty` when nothing was timed, `nonmonotonic` when the times run
+backwards, `collapsed` when a run of tokens was squeezed into no time at all, and `diverged` against
+reference times handed to the module's `problems()`. A line wearing one of them is worth running
+again with another window before it is believed.
 
-The model is not redistributed and has no download of its own: `scripts/export_align_model.py`
-converts the HuggingFace model into the data directory once, and `--model` or `$NAMIOTO_ALIGN_MODEL`
-points at a converted one. The script is a development tool and needs torch, transformers and ONNX,
-which the program itself does not install:
+`namioto.utils.kana_tokens` turns a line's kana into that reading, one hepburn token per mora. The
+model is not redistributed and has no download of its own: `scripts/export_align_model.py` converts
+one into the data directory once, and `--dir` or `$NAMIOTO_ALIGN_MODEL` points at a converted one.
+Two models can be exported: `mms` (Meta's MMS forced-alignment checkpoint, the default) and `yohane`
+(the karaoke fine-tune `NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`).
 
 ```bash
-uv run --with torch --with transformers --with onnx --with onnxruntime scripts/export_align_model.py
+uv run --group export scripts/export_align_model.py --model mms
+uv run --group export scripts/export_align_model.py --model yohane
 ```
 
-On one song's 39 lines, a separated vocal and kana text, the onsets the model gave were a median
-31 ms from a hand-checked grid, and the whole run took about 9 s on 8 CPU threads with the int8
-graph the script writes.
+The script is a development tool and needs torch (plus torchaudio for `mms`, transformers for
+`yohane`) and ONNX, which the program itself does not install.
 
 The transport plays the loaded audio file and the notes on top of it. A press in the roll moves its
 playhead wherever it lands - over a note it edits it as well, over the empty grid the pen draws one

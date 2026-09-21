@@ -68,17 +68,36 @@ Third-party code and assets
 - Consequence: a transcription produced with those models is non-commercial, exactly as with the
   bundled TempoCNN model above.
 
-### whisperX (forced alignment)
-- Upstream: m-bain/whisperX, https://github.com/m-bain/whisperX
+### FA-Kara (forced alignment)
+- Upstream: moriwx/FA-Kara, https://github.com/moriwx/FA-Kara
+- License: MIT
+- Used for: the alignment core `namioto/align.py` ports. `align()`'s per-token flow - flatten a
+  line's tokens into characters, force them onto the model's frames, group the frames back into one
+  span per token - is reimplemented here in numpy and ONNX Runtime, with the audio windowed by the
+  caller. The model is not redistributed: the module loads a converted ONNX graph from the data
+  directory (`~/.local/share/namioto/models/<model>/<language>`, via `platformdirs`) or from
+  `$NAMIOTO_ALIGN_MODEL`, and `scripts/export_align_model.py` produces it from the two models below.
+
+### torchaudio (CTC forced alignment)
+- Upstream: pytorch/audio, https://github.com/pytorch/audio
 - License: BSD 2-Clause
-- Used for: the algorithm `namioto/align.py` ports. `align()`'s wav2vec2 CTC trellis, its Viterbi
-  backtracking and its merge of a character's frames into one span are reimplemented here in numpy
-  and ONNX Runtime, with torch, pandas, transformers and NLTK's sentence splitting dropped and the
-  audio windowed by the caller. The aligner model is not redistributed: the module loads a converted
-  ONNX graph from the data directory (`~/.local/share/namioto/models/wav2vec2/<language>`, via
-  `platformdirs`) or from `$NAMIOTO_ALIGN_MODEL`, and `scripts/export_align_model.py` produces that
-  graph from `jonatasgrosman/wav2vec2-large-xlsr-53-japanese` (Apache-2.0), so a converted aligner
-  carries no non-commercial term, unlike the bundled TempoCNN and GAME's models.
+- Used for: `forced_align` and `merge_tokens`, whose numpy port in `namioto/align.py` computes the
+  CTC trellis and the token spans. torchaudio is not a dependency of the program; only
+  `scripts/export_align_model.py` uses it, to convert the MMS checkpoint.
+
+### MMS forced-alignment model (not redistributed)
+- Upstream: Meta AI, `torchaudio.pipelines.MMS_FA` (the `ctc_alignment_mling_uroman` checkpoint)
+- License: Creative Commons Attribution-NonCommercial 4.0 International — NOT AGPL-3.0
+- Namioto's default aligner (`--model mms`); `scripts/export_align_model.py` converts it from the
+  network, and it is never shipped with the program.
+
+### yohane karaoke alignment model (not redistributed)
+- Upstream: `NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`,
+  https://huggingface.co/NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn
+- License: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International — NOT AGPL-3.0
+- Namioto's `--model yohane`; `scripts/export_align_model.py` converts it from HuggingFace, and it is
+  never shipped with the program.
+- Consequence: a converted aligner is non-commercial, like the bundled TempoCNN and GAME's models.
 
 ### Dependencies (all AGPL-compatible)
 | Component | License |
@@ -91,7 +110,7 @@ Third-party code and assets
 | numpy, scipy, scikit-learn, joblib, pooch, soundfile | BSD-3-Clause |
 | qtawesome, qtpy | MIT |
 | mido | MIT |
-| torch, onnx, onnxscript (development only) | BSD-3-Clause / Apache-2.0 |
+| torch, torchaudio, onnx, onnxscript (development only) | BSD-3-Clause / Apache-2.0 |
 | transformers (development only) | Apache-2.0 |
 | packaging | Apache-2.0 OR BSD-2-Clause |
 | soxr | LGPL-2.1-or-later |
