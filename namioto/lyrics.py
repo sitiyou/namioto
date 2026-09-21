@@ -3,7 +3,7 @@
 """Lyrics: the `.krc` file beside a project, the prompt that fills it, and the model call.
 
 Qt-free on purpose. The file is a sidecar, not a document: the project keeps its notes, this keeps
-the readings of the words they sing, and nothing here checks the `.krc` syntax - a file with a
+the rubies of the words they sing, and nothing here checks the `.krc` syntax - a file with a
 mistake in it is still the user's to fix in an editor. `translate` takes its opener as an argument,
 so a call can be exercised without a network.
 """

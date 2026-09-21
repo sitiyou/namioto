@@ -609,7 +609,7 @@ class EditBar(_Group):
         self.transcribe = icon_button("transcribe", tr("Transcribe the singing voice of the loaded audio with GAME"))
         self.transcribe.setEnabled(False)
         self.transcribe.clicked.connect(self.transcribe_requested)
-        self.lyrics = icon_button("lyrics", tr("Import lyrics: have a model add the readings and keep them in a .krc"))
+        self.lyrics = icon_button("lyrics", tr("Import lyrics: have a model add the rubies and keep them in a .krc"))
         self.lyrics.setEnabled(False)
         self.lyrics.clicked.connect(self.lyrics_requested)
 

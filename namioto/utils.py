@@ -1,9 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Small helpers shared across the Qt-free modules.
 
-`kana_tokens()` is the reading `namioto-align` takes: it turns a `.krc` line's bracketed kana into
+`kana_tokens()` is the ruby `namioto-align` takes: it turns a `.krc` line's bracketed kana into
 one hepburn token per mora, the unit FA-Kara's models are trained on. It is deliberately small - a
-`.krc` file already carries the kana reading of every kanji, so the kanji surface and the annotation
+`.krc` file already carries the kana ruby of every kanji, so the kanji surface and the annotation
 punctuation only have to be dropped, with no kanji lookup and no dictionary. A run of Latin letters
 or digits is kept as one token; everything else is dropped, so the same call reads a bare kana
 string and a whole `.krc` line.
@@ -177,7 +177,7 @@ def _geminate(mora: str) -> str:
 
 
 def kana_tokens(text: str) -> list[str]:
-    """The reading of `text` as one hepburn token per mora, Latin and digits kept as runs.
+    """The ruby of `text` as one hepburn token per mora, Latin and digits kept as runs.
 
     `text` is a kana string or a whole `.krc` line; the kanji and the annotation punctuation are
     dropped, so `漢字[かんじ]` reads as `kanji`.

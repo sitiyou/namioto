@@ -11,7 +11,7 @@ from the quantised graph) and `vocab.json` into the aligner's data directory, or
 
 `mms` is Meta's MMS forced-alignment checkpoint (`torchaudio.pipelines.MMS_FA`), the default;
 `yohane` is `NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`, a karaoke fine-tune. Both are
-wav2vec2 CTC models that read a romanised reading. The graph bakes in the waveform normalisation
+wav2vec2 CTC models trained on romanised kana. The graph bakes in the waveform normalisation
 the models expect, takes `input_values` and returns `logits`; quantisation is limited to `MatMul`,
 because the exporter writes the convolutions' bias outside the initializers and quantising those
 fails.

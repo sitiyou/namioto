@@ -292,7 +292,7 @@ are downloaded rather than redistributed here - see NOTICE.
 
 ## Importing lyrics
 
-A project can carry readings for the words its notes sing, in a `.krc` file beside it - the same
+A project can carry rubies for the words its notes sing, in a `.krc` file beside it - the same
 base name with the `.krc` suffix. The text-box button beside the GAME wand opens a window over that
 file: paste the lyrics into the upper box (or load a `.txt`, `.md` or `.lrc`), and either ask a
 model to annotate it or type the lower one by hand. `Save` writes the `.krc` as plain UTF-8 text -
@@ -301,7 +301,7 @@ a hand edit shows up without reopening the project. `Open in external editor` ha
 command named under **External editor** in the settings, or to the platform's own choice when that is
 left empty.
 
-The prompt is built in and does the readings: it is the same rule set an external `lyrics.md` role would
+The prompt is built in and adds the rubies: it is the same rule set an external `lyrics.md` role would
 carry, asking for the kana of each kanji in square brackets, grouped per word and comma-separated.
 `Copy prompt` puts it on the clipboard together with the lyrics, for a web model - paste it there,
 paste the answer back into the lower box and save. With an OpenAI-compatible endpoint set up under
@@ -316,7 +316,7 @@ checks the `.krc` syntax: a file with a mistake in it is still one you can fix i
 Given a separated vocal and the tokens of each line, `namioto-align` puts a time on every token: the
 tokens are forced onto the frames of a wav2vec2 CTC model, which never recognises anything, it only
 says where the words it is given fall. The vocal has to be the isolated singing voice and not the
-mix, the tokens its romanised reading, and each line a roughly right window - a list of
+mix, the tokens its kana romanised, and each line a roughly right window - a list of
 `{start, end, tokens}` in a JSON file, one token per mora - because the aligner refines a window and
 cannot find one: it is passed as a whole, only the model's own frames carry the times.
 
@@ -332,7 +332,7 @@ backwards, `collapsed` when a run of tokens was squeezed into no time at all, an
 reference times handed to the module's `problems()`. A line wearing one of them is worth running
 again with another window before it is believed.
 
-`namioto.utils.kana_tokens` turns a line's kana into that reading, one hepburn token per mora. The
+`namioto.utils.kana_tokens` turns a line's kana into those tokens, one hepburn token per mora. The
 model is not redistributed and has no download of its own: `scripts/export_align_model.py` converts
 one into the data directory once, and `--dir` or `$NAMIOTO_ALIGN_MODEL` points at a converted one.
 Two models can be exported: `mms` (Meta's MMS forced-alignment checkpoint, the default) and `yohane`

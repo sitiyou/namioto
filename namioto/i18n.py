@@ -169,7 +169,7 @@ CATALOGS: dict[str, dict[str, str]] = {
         "Snap grid for the pen tool: the note the grid is divided by": "画笔工具的吸附网格：网格划分的音符时值",
         "Quantize: put the starts and ends of the notes on the snap grid, the selection if there is one": "量化：把音符的起点与终点对齐到吸附网格，有选区时只处理选区",
         "Transcribe the singing voice of the loaded audio with GAME": "用 GAME 转录已载入音频中的歌声",
-        "Import lyrics: have a model add the readings and keep them in a .krc": "导入歌词：让模型添加注音并保存为 .krc",
+        "Import lyrics: have a model add the rubies and keep them in a .krc": "导入歌词：让模型添加注音并保存为 .krc",
         "Spectrum gain: how much energy it takes to reach full red": "频谱增益：达到全红所需的能量",
         "Spectrum contrast: exponent applied to the energy": "频谱对比度：施加到能量上的指数",
         "Volume of the analysed audio track": "被分析音轨的音量",
