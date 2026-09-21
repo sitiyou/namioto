@@ -4,6 +4,7 @@
 from namioto.karaoke.model import Chapter, KrcError, Line, Lyrics, Ruby, Word
 from namioto.karaoke.parser import parse
 from namioto.karaoke.transforms import flatten_ruby, merge_words
+from namioto.karaoke.writer import dumps
 
 __all__ = [
     "Chapter",
@@ -12,6 +13,7 @@ __all__ = [
     "Lyrics",
     "Ruby",
     "Word",
+    "dumps",
     "flatten_ruby",
     "merge_words",
     "parse",
