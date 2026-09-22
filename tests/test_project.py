@@ -49,6 +49,7 @@ def test_only_the_values_that_belong_to_the_document_are_written() -> None:
         "audio",
         "channels",
         "notes",
+        "lyrics",
         "analysis",
         "spectrum",
         "playback",
@@ -156,6 +157,19 @@ def test_a_note_that_makes_no_sense_is_left_out(recwarn) -> None:
 
 def test_notes_that_are_not_a_list_leave_an_empty_project() -> None:
     assert project.from_dict({"format": "namioto", "notes": "lots"}).notes == ()
+
+
+def test_the_lyric_times_survive_a_round_trip() -> None:
+    lyrics = project.LyricTimes(key="abc", model="mms", lines=(((0.0, 1.0), (None, None)),))
+    written = project.to_dict(make(lyrics=lyrics))
+    assert written["lyrics"] == {"key": "abc", "model": "mms", "lines": [[[0.0, 1.0], [None, None]]]}
+    assert project.from_dict(written).lyrics == lyrics
+
+
+def test_a_broken_lyric_block_is_dropped() -> None:
+    assert project.from_dict({"format": "namioto", "lyrics": "lots"}).lyrics is None
+    assert project.from_dict({"format": "namioto", "lyrics": {"key": "a"}}).lyrics is None
+    assert project.from_dict({"format": "namioto", "lyrics": {"key": "a", "lines": [[1.0]]}}).lyrics is None
 
 
 def test_the_audio_is_stored_beside_the_project_when_it_can_be(tmp_path) -> None:

@@ -11,12 +11,13 @@ Qt-free.
 from __future__ import annotations
 
 import re
+import unicodedata
 import warnings
 from dataclasses import dataclass
 
 KANJI = re.compile(r"[\u4e00-\u9faf々]+$")
 LATIN = re.compile(r"[A-Za-zＡ-Ｚａ-ｚ]+")
-IGNORED = "ャュョァィゥェォゃゅょぁぃぅぇぉ 「」『』、。．・♥☆※；…‥？！：（）〔〕“”‘’"
+IGNORED = "ャュョァィゥェォゃゅょぁぃぅぇぉゎヮ 「」『』、。．・♥☆※；…‥？！：（）〔〕“”‘’"
 
 
 class KrcError(ValueError):
@@ -24,10 +25,12 @@ class KrcError(ValueError):
 
 
 def calc_mora(text: str) -> int:
-    """One mora per printable character; a run of letters does not count as one here."""
+    """One mora per printable character that carries a sound; punctuation and symbols carry none."""
     mora = 0
     for char in text:
         if not char.isprintable() or char in IGNORED:
+            continue
+        if unicodedata.category(char)[0] in ("P", "S"):
             continue
         mora += 1
     return mora

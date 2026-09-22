@@ -37,7 +37,7 @@ def _word_text(word: Word) -> str:
     if word.ruby is not None:
         ruby = ",".join(_ruby_text(part) for part in word.ruby.parts)
         text += f"[{ruby}]"
-    if word.mora != word.natural_mora:
+    if word.override is not None and word.mora != word.natural_mora:
         text += f".{word.mora}"
     return text
 

@@ -21,7 +21,7 @@ from namioto import settings as store
 from namioto.channels import CHANNEL_COUNT, Channel, valid_color
 
 FORMAT = "namioto"
-VERSION = 6
+VERSION = 7
 SUFFIX = ".nto"
 NOTE_DECIMALS = 4
 
@@ -36,12 +36,25 @@ class Note(NamedTuple):
     channel: int = 0
 
 
+class LyricTimes(NamedTuple):
+    """The aligned times of a `.krc` as a cache beside the notes.
+
+    `key` is the hash of the `.krc` text the times were made from, so a changed file invalidates
+    them; `lines` holds one `(start, end)` in seconds per mora, `None` where none was found.
+    """
+
+    key: str = ""
+    model: str = ""
+    lines: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
+
+
 @dataclass(frozen=True)
 class Project:
     values: dict[str, dict] = field(default_factory=dict)  # the project-scoped settings, by section
     audio: str = ""
     channels: tuple[Channel, ...] = ()
     notes: tuple[Note, ...] = ()
+    lyrics: LyricTimes | None = None
 
 
 def looks_like_project(path: str | Path) -> bool:
@@ -83,6 +96,17 @@ def to_dict(project: Project) -> dict:
             }
             for note in project.notes
         ],
+        "lyrics": _lyrics_dict(project.lyrics),
+    }
+
+
+def _lyrics_dict(lyrics: LyricTimes | None) -> dict | None:
+    if lyrics is None:
+        return None
+    return {
+        "key": lyrics.key,
+        "model": lyrics.model,
+        "lines": [[list(span) for span in line] for line in lyrics.lines],
     }
 
 
@@ -171,6 +195,35 @@ def _notes(value: Any) -> tuple[Note, ...]:
     return tuple(notes)
 
 
+def _lyric_times(value: Any) -> LyricTimes | None:
+    if not isinstance(value, dict):
+        return None
+    key, lines = value.get("key"), value.get("lines")
+    model = value.get("model")
+    if not isinstance(key, str) or not isinstance(lines, list):
+        return None
+    rows: list[tuple[tuple[float | None, float | None], ...]] = []
+    for line in lines:
+        if not isinstance(line, list):
+            return None
+        row = []
+        for span in line:
+            if span is None:
+                row.append((None, None))
+                continue
+            if not isinstance(span, list) or len(span) != 2:
+                return None
+            if any(
+                value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))) for value in span
+            ):
+                return None
+            if any(value is not None and not math.isfinite(value) for value in span):
+                return None
+            row.append((None if span[0] is None else float(span[0]), None if span[1] is None else float(span[1])))
+        rows.append(tuple(row))
+    return LyricTimes(key=key, model=model if isinstance(model, str) else "", lines=tuple(rows))
+
+
 def from_dict(data: Any) -> Project:
     """Read a project out of a parsed file, with every value checked the way the settings are."""
     if not isinstance(data, dict) or data.get("format") != FORMAT:
@@ -189,6 +242,7 @@ def from_dict(data: Any) -> Project:
         audio=_audio(data.get("audio")),
         channels=channels,
         notes=notes,
+        lyrics=_lyric_times(data.get("lyrics")),
     )
 
 
