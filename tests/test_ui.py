@@ -28,6 +28,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
     QFileDialog,
+    QInputDialog,
     QLabel,
     QLineEdit,
     QMenu,
@@ -37,13 +38,15 @@ from PyQt6.QtWidgets import (
     QToolButton,
 )
 
-from namioto import lyrics, midi, project, transcription
+from namioto import align, lyrics, midi, project, transcription
 from namioto import settings as store
 from namioto.bpm import BpmEstimate
 from namioto.channels import Channel
 from namioto.interaction import Interaction, Tool
+from namioto.karaoke import mora_lines, text_key
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.ui import theme
+from namioto.ui.align_dialog import AlignDialog, Aligner
 from namioto.ui.app import MainWindow, TempoLoader
 from namioto.ui.audio import MidiPortOut, MidiSink, find_port, find_synth_port
 from namioto.ui.controls import Cluster, EditBar, TransportBar, ValueSlider
@@ -53,6 +56,7 @@ from namioto.ui.roll import (
     CONTENT_MARGIN,
     LENGTH_BEATS,
     MIN_DURATION,
+    MORA_HEIGHT,
     NOTE_INSET,
     PITCH_MAX,
     PITCH_MIN,
@@ -3510,6 +3514,55 @@ def test_a_channel_change_refreshes_its_card_in_place(own_window) -> None:
     assert panel._cards[0] is not card  # the set of channels changed, so the cards are rebuilt
 
 
+def test_a_channel_id_shows_before_its_name(own_window) -> None:
+    own_window.view.set_channels((Channel(channel=0, name="Lead"), Channel(channel=2)))
+    cards = own_window.channel_panel._cards
+    assert cards[0].id.text() == "(1)"
+    assert cards[0].name.text() == "Lead"
+    assert cards[2].id.text() == "(3)"
+    assert cards[2].name.text() != ""  # an unnamed channel keeps a word to read
+
+
+def test_the_channel_id_wears_the_note_colour(own_window) -> None:
+    own_window.view.set_channels((Channel(channel=0, color="#ff8800"),))
+    card = own_window.channel_panel._cards[0]
+    assert "#ff8800" in card.id.styleSheet()
+
+
+def test_a_channel_moves_to_another_id_with_its_notes(own_window) -> None:
+    view = own_window.view
+    view.set_channels((Channel(channel=0), Channel(channel=3)))
+    view.set_notes([(60, 0.0, 1.0, 3)])
+    assert view.set_channel_number(3, 5) is True
+    assert [channel.channel for channel in view.channels] == [0, 5]
+    assert [note.channel for note in view.notes()] == [5]
+    assert view.set_channel_number(5, 0) is False  # 1 is already taken
+    assert view.set_channel_number(5, 5) is True  # the same number is a quiet no-op
+
+
+def test_moving_a_channel_moves_its_colour_too(own_window) -> None:
+    view = own_window.view
+    view.set_channels((Channel(channel=0), Channel(channel=1)))
+    assert view._channel_color(1).name() == QColor(theme.NOTE_PALETTE[1]).name()
+    assert view.set_channel_number(1, 4) is True
+    assert view._channel_color(4).name() == QColor(theme.NOTE_PALETTE[4]).name()
+    assert own_window.channel_panel._cards[4].id.styleSheet() == f"color: {QColor(theme.NOTE_PALETTE[4]).name()};"
+
+
+def test_the_card_menu_can_change_the_channel_id(own_window, monkeypatch) -> None:
+    view = own_window.view
+    view.set_channels((Channel(channel=0), Channel(channel=1)))
+    card = own_window.channel_panel._cards[0]
+    monkeypatch.setattr(
+        QMenu, "exec", lambda self, *args, **kwargs: next(a for a in self.actions() if a.text() == "Channel ID…")
+    )
+    monkeypatch.setattr(QInputDialog, "getInt", lambda *args, **kwargs: (5, True))
+    card.contextMenuEvent(
+        QContextMenuEvent(QContextMenuEvent.Reason.Mouse, QPoint(0, 0), card.mapToGlobal(QPoint(0, 0)))
+    )
+    assert [channel.channel for channel in view.channels] == [1, 4]
+
+
 def test_the_active_channel_wears_the_selection_colour(own_window) -> None:
     view = own_window.view
     view.set_channels((Channel(channel=0), Channel(channel=1)))
@@ -3875,3 +3928,251 @@ def test_the_export_button_writes_a_midi_file(own_window, monkeypatch, tmp_path)
     target = tmp_path / "exported.mid"  # the export adds its own suffix
     assert [note.pitch for note in midi.read(target, wavetone=True).notes] == [60]
     assert own_window.project_path is None  # an export leaves the document where it was
+
+
+def mora_mouse(window, kind, x: float) -> None:
+    """Send a mouse event to the mora strip, whose columns line up with the roll's."""
+    position = QPointF(x, MORA_HEIGHT / 2)
+    event = QMouseEvent(
+        kind,
+        position,
+        window.mora_strip.mapToGlobal(position),
+        Qt.MouseButton.LeftButton,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+    )
+    if kind == QEvent.Type.MouseButtonPress:
+        window.mora_strip.mousePressEvent(event)
+    elif kind == QEvent.Type.MouseMove:
+        window.mora_strip.mouseMoveEvent(event)
+    else:
+        window.mora_strip.mouseReleaseEvent(event)
+
+
+def test_a_mora_boundary_drag_moves_both_morae_and_undoes(window) -> None:
+    window.view.set_playhead(None)
+    window.view.load_lyrics(mora_lines("あい"), [[(0.0, 1.0), (1.0, 2.0)]])
+    window.mora_strip.setVisible(True)
+    QApplication.processEvents()
+    boundary = window.mora_strip._x(1.0)
+    assert window.mora_strip._boundary_at(boundary) == (0, 1)
+
+    target = window.mora_strip._x(1.5)
+    mora_mouse(window, QEvent.Type.MouseButtonPress, boundary)
+    mora_mouse(window, QEvent.Type.MouseMove, target)
+    mora_mouse(window, QEvent.Type.MouseButtonRelease, target)
+    moved = window.view.lyric_times[0]
+    assert moved[0][1] == pytest.approx(moved[1][0])
+    assert moved[0][1] == pytest.approx(1.5)  # snapped onto the note edge there
+
+    window.view.undo()
+    assert window.view.lyric_times[0] == ((0.0, 1.0), (1.0, 2.0))
+    window.view.load_lyrics((), ())
+    window.mora_strip.setVisible(False)
+
+
+def test_a_mora_boundary_drag_lands_on_the_snap_grid(window) -> None:
+    window.view.set_playhead(None)
+    window.view.load_lyrics(mora_lines("あい"), [[(0.0, 1.0), (1.0, 2.0)]])
+    window.mora_strip.setVisible(True)
+    QApplication.processEvents()
+
+    off_grid = window.mora_strip._x(1.4)  # 1.4s is not on the 1/8 grid at 120 BPM
+    mora_mouse(window, QEvent.Type.MouseButtonPress, window.mora_strip._x(1.0))
+    mora_mouse(window, QEvent.Type.MouseMove, off_grid)
+    mora_mouse(window, QEvent.Type.MouseButtonRelease, off_grid)
+    moved = window.view.lyric_times[0]
+    assert moved[0][1] == pytest.approx(1.5)  # the nearest 0.25s cell
+    window.view.undo()
+    window.view.load_lyrics((), ())
+    window.mora_strip.setVisible(False)
+
+
+def test_a_mora_can_be_dragged_to_no_length(window) -> None:
+    window.view.set_playhead(None)
+    window.view.load_lyrics(mora_lines("あい"), [[(0.0, 1.0), (1.0, 2.0)]])
+    window.mora_strip.setVisible(True)
+    QApplication.processEvents()
+
+    start = window.mora_strip._x(0.0)
+    mora_mouse(window, QEvent.Type.MouseButtonPress, window.mora_strip._x(1.0))
+    mora_mouse(window, QEvent.Type.MouseMove, start)
+    mora_mouse(window, QEvent.Type.MouseButtonRelease, start)
+    assert window.view.lyric_times[0] == ((0.0, 0.0), (0.0, 2.0))
+    window.view.undo()
+    window.view.load_lyrics((), ())
+    window.mora_strip.setVisible(False)
+
+
+def test_the_mora_strip_shows_every_line(window) -> None:
+    window.view.load_lyrics(mora_lines("あい\nうえ"), [[(0.0, 1.0), (1.0, 2.0)], [(3.0, 4.0), (4.0, 5.0)]])
+    window.mora_strip.setVisible(True)
+    QApplication.processEvents()
+    # the second line's boundary is grabbable too, not just the first line's
+    assert window.mora_strip._boundary_at(window.mora_strip._x(4.0)) == (1, 1)
+    assert not window.mora_strip.grab().isNull()
+    window.view.load_lyrics((), ())
+    window.mora_strip.setVisible(False)
+
+
+def test_the_mora_strip_renders_the_current_line(window) -> None:
+    window.view.load_lyrics(mora_lines("あい"), [[(0.0, 1.0), (1.0, 2.0)]])
+    window.mora_strip.setVisible(True)
+    QApplication.processEvents()
+    image = window.mora_strip.grab()
+    assert not image.isNull() and image.width() > 0
+    window.view.load_lyrics((), ())
+    window.mora_strip.setVisible(False)
+
+
+def test_the_strip_hides_until_the_times_arrive(own_window, tmp_path) -> None:
+    (tmp_path / "song.krc").write_text("あい\n", encoding="utf-8")
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._stored_lyrics = None
+    own_window.lyrics_text = "あい\n"
+    own_window._load_mora()
+    assert own_window.view.lyric_times == (((None, None), (None, None)),)
+    assert own_window.mora_strip.isHidden()
+
+    own_window._stored_lyrics = project.LyricTimes(
+        key=text_key("あい\n"), model="mms", lines=(((0.0, 1.0), (1.0, 2.0)),)
+    )
+    own_window._lyric_key = ""
+    own_window._load_mora()
+    assert own_window.view.lyric_times == (((0.0, 1.0), (1.0, 2.0)),)
+    assert not own_window.mora_strip.isHidden()
+
+
+def test_the_aligned_times_are_kept_in_the_project(own_window, tmp_path) -> None:
+    (tmp_path / "song.krc").write_text("あい\n", encoding="utf-8")
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._stored_lyrics = None
+    own_window._watch_lyrics()
+    own_window.view.set_lyrics(mora_lines("あい\n"), [[(0.0, 1.0), (1.0, 2.0)]])
+    own_window._lyric_key = text_key("あい\n")
+    own_window._lyric_model = "mms"
+
+    assert own_window.save_project(tmp_path / "song.nto") is True
+    saved = project.load(tmp_path / "song.nto")
+    assert saved.lyrics == project.LyricTimes(key=text_key("あい\n"), model="mms", lines=(((0.0, 1.0), (1.0, 2.0)),))
+    assert own_window.project_dirty is False
+
+
+def test_the_align_dialog_hands_the_times_over(own_window) -> None:
+    dialog = AlignDialog("vocal.wav", "あい\n", 120.0, parent=own_window)
+    got: list = []
+    dialog.aligned.connect(lambda times, model: got.append((times, model)))
+    dialog._done(([[(0.0, 1.0), (1.0, 2.0)]], "mms", []))
+    assert got == [([[(0.0, 1.0), (1.0, 2.0)]], "mms")]
+    assert dialog.run.isEnabled()
+
+
+def test_the_align_dialog_snaps_to_the_beat_grid_when_asked(own_window) -> None:
+    dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
+    dialog.snap.setCurrentIndex(dialog.snap.findData(1))  # 1/4 notes, one beat
+    got: list = []
+    dialog.aligned.connect(lambda times, model: got.append(times))
+    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", []))
+    assert got == [[[(0.0, 0.5), (0.5, 1.0)]]]
+
+
+def test_the_align_dialog_can_quantize_to_eighth_notes(own_window) -> None:
+    dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
+    dialog.snap.setCurrentIndex(dialog.snap.findData(2))  # 1/8 notes, half a beat
+    got: list = []
+    dialog.aligned.connect(lambda times, model: got.append(times))
+    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", []))
+    assert got == [[[(0.0, 0.5), (0.5, 1.0)]]]
+
+
+def test_the_align_dialog_leaves_the_times_alone_by_default(own_window) -> None:
+    dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
+    got: list = []
+    dialog.aligned.connect(lambda times, model: got.append(times))
+    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", []))
+    assert got == [[[(0.1, 0.6), (0.6, 1.1)]]]
+
+
+def test_the_align_dialog_shows_a_failure(own_window) -> None:
+    dialog = AlignDialog("vocal.wav", "あい\n", 120.0, parent=own_window)
+    dialog._fail("FileNotFoundError: no mms aligner")
+    assert "FileNotFoundError" in dialog.log.toPlainText()
+    assert dialog.run.isEnabled()
+
+
+def test_the_aligner_reports_the_lines_it_doubts() -> None:
+    lines = mora_lines("あい\n")
+    found = align.AlignedSegment(0.0, 2.0, (align.Token("a"), align.Token("i")))
+    assert Aligner._problems(found, lines) == ["あい: empty"]
+
+
+def test_the_align_button_opens_the_dialog(own_window, monkeypatch, tmp_path) -> None:
+    (tmp_path / "song.krc").write_text("あん\n", encoding="utf-8")
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._watch_lyrics()
+    own_window.audio_path = str(tmp_path / "vocal.wav")
+
+    opened: list = []
+    monkeypatch.setattr(AlignDialog, "exec", lambda self: opened.append(self) or 0)
+    own_window._open_align()
+    assert len(opened) == 1
+
+
+def test_saving_lyrics_lets_align_see_them_at_once(own_window, monkeypatch, tmp_path) -> None:
+    own_window.project_path = tmp_path / "song.nto"
+    own_window.audio_path = str(tmp_path / "vocal.wav")
+    own_window._watch_lyrics()  # no .krc yet, so nothing to align
+    assert own_window.view.lyric_lines == ()
+
+    own_window._on_lyrics_saved("あん\n")  # the dialog wrote the file and told the window
+    assert [mora.ruby for line in own_window.view.lyric_lines for mora in line.morae] == ["あ", "ん"]
+
+    opened: list = []
+    monkeypatch.setattr(AlignDialog, "exec", lambda self: opened.append(self) or 0)
+    own_window._open_align()
+    assert len(opened) == 1
+
+
+def test_the_align_button_says_why_it_cannot_open(own_window, tmp_path) -> None:
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._watch_lyrics()
+    own_window.audio_path = str(tmp_path / "vocal.wav")
+    own_window._open_align()
+    assert "no lyrics" in own_window.statusBar().currentMessage()
+
+    (tmp_path / "song.krc").write_text("世界\n", encoding="utf-8")
+    own_window._watch_lyrics()
+    own_window._open_align()
+    assert "could not be read" in own_window.statusBar().currentMessage()
+
+
+def test_exporting_is_blocked_until_the_lyrics_sit_on_the_notes(own_window, monkeypatch, tmp_path) -> None:
+    (tmp_path / "song.krc").write_text("あん\n", encoding="utf-8")
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._stored_lyrics = None
+    own_window._watch_lyrics()
+    own_window.transport.bpm.setValue(60.0)  # a beat is a second, so notes read in seconds
+    own_window.view.set_channels((Channel(channel=0),))
+    own_window.view.set_notes(((60, 0.0, 2.0, 0),))  # one note where two morae need two
+    own_window.view.set_lyrics(mora_lines("あん\n"), [[(0.0, 1.0), (1.0, 2.0)]])
+    own_window._lyric_key = text_key("あん\n")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "out"), "MIDI"))
+
+    assert own_window._on_export_midi() is False
+    assert "do not line up" in own_window.statusBar().currentMessage()
+
+
+def test_exporting_writes_the_note_count_back_as_a_dot(own_window, monkeypatch, tmp_path) -> None:
+    (tmp_path / "song.krc").write_text("あん\n", encoding="utf-8")
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._stored_lyrics = None
+    own_window._watch_lyrics()
+    own_window.transport.bpm.setValue(60.0)
+    own_window.view.set_channels((Channel(channel=0),))
+    own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 1.0, 0), (64, 2.0, 1.0, 0)))
+    own_window.view.set_lyrics(mora_lines("あん\n"), [[(0.0, 1.0), (1.0, 3.0)]])
+    own_window._lyric_key = text_key("あん\n")
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "out"), "MIDI"))
+
+    assert own_window._on_export_midi() is True
+    assert (tmp_path / "song.krc").read_text(encoding="utf-8") == "あん.2"

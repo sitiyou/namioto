@@ -12,6 +12,7 @@ from PyQt6.QtWidgets import (
     QInputDialog,
     QLabel,
     QMenu,
+    QMessageBox,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -65,7 +66,10 @@ class _Card(QWidget):
         self.swatch = QFrame()
         self.swatch.setFixedSize(SWATCH_WIDTH, 34)
 
-        self.name = _NameLabel(channel.label)
+        self.name = _NameLabel(channel.name)
+        self.id = QLabel(f"({channel.channel + 1})")
+        self.id.setMinimumWidth(16)
+        self.id.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.program = QComboBox()
         self.program.addItems(store.GM_PROGRAMS)  # the index is the program number
         # the card is a fixed column: the combo must be allowed to shrink below its longest item
@@ -83,6 +87,7 @@ class _Card(QWidget):
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
         head.setSpacing(2)
+        head.addWidget(self.id)
         head.addWidget(self.name, 1)
         head.addWidget(self.lock_button)
         head.addWidget(self.eye_button)
@@ -108,7 +113,9 @@ class _Card(QWidget):
         self._channel = channel
         self.set_active(channel.channel == self._panel.view.active_channel)
         self.swatch.setStyleSheet(f"background: {channel.color}; border-radius: 2px;")
-        self.name.setText(channel.label)
+        self.id.setText(f"({channel.channel + 1})")
+        self.id.setStyleSheet(f"color: {self._panel.view._channel_color(channel.channel).name()};")
+        self.name.setText(channel.name or tr("Channel"))
         self.program.blockSignals(True)
         self.program.setCurrentIndex(channel.program)
         self.program.setToolTip(store.PROGRAM_LABELS[channel.program])
@@ -146,6 +153,7 @@ class _Card(QWidget):
         menu = QMenu(self)
         rename = menu.addAction(tr("Rename…"))
         volume = menu.addAction(tr("Volume…"))
+        number = menu.addAction(tr("Channel ID…"))
         remove = menu.addAction(tr("Delete channel"))
         chosen = menu.exec(event.globalPos())
         view = panel.view
@@ -157,6 +165,10 @@ class _Card(QWidget):
             value, ok = QInputDialog.getInt(self, tr("Channel volume"), tr("Volume (0-127):"), channel.volume, 0, 127)
             if ok:
                 view.set_channel_field(self._number, volume=value)
+        elif chosen is number:
+            value, ok = QInputDialog.getInt(self, tr("Channel ID"), tr("MIDI channel (1-16):"), self._number + 1, 1, 16)
+            if ok and not view.set_channel_number(self._number, value - 1):
+                QMessageBox.warning(self, tr("Channel ID"), tr("Channel {number} is already in use", number=value))
         elif chosen is remove:
             view.remove_channel(self._number)
 

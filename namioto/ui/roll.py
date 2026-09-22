@@ -22,6 +22,7 @@ from namioto.channels import Channel, free_channel
 from namioto.document import MIN_DURATION, PITCH_COUNT, PITCH_MAX, PITCH_MIN, Document, Note
 from namioto.i18n import tr
 from namioto.interaction import Interaction, Tool
+from namioto.karaoke.timeline import MoraLine
 from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.ui import theme
 from namioto.ui.spectrogram import SpectrumImage
@@ -48,6 +49,9 @@ HISTORY_LIMIT = 50  # snapshots of the whole document, so the depth trades memor
 NEW_CHANNEL = -1  # the channel menu's "make one" entry, since no channel number is negative
 RULER_TIME_ROW = 24
 RULER_HEIGHT = 46
+MORA_HEIGHT = 40
+MORA_GRAB_PX = 5
+MORA_MIN_PX = 3
 TIME_LABEL_SPACING = 84.0
 MEASURE_LABEL_SPACING = 30.0
 TIME_STEPS = (0.01, 0.02, 0.05, 0.1, 0.2, 0.25, 0.5, 1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0)
@@ -82,10 +86,12 @@ class _RollState:
     notes: tuple[tuple[int, float, float, int], ...]
     selected: frozenset[int]
     active_channel: int
+    lyrics: tuple = ()
+    lyric_times: tuple = ()
 
 
 def _state_data(state: _RollState) -> tuple:
-    return (state.channels, state.notes)
+    return (state.channels, state.notes, state.lyric_times)
 
 
 class _RollEdit(QUndoCommand):
@@ -212,6 +218,7 @@ class PianoRollView(QGraphicsView):
     hover_changed = pyqtSignal(object)
     note_preview = pyqtSignal(int)
     seek_requested = pyqtSignal(float)
+    lyrics_changed = pyqtSignal()
 
     GRAB_PX = 7
     MIN_ZOOM_X, MAX_ZOOM_X = 12.0, 900.0
@@ -252,6 +259,8 @@ class PianoRollView(QGraphicsView):
         self._gesture_before: _RollState | None = None
         self._gesture_text = ""
         self._history_depth = 0
+        self._lines: tuple[MoraLine, ...] = ()
+        self._lyric_times: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self.viewport().setMouseTracking(True)  # the row under the mouse is highlighted
@@ -339,6 +348,47 @@ class PianoRollView(QGraphicsView):
             self.notes_changed.emit()
             self.view_changed.emit()
 
+    # --- lyrics -----------------------------------------------------------
+
+    @property
+    def lyric_lines(self) -> tuple[MoraLine, ...]:
+        return self._lines
+
+    @property
+    def lyric_times(self) -> tuple[tuple[tuple[float | None, float | None], ...], ...]:
+        return self._lyric_times
+
+    def set_lyrics(self, lines, times) -> None:
+        """Take a whole aligned `.krc` over: every line's morae and their times, as one step."""
+        with self._edit("Align lyrics"):
+            self.load_lyrics(lines, times)
+
+    def load_lyrics(self, lines, times) -> None:
+        """The lyrics a `.krc` or a project brings in, with no undo step of their own."""
+        self._lines = tuple(lines)
+        self._lyric_times = tuple(tuple(span) for span in times)
+        self.lyrics_changed.emit()
+        self.view_changed.emit()
+
+    def set_mora_boundary(self, row: int, boundary: int, seconds: float) -> None:
+        """Move the line between two morae of a row, kept between its neighbours."""
+        if not 0 < boundary < len(self._lyric_times[row]):
+            return
+        before = self._lyric_times[row][boundary - 1]
+        after = self._lyric_times[row][boundary]
+        if before[0] is None or after[1] is None:
+            return
+        value = max(before[0], min(seconds, after[1]))  # either mora may end up with no length
+        row_times = list(self._lyric_times[row])
+        row_times[boundary - 1] = (before[0], value)
+        row_times[boundary] = (value, after[1])
+        self._lyric_times = self._lyric_times[:row] + (tuple(row_times),) + self._lyric_times[row + 1 :]
+        self.lyrics_changed.emit()
+
+    def note_seconds(self) -> list[tuple[float, float]]:
+        per_beat = self.seconds_per_beat
+        return [(note.start * per_beat, note.end * per_beat) for note in self.notes()]
+
     def notes(self) -> list[NoteItem]:
         return list(self._items)
 
@@ -381,6 +431,8 @@ class PianoRollView(QGraphicsView):
             ),
             selected=frozenset(index for index, item in enumerate(self._items) if item.isSelected()),
             active_channel=self.active_channel,
+            lyrics=self._lines,
+            lyric_times=self._lyric_times,
         )
 
     def _push(self, before: _RollState, after: _RollState, text: str) -> bool:
@@ -438,6 +490,9 @@ class PianoRollView(QGraphicsView):
                 if index < len(self._items):
                     self._items[index].setSelected(True)
             self.set_active_channel(state.active_channel)
+            self._lines = state.lyrics
+            self._lyric_times = state.lyric_times
+            self.lyrics_changed.emit()
         finally:
             self._history_depth -= 1
         self.refresh()
@@ -451,14 +506,6 @@ class PianoRollView(QGraphicsView):
 
     def _channel(self, number: int) -> Channel | None:
         return next((channel for channel in self.channels if channel.channel == number), None)
-
-    def _borrow_color(self) -> str:
-        """The first theme colour no channel wears yet; a full palette cycles."""
-        used = {channel.color for channel in self.channels if channel.color}
-        for hex in theme.NOTE_PALETTE:
-            if hex not in used:
-                return hex
-        return theme.NOTE_PALETTE[len(self.channels) % len(theme.NOTE_PALETTE)]
 
     def _channel_color(self, number: int) -> QColor:
         channel = self._channel(number)
@@ -486,7 +533,9 @@ class PianoRollView(QGraphicsView):
             self.document.set_channels(channels or [Channel(channel=0, color=theme.NOTE_PALETTE[0])])
             for channel in list(self.channels):
                 if not channel.color:
-                    self.document.set_channel_field(channel.channel, color=self._borrow_color())
+                    self.document.set_channel_field(
+                        channel.channel, color=theme.NOTE_PALETTE[channel.channel % len(theme.NOTE_PALETTE)]
+                    )
             if self.active_channel not in {channel.channel for channel in self.channels}:
                 self.active_channel = self.channels[0].channel
             self._sync_channel_visuals()
@@ -497,7 +546,7 @@ class PianoRollView(QGraphicsView):
         number = free_channel(self.channels)
         if number is None:
             return None
-        channel = Channel(channel=number, color=self._borrow_color(), program=program)
+        channel = Channel(channel=number, color=theme.NOTE_PALETTE[number % len(theme.NOTE_PALETTE)], program=program)
         with self._edit("Add channel"):
             self.document.add_channel(channel)
             self.channels_changed.emit()
@@ -527,6 +576,20 @@ class PianoRollView(QGraphicsView):
             self.document.set_channel_field(number, **fields)
             self._sync_channel_visuals()
             self.channels_changed.emit()
+
+    def set_channel_number(self, old: int, new: int) -> bool:
+        """Move a channel and its notes onto another MIDI channel; its colour follows the number."""
+        with self._edit("Change channel"):
+            if not self.document.set_channel_number(old, new):
+                return False
+            self.document.set_channel_field(new, color=theme.NOTE_PALETTE[new % len(theme.NOTE_PALETTE)])
+            if self.active_channel == old:
+                self.active_channel = new
+            self._sync_channel_visuals()
+            self.notes_changed.emit()
+            self.channels_changed.emit()
+            self.active_channel_changed.emit(self.active_channel)
+        return True
 
     def set_active_channel(self, number: int) -> None:
         if number in {channel.channel for channel in self.channels} and number != self.active_channel:
@@ -1277,6 +1340,94 @@ class TimelineRuler(_ViewportStrip):
         hbar = self.view.horizontalScrollBar()
         hbar.setValue(hbar.value() - event.angleDelta().y())
         event.accept()
+
+
+class MoraStrip(_ViewportStrip):
+    """Every line's morae, on the roll's columns and along the one time axis they share.
+
+    A boundary between two morae can be dragged; the drag lands on the same snap grid the notes are
+    trimmed on, so a mora can be made to sit on the notes it covers, and either mora may be left
+    with no length at all.
+    """
+
+    def __init__(self, view: PianoRollView):
+        super().__init__(view)
+        self.setFixedHeight(MORA_HEIGHT)
+        self._drag: tuple[int, int] | None = None
+        view.view_changed.connect(self.update)
+        view.lyrics_changed.connect(self.update)
+
+    def paintEvent(self, event) -> None:
+        painter = QPainter(self)
+        colors = theme.canvas()
+        painter.fillRect(self.rect(), colors.panel)
+        lines = self.view.lyric_lines
+        times = self.view.lyric_times
+        if not lines or not times:
+            return
+        left = self.origin().x()
+        painter.setClipRect(QRect(int(left), 0, self.view.viewport().width(), self.height()))
+        font = QFont()
+        font.setPixelSize(10)
+        painter.setFont(font)
+        top = (self.height() - 24) // 2
+        for line, row in zip(lines, times, strict=True):
+            for mora, (start, end) in zip(line.morae, row, strict=True):
+                if start is None or end is None:
+                    continue
+                x0, x1 = self._x(start), self._x(end)
+                if x1 - x0 < MORA_MIN_PX:
+                    x1 = x0 + MORA_MIN_PX  # a mora of no length still shows, and its line can be caught
+                painter.setPen(QPen(colors.grid_line, 1))
+                painter.drawLine(int(x1), 0, int(x1), self.height())
+                painter.setPen(colors.text)
+                painter.drawText(QRectF(x0, top, x1 - x0, 12), Qt.AlignmentFlag.AlignCenter, mora.base or mora.ruby)
+                painter.drawText(QRectF(x0, top + 12, x1 - x0, 12), Qt.AlignmentFlag.AlignCenter, mora.ruby)
+        painter.setPen(QPen(colors.ruler_line, 1))
+        right = self.view.viewport().width() + int(left)
+        painter.drawLine(int(left), self.height() - 1, right, self.height() - 1)
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() != Qt.MouseButton.LeftButton or not self.view.lyric_times:
+            return
+        self._drag = self._boundary_at(event.position().x())
+        if self._drag is not None:
+            self.view._begin_gesture("Move mora boundary")
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag is None:
+            near = self._boundary_at(event.position().x()) if self.view.lyric_times else None
+            self.setCursor(Qt.CursorShape.SizeHorCursor if near is not None else Qt.CursorShape.ArrowCursor)
+            return
+        row, boundary = self._drag
+        seconds = self.view.seconds_at_viewport_x(event.position().x() - self.origin().x())
+        self.view.set_mora_boundary(row, boundary, self._snap(seconds))
+
+    def mouseReleaseEvent(self, event) -> None:
+        if self._drag is not None:
+            self._drag = None
+            self.view._commit_gesture()
+
+    def wheelEvent(self, event) -> None:
+        hbar = self.view.horizontalScrollBar()
+        hbar.setValue(hbar.value() - event.angleDelta().y())
+        event.accept()
+
+    def _x(self, seconds: float) -> float:
+        beats = seconds / self.view.seconds_per_beat
+        return self.origin().x() + self.view.mapFromScene(QPointF(beats, 0.0)).x()
+
+    def _boundary_at(self, x: float) -> tuple[int, int] | None:
+        for row, times in enumerate(self.view.lyric_times):
+            for boundary in range(1, len(times)):
+                if times[boundary][0] is not None and abs(self._x(times[boundary][0]) - x) <= MORA_GRAB_PX:
+                    return (row, boundary)
+        return None
+
+    def _snap(self, seconds: float) -> float:
+        """The same grid the notes snap to, in seconds, so a boundary lands on the note cells."""
+        per_beat = self.view.seconds_per_beat
+        return self.view._snap_beats(seconds / per_beat) * per_beat
 
 
 class PianoKeyboard(_ViewportStrip):

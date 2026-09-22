@@ -311,6 +311,16 @@ the answer. That box appears only once the API is asked for; the clipboard and h
 never need it. The key lives in `~/.config/namioto/settings.json` in plain text, and nothing here
 checks the `.krc` syntax: a file with a mistake in it is still one you can fix in an editor.
 
+Once a `.krc` is open and its audio is loaded, the clock button beside the text-box one puts a time
+on every mora: the whole stream is forced onto the frames of a wav2vec2 CTC model in one pass, and
+each mora gets the span of frames it won. The morae of the line under the playhead are drawn in a
+strip above the roll, on the roll's own columns; drag the line between two morae to move it, and it
+snaps onto a nearby note. The times ride in the `.nto` beside the notes, saved and undone with them.
+Exporting MIDI checks the morae against the notes first - a mora has to start and end on the notes
+it covers, though it may cover several with gaps between - and writes each mora's note count back
+into the `.krc` as its `.N`. The align window also offers a Quantize choice (Off / 1/4 / 1/8 / …)
+that snaps the result onto the BPM beat grid.
+
 ## Aligning lyrics to a vocal
 
 Given a separated vocal and the tokens of each line, `namioto-align` puts a time on every token: the

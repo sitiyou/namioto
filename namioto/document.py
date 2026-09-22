@@ -9,7 +9,7 @@ second home for the data.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from namioto.channels import CHANNEL_COUNT, Channel, arranged
 from namioto.channels import set_field as channel_set_field
@@ -109,3 +109,21 @@ class Document:
             if channel.channel == number:
                 self.channels[index] = channel_set_field(channel, **fields)
                 return
+
+    def set_channel_number(self, old: int, new: int) -> bool:
+        """Move a channel and the notes on it onto another number; the number has to be free."""
+        if old == new:
+            return True
+        if not 0 <= new < CHANNEL_COUNT or any(channel.channel == new for channel in self.channels):
+            return False
+        for index, channel in enumerate(self.channels):
+            if channel.channel == old:
+                self.channels[index] = replace(channel, channel=new)
+                break
+        else:
+            return False
+        self.channels.sort(key=lambda channel: channel.channel)
+        for note in self.notes:
+            if note.channel == old:
+                note.channel = new
+        return True

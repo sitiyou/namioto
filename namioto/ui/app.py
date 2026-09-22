@@ -32,16 +32,18 @@ from namioto import settings as store
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
 from namioto.channels import set_field as channel_set_field
+from namioto.karaoke import KrcError, conflicts, mora_lines, note_counts, text_key, with_counts
 from namioto.playback import note_frequency
 from namioto.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.ui import theme
+from namioto.ui.align_dialog import AlignDialog
 from namioto.ui.audio import open_player
 from namioto.ui.channel_panel import ChannelPanel
 from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
 from namioto.ui.loading import LoadingThread
 from namioto.ui.lyrics_dialog import LyricsDialog, LyricsWatcher
 from namioto.ui.midi_dialog import MidiImportDialog
-from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler
+from namioto.ui.roll import SNAP_CHOICES, MoraStrip, PianoKeyboard, PianoRollView, TimelineRuler
 from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
 from namioto.ui.song import SongPlayer, load_song
 from namioto.ui.spectrogram import SpectrumLoader
@@ -183,6 +185,10 @@ class MainWindow(QMainWindow):
         self.project_dirty = False
         self.audio_path: str | None = None
         self.lyrics_text = ""
+        self._stored_lyrics: project.LyricTimes | None = None
+        self._lyric_key = ""
+        self._lyric_model = ""
+        self._lyric_error = ""
         self.loader: SpectrumLoader | None = None
         self.tempo_loader: TempoLoader | None = None
         self._tempo_manual = False
@@ -195,6 +201,8 @@ class MainWindow(QMainWindow):
         self.view.overtone_highlight = editor.overtone_highlight
         self.view.division = editor.division
         self.ruler = TimelineRuler(self.view)
+        self.mora_strip = MoraStrip(self.view)
+        self.mora_strip.setVisible(False)
         self.keyboard = PianoKeyboard(self.view)
         self.player, self.player_name = self._make_player()
         self._current_player_key = self._player_key()
@@ -222,10 +230,11 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(corner, 0, 0)
         layout.addWidget(self.ruler, 0, 1)
-        layout.addWidget(self.keyboard, 1, 0)
-        layout.addWidget(self.view, 1, 1)
+        layout.addWidget(self.mora_strip, 1, 1)
+        layout.addWidget(self.keyboard, 2, 0)
+        layout.addWidget(self.view, 2, 1)
         layout.setColumnStretch(1, 1)
-        layout.setRowStretch(1, 1)
+        layout.setRowStretch(2, 1)
         panel = QWidget()
         panel.setLayout(layout)
 
@@ -280,6 +289,7 @@ class MainWindow(QMainWindow):
         self.transport.export_midi_requested.connect(self._on_export_midi)
         self.edit.transcribe_requested.connect(self._open_transcription)
         self.edit.lyrics_requested.connect(self._open_lyrics)
+        self.edit.align_requested.connect(self._open_align)
         self.player.finished.connect(self._on_playback_finished)
         self.song.finished.connect(self._on_playback_finished)
         self.view.seek_requested.connect(self._seek)
@@ -296,6 +306,7 @@ class MainWindow(QMainWindow):
 
         self.view.notes_changed.connect(self._update_status)
         self.view.notes_changed.connect(self._mark_dirty)
+        self.view.lyrics_changed.connect(self._mark_dirty)
         self.view.channels_changed.connect(self._on_channels_changed)
         self.view.active_channel_changed.connect(self._on_active_channel_changed)
         self.transport.channels.toggled.connect(self.channel_panel.setVisible)
@@ -748,6 +759,7 @@ class MainWindow(QMainWindow):
             self.project_path = Path(path)
             self.project_dirty = False
             self.autosave_timer.stop()
+            self._stored_lyrics = opened.lyrics
             self._watch_lyrics()
             missing = self._open_audio(project.resolve_audio(self.project_path, opened.audio))
             per_beat = self.view.seconds_per_beat  # scene units are beats, the file keeps seconds
@@ -778,11 +790,17 @@ class MainWindow(QMainWindow):
                 for note in self.view.notes()
             )
         )
+        lyrics_times = (
+            project.LyricTimes(key=self._lyric_key, model=self._lyric_model, lines=self.view.lyric_times)
+            if self.view.lyric_lines
+            else None
+        )
         payload = project.Project(
             values=store.project_values(self.settings),
             audio=project.store_audio(target, self.audio_path),
             channels=tuple(self.view.channels),
             notes=notes,
+            lyrics=lyrics_times,
         )
         try:
             project.save(payload, target)
@@ -792,6 +810,7 @@ class MainWindow(QMainWindow):
         self.project_path = target
         self.project_dirty = False
         self.autosave_timer.stop()
+        self._stored_lyrics = lyrics_times
         self._watch_lyrics()
         store.set_value(self.settings, "paths", "last_audio_dir", str(target.parent))
         self.settings_store.touch()
@@ -890,6 +909,10 @@ class MainWindow(QMainWindow):
 
     def export_midi(self, path: str | Path) -> bool:
         """Write every channel out as MIDI, on the project's own tempo."""
+        problems = self._lyric_problems()
+        if problems:
+            self.statusBar().showMessage(i18n.tr("Lyrics and notes do not line up: {problem}", problem=problems[0]))
+            return False
         beats = self.view.seconds_per_beat
         notes = tuple(
             project.Note(note.start * beats, note.duration * beats, note.pitch, note.channel)
@@ -906,8 +929,34 @@ class MainWindow(QMainWindow):
         except OSError as error:
             self.statusBar().showMessage(i18n.tr("MIDI file could not be written: {error}", error=error))
             return False
+        self._write_lyrics()
         self.statusBar().showMessage(i18n.tr("Exported {name} — {notes} notes", name=Path(path).name, notes=len(notes)))
         return True
+
+    def _lyric_problems(self) -> list[str]:
+        """Why the aligned morae do not sit on the notes yet; empty when there is nothing to check."""
+        lines = self.view.lyric_lines
+        times = self.view.lyric_times
+        if not lines or not any(span[0] is not None for row in times for span in row):
+            return []
+        return conflicts(list(lines), [list(row) for row in times], self.view.note_seconds())
+
+    def _write_lyrics(self) -> None:
+        """Put every mora's note count back into the `.krc` as its `.N`, once the conflicts are gone."""
+        path = self.lyrics_path()
+        lines = self.view.lyric_lines
+        if path is None or not lines or not self.lyrics_text:
+            return
+        counts = note_counts(list(lines), [list(row) for row in self.view.lyric_times], self.view.note_seconds())
+        try:
+            text = with_counts(self.lyrics_text, counts)
+            if text != self.lyrics_text:
+                lyrics.save(path, text)
+        except (KrcError, OSError) as error:
+            self.statusBar().showMessage(str(error))
+            return
+        self.lyrics_text = text
+        self._lyric_key = text_key(text)
 
     def _open_transcription(self) -> None:
         """Ask GAME for the singing voice's notes, over the audio the session is already listening to."""
@@ -955,8 +1004,37 @@ class MainWindow(QMainWindow):
         """Point the lyrics at the open project, taking what is already there as the known text."""
         path = self.lyrics_path()
         self.edit.lyrics.setEnabled(path is not None)
+        self.edit.align.setEnabled(path is not None)
         self.lyrics_text = lyrics.load(path) if path is not None else ""
         self.lyrics_watcher.watch(path)
+        self._load_mora()
+
+    def _load_mora(self) -> None:
+        """Derive the morae of the open `.krc` and give them the times the project kept for them."""
+        text = self.lyrics_text
+        key = text_key(text) if text else ""
+        if key == self._lyric_key and bool(self.view.lyric_lines) == bool(text):
+            return
+        self._lyric_key = key
+        self._lyric_model = ""
+        lines = []
+        if text:
+            try:
+                lines = mora_lines(text)
+            except KrcError as error:
+                self._lyric_error = str(error)
+                self.statusBar().showMessage(str(error))
+                lines = []
+        else:
+            self._lyric_error = ""
+        stored = self._stored_lyrics
+        if lines and stored is not None and stored.key == key and len(stored.lines) == len(lines):
+            self._lyric_model = stored.model
+            times = [list(row) for row in stored.lines]
+        else:
+            times = [[(None, None)] * len(line.morae) for line in lines]
+        self.view.load_lyrics(lines, times)
+        self.mora_strip.setVisible(any(span[0] is not None for row in times for span in row))
 
     def _open_lyrics(self) -> None:
         """Read a text into a `.krc` with a model, or by pasting what a web model answered."""
@@ -971,6 +1049,7 @@ class MainWindow(QMainWindow):
     def _on_lyrics_saved(self, text: str) -> None:
         """A write of our own, so the watcher's next event does not read it back as a change."""
         self.lyrics_text = text
+        self._load_mora()
 
     def _on_lyrics_file_changed(self) -> None:
         path = self.lyrics_path()
@@ -981,6 +1060,7 @@ class MainWindow(QMainWindow):
             return  # our own save, or a change to another file in the project's folder
         self.lyrics_text = text
         self.statusBar().showMessage(i18n.tr("Lyrics reloaded from {name}", name=path.name))
+        self._load_mora()
 
     def _open_lyrics_editor(self) -> None:
         path = self.lyrics_path()
@@ -988,6 +1068,37 @@ class MainWindow(QMainWindow):
             return
         command = lyrics.editor_command(self.settings.lyrics.editor)
         QProcess.startDetached(command[0], [*command[1:], str(path)])
+
+    def _open_align(self) -> None:
+        """Ask the forced aligner for a time on every mora of the open `.krc`."""
+        path = self.lyrics_path()
+        if path is None:
+            self.statusBar().showMessage(i18n.tr("Save the project first: the lyrics live in a .krc beside it"))
+            return
+        if not self.lyrics_text:
+            self.statusBar().showMessage(i18n.tr("There are no lyrics in {name} to align", name=path.name))
+            return
+        if not self.view.lyric_lines:
+            self.statusBar().showMessage(
+                i18n.tr("The lyrics could not be read: {error}", error=self._lyric_error or path.name)
+            )
+            return
+        if self.audio_path is None:
+            self.statusBar().showMessage(i18n.tr("Load the audio before aligning the lyrics"))
+            return
+        dialog = AlignDialog(self.audio_path, self.lyrics_text, self.view.bpm, self)
+        dialog.aligned.connect(self._adopt_alignment)
+        dialog.exec()
+
+    def _adopt_alignment(self, times, model: str) -> None:
+        lines = self.view.lyric_lines
+        if not lines or len(times) != len(lines):
+            return
+        self.view.set_lyrics(lines, times)
+        self._lyric_key = text_key(self.lyrics_text)
+        self._lyric_model = model
+        self.mora_strip.setVisible(True)
+        self.statusBar().showMessage(i18n.tr("Aligned {lines} lines", lines=len(lines)))
 
     def _open_audio(self, target: Path | None) -> str:
         """Load the audio a project names, or say why there is none: its notes are worth having either way."""

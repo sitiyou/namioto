@@ -34,6 +34,7 @@ GLYPHS = {
     "export": "mdi.file-music-outline",
     "transcribe": "mdi.auto-fix",
     "lyrics": "mdi.text-box-outline",
+    "align": "mdi.timeline-clock",
     "channels": "mdi.layers",
     "lock": "mdi.lock",
     "unlock": "mdi.lock-open-variant",
