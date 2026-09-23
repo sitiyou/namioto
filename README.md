@@ -160,13 +160,30 @@ namioto/channels.py   the MIDI channels a note plays on, and the values they pla
 namioto/interaction.py the roll's normal/edit mode and its tool, as one value, no Qt
 namioto/document.py   the notes and the MIDI channels they play on, in beats, no Qt
 namioto/midi.py       reading and writing MIDI files (mido), no Qt
-namioto/models/       bundled ONNX models
-namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars, roll.py: widgets,
-                      spectrogram.py: spectrum colour map, image cache and loader,
-                      audio.py: note playback outputs - an external MIDI synth or the built-in one,
-                      song.py: the audio file streamed to Qt's audio output)
+namioto/project.py    the .nto file: the notes, the audio they were drawn over, and their values, no Qt
+namioto/settings.py   the settings spec table, its file and the defaults, no Qt
+namioto/lyrics.py     the .krc sidecar beside a project, and the model call that fills it, no Qt
+namioto/karaoke/      the .krc model, its parser, its writer and its timeline (lark), no Qt
+namioto/align.py      forced alignment of known lyrics onto the audio (FA-Kara's core, ONNX), no Qt
+namioto/model_store.py where a model comes from: one registry, one download, one session, no Qt
+namioto/game.py       singing-voice note extraction with GAME's ONNX models, no Qt
+namioto/transcription.py GAME's parameters, their store and the spawned child entry point, no Qt
+namioto/bpm.py        the tempo algorithms behind one setting, no Qt
+namioto/wavetone.py   WaveTone's own volume-envelope tempo analysis, no Qt
+namioto/utils.py      the app's directories, a file's identity, kana to romaji tokens, no Qt
+namioto/i18n.py       the language catalogs and the language in force, no Qt
+namioto/models/       the TempoCNN model, still shipped until it gets a release of its own
+namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars,
+                      roll.py: the view, its items, undo, ruler and keyboard, strips.py: the
+                      lyrics strip and the span geometry it shares with the view,
+                      theme.py: colours, icons.py: glyphs, text.py: shared labels,
+                      loading.py: one-shot worker, spectrogram.py: spectrum colour map, image cache
+                      and loader, audio.py: note playback outputs - an external MIDI synth or the
+                      built-in one, song.py: the audio file streamed to Qt's audio output,
+                      channel_panel.py: the sidebar, and one module per dialog: settings, lyrics,
+                      transcription, align, MIDI import)
 tests/                pytest
-scripts/              developer tools (spectrum benchmark)
+scripts/              developer tools (spectrum benchmark, aligner model export, model upload)
 build.sh              packaging script
 ```
 

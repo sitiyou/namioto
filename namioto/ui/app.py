@@ -1,5 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Namioto piano roll. Run with `uv run namioto`."""
+"""The editor window and its wiring: the bars, the roll, the sidebar and the lyrics strip.
+
+`MainWindow` owns the document, the players, the settings and every path the program opens or
+writes, and runs in this one process - the analysis that must not touch the GUI goes out to the
+`LoadingThread` loaders at the top of the file, or to a spawned `namioto-transcription` child. Run
+it with `uv run namioto`.
+"""
 
 from __future__ import annotations
 
@@ -43,10 +49,11 @@ from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
 from namioto.ui.loading import LoadingThread
 from namioto.ui.lyrics_dialog import LyricsDialog, LyricsWatcher
 from namioto.ui.midi_dialog import MidiImportDialog
-from namioto.ui.roll import SNAP_CHOICES, MoraStrip, PianoKeyboard, PianoRollView, TimelineRuler
+from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler
 from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
 from namioto.ui.song import SongPlayer, load_song
 from namioto.ui.spectrogram import SpectrumLoader
+from namioto.ui.strips import MoraStrip
 from namioto.ui.text import note_name
 from namioto.ui.transcription_dialog import TranscriptionDialog
 

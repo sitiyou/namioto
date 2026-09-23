@@ -30,10 +30,9 @@ from namioto.i18n import tr
 from namioto.karaoke import align_tokens, mora_lines, snap_to_beats, split
 from namioto.settings import Field
 from namioto.ui.loading import LoadingThread
-from namioto.ui.settings_dialog import field_editor
+from namioto.ui.settings_dialog import add_row, field_editor
 
 LOG_HEIGHT = 120
-FIELD_WIDTH = 300
 
 
 class Aligner(LoadingThread):
@@ -124,12 +123,7 @@ class AlignDialog(QDialog):
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         for item in align.PARAMETERS:
             editor, read, write = field_editor(self._parameters[item.name], item)
-            editor.setMaximumWidth(FIELD_WIDTH)
-            label = QLabel(tr(item.caption))
-            if item.tooltip:
-                label.setToolTip(tr(item.tooltip))
-                editor.setToolTip(tr(item.tooltip))
-            form.addRow(label, editor)
+            add_row(form, editor, item)
             self._fields.append((item, read, write))
         return widget
 

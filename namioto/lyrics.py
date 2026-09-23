@@ -16,12 +16,13 @@ import re
 import shlex
 import shutil
 import sys
-import tempfile
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
+
+from namioto.utils import write_text
 
 SUFFIX = ".krc"
 DEFAULT_PROMPT = """请你为输入的歌词中的汉字进行注音标注，规则如下：
@@ -66,17 +67,7 @@ def load(path: str | Path) -> str:
 
 def save(path: str | Path, text: str) -> Path:
     """Write the whole file at once, so a half-written `.krc` never exists to be read."""
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    handle, name = tempfile.mkstemp(dir=target.parent, prefix=f"{target.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            stream.write(text)
-        os.replace(name, target)
-    except BaseException:
-        Path(name).unlink(missing_ok=True)
-        raise
-    return target
+    return write_text(path, text)
 
 
 def build_prompt(lyrics: str, prompt: str = DEFAULT_PROMPT) -> str:

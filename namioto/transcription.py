@@ -13,13 +13,11 @@ import json
 import pathlib
 import time
 import traceback
-import warnings
 from typing import Any
-
-import platformdirs
 
 from namioto import settings as store
 from namioto.settings import Field
+from namioto.utils import config_dir, data_dir, file_stamp, resolved
 
 GAME_SIZES = ("small", "medium", "large")
 GAME_PROVIDERS = ("cpu", "cuda")
@@ -138,57 +136,34 @@ PARAMETERS: tuple[Field, ...] = (
 
 
 def default_parameters() -> dict[str, Any]:
-    return {item.name: item.default for item in PARAMETERS}
+    return store.defaults(PARAMETERS)
 
 
 def coerce_parameters(values: Any) -> dict[str, Any]:
-    """A file may hold anything at all, so every value goes through its field's own check."""
-    if not isinstance(values, dict):
-        return default_parameters()
-    return {item.name: store.coerce(item, values.get(item.name, item.default)) for item in PARAMETERS}
+    return store.coerce_values(PARAMETERS, values)
 
 
 def parameter_path() -> pathlib.Path:
     """The preferences side of the tree: the dialog's remembered values sit next to settings.json."""
-    return pathlib.Path(platformdirs.user_config_dir("namioto")) / PARAMETER_FILE
+    return config_dir(PARAMETER_FILE)
 
 
 def results_root() -> pathlib.Path:
     """The data side, where the models already live: transcriptions are derived, not preferences."""
-    return pathlib.Path(platformdirs.user_data_dir("namioto")) / "transcriptions"
+    return data_dir("transcriptions")
 
 
 def load_parameters() -> dict[str, Any]:
     """What the dialog opens with: the last run's values, or the defaults for anything unreadable."""
-    try:
-        data = json.loads(parameter_path().read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return default_parameters()
-    except (OSError, ValueError) as error:
-        warnings.warn(f"{parameter_path()} could not be read ({error}); defaults are in use", stacklevel=2)
-        return default_parameters()
-    return coerce_parameters(data)
+    return store.load_values(parameter_path(), PARAMETERS)
 
 
 def save_parameters(values: Any) -> pathlib.Path:
-    return store.write_json(coerce_parameters(values), parameter_path())
-
-
-def _resolved(path: Any) -> pathlib.Path:
-    return pathlib.Path(path).expanduser().resolve()
-
-
-def _audio_stamp(path: Any) -> tuple[int, int]:
-    """Size and mtime, so the same path holding different audio is not the same audio."""
-    try:
-        info = _resolved(path).stat()
-    except OSError:
-        return (0, 0)
-    return (info.st_size, info.st_mtime_ns)
+    return store.save_values(parameter_path(), PARAMETERS, values)
 
 
 def audio_key(path: Any) -> str:
-    return hashlib.sha1(str(_resolved(path)).encode("utf-8")).hexdigest()
+    return hashlib.sha1(str(resolved(path)).encode("utf-8")).hexdigest()
 
 
 def run_key(path: Any, parameters: Any) -> str:
@@ -200,7 +175,7 @@ def run_key(path: Any, parameters: Any) -> str:
     """
     values = coerce_parameters(parameters)
     identity = {
-        "audio": list(_audio_stamp(path)),
+        "audio": list(file_stamp(path)),
         "parameters": {item.name: values[item.name] for item in PARAMETERS if item.name not in ("target", "quantize")},
     }
     return hashlib.sha1(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
@@ -255,7 +230,7 @@ def save_run(path: Any, parameters: Any, notes) -> pathlib.Path:
             [round(float(onset), 4), round(float(offset), 4), round(float(pitch), 4)] for onset, offset, pitch in notes
         ],
     }
-    payload = {"version": STORE_VERSION, "audio": str(_resolved(path)), "runs": runs}
+    payload = {"version": STORE_VERSION, "audio": str(resolved(path)), "runs": runs}
     return store.write_json(payload, _results_path(path))
 
 

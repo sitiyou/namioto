@@ -17,59 +17,51 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import pathlib
-import shutil
 import sys
-import tempfile
-import urllib.request
-import zipfile
 from collections.abc import Callable, Sequence
 
 import numpy as np
-import platformdirs
 
 try:
     import librosa
 except ImportError:  # the extractor itself only needs numpy; the file loader and pitch names do not
     librosa = None
 
-import onnxruntime as ort
+from namioto import model_store
 
-GAME_VERSION = "1.0.3"
-GAME_RELEASE = f"v{GAME_VERSION}"
 MODEL_SIZES = ("small", "medium", "large")
 # the package also holds `dur2bd`, which the run has no use for: see `extract`
 MODEL_FILES = ("encoder", "segmenter", "estimator", "bd2dur")
 # `cuda` keeps the CPU in the list, so a machine whose CUDA provider cannot be set up still runs
-PROVIDERS = {
-    "cpu": ("CPUExecutionProvider",),
-    "cuda": ("CUDAExecutionProvider", "CPUExecutionProvider"),
-}
+PROVIDERS = model_store.PROVIDERS
 SAMPLE_FORMATS = (".wav", ".flac", ".mp3", ".aac", ".ogg")
 Note = tuple[float, float, float]  # onset and offset in seconds, then the pitch
 
 
-def asset_url(size: str) -> str:
-    """Where the ONNX export package of one size is published."""
+def _size(size: str) -> str:
+    """A size nobody publishes is a mistake worth raising before touching the disk."""
     if size not in MODEL_SIZES:
         raise ValueError(f"unknown model size {size!r}, expected one of {', '.join(MODEL_SIZES)}")
-    name = f"GAME-{GAME_VERSION}-{size}-onnx.zip"
-    return f"https://github.com/openvpi/GAME/releases/download/{GAME_RELEASE}/{name}"
+    return size
+
+
+def asset_url(size: str) -> str:
+    """Where the ONNX export package of one size is published."""
+    return model_store.MODELS["game"].url((_size(size),))
 
 
 def models_root() -> pathlib.Path:
     """Where the downloaded models live: the platform's data directory, not the package."""
-    return pathlib.Path(platformdirs.user_data_dir("namioto")) / "models" / "game"
+    return model_store.path("game")
 
 
 def model_dir(size: str) -> pathlib.Path:
-    asset_url(size)  # a size nobody publishes is a mistake worth raising before touching the disk
-    return models_root() / size
+    return model_store.path("game", _size(size))
 
 
 def is_installed(size: str) -> bool:
-    return (model_dir(size) / "config.json").is_file()
+    return model_store.installed("game", _size(size))
 
 
 def get_rms(y, *, frame_length=2048, hop_length=512, pad_mode="constant"):
@@ -173,9 +165,8 @@ class OnnxBackend:
     """The ONNX modules the run needs, loaded once and driven through the pipeline they describe."""
 
     def __init__(self, model_dir: pathlib.Path | str, provider: str = "cpu"):
-        if provider not in PROVIDERS:
-            raise ValueError(f"unknown provider {provider!r}, expected one of {', '.join(PROVIDERS)}")
-        self.providers = list(PROVIDERS[provider])
+        model_store.providers(provider)  # a device nobody has is a mistake worth raising first
+        self.provider = provider
         self.model_dir = pathlib.Path(model_dir)
         config_path = self.model_dir / "config.json"
         if not config_path.is_file():
@@ -189,16 +180,10 @@ class OnnxBackend:
         self.embedding_dim = int(self.config["embedding_dim"])
         self.languages = self.config.get("languages") or {}
         self.loop = bool(self.config.get("loop", False))
-        self.session_options = ort.SessionOptions()
-        self.session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
         self.sessions = {name: self._make_session(name) for name in MODEL_FILES}
 
     def _make_session(self, name: str):
-        return ort.InferenceSession(
-            str(self.model_dir / f"{name}.onnx"),
-            self.session_options,
-            providers=self.providers,
-        )
+        return model_store.session(self.model_dir / f"{name}.onnx", self.provider)
 
     def _run(self, name, feeds):
         session = self.sessions[name]
@@ -384,54 +369,19 @@ def save_text(path: pathlib.Path, notes: Sequence[Note], file_format: str, round
             writer.writerow([f"{onset:.3f}", f"{oset:.3f}", pitch])
 
 
-def install_zip(archive: pathlib.Path, size: str) -> pathlib.Path:
-    """Unpack a downloaded release zip into this size's directory, top-level folder and all."""
-    target = model_dir(size)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(dir=target.parent) as staging:
-        with zipfile.ZipFile(archive) as bundle:
-            bundle.extractall(staging)
-        source = next((path.parent for path in pathlib.Path(staging).rglob("config.json")), None)
-        if source is None:
-            raise ValueError(f"{archive.name} holds no config.json: not a GAME export package")
-        target.mkdir(parents=True, exist_ok=True)
-        for path in source.iterdir():
-            shutil.move(str(path), str(target / path.name))
-    return target
-
-
 def download_model(
     size: str,
     progress: Callable[[int, int], None] | None = None,
     *,
     opener: Callable[..., object] | None = None,
 ) -> pathlib.Path:
-    """Fetch one size of the model into the data directory and unpack it.
+    """Fetch one size of the model into the data directory and unpack it."""
+    return model_store.install("game", (_size(size),), progress, opener=opener)
 
-    The zip is downloaded to a temporary file first, so a broken connection leaves no half-installed
-    model behind, and the package is only moved into place once it is whole.
-    """
-    url = asset_url(size)
-    target = model_dir(size)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    open_url = opener or urllib.request.urlopen
-    with tempfile.NamedTemporaryFile(dir=target.parent, suffix=".zip", delete=False) as handle:
-        archive = pathlib.Path(handle.name)
-    try:
-        with open_url(url) as response, archive.open("wb") as out:
-            total = int(response.headers.get("Content-Length") or 0)
-            done = 0
-            while True:
-                block = response.read(1 << 20)
-                if not block:
-                    break
-                out.write(block)
-                done += len(block)
-                if progress is not None:
-                    progress(done, total)
-        return install_zip(archive, size)
-    finally:
-        archive.unlink(missing_ok=True)
+
+def install_zip(archive: pathlib.Path, size: str) -> pathlib.Path:
+    """Unpack a downloaded release zip into this size's directory, top-level folder and all."""
+    return model_store.unpack("game", archive, (_size(size),))
 
 
 def resolve_model(
@@ -444,18 +394,9 @@ def resolve_model(
     """The directory to load the models from.
 
     An explicit path or `$NAMIOTO_GAME_MODEL` wins, then an already installed size, and only then a
-    download of that size into the data directory.
+    download of that size into the data directory; either way the directory has to hold the package.
     """
-    if path is not None:
-        return pathlib.Path(path)
-    from_env = os.environ.get("NAMIOTO_GAME_MODEL")
-    if from_env:
-        return pathlib.Path(from_env)
-    if is_installed(size):
-        return model_dir(size)
-    if not download:
-        raise FileNotFoundError(f"no {size} model in {models_root()}")
-    return download_model(size, progress)
+    return model_store.resolve("game", path, parts=(_size(size),), download=download, progress=progress)
 
 
 def extract(

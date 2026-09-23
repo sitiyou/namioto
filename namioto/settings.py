@@ -3,7 +3,9 @@
 
 Qt-free on purpose. The spec table below is the single source of truth: it gives the defaults, tells
 `load` how to read a value back from the file (type, range, the values a choice may take) and lets
-`namioto.ui.settings_dialog` build its pages without repeating any of it.
+`namioto.ui.settings_dialog` build its pages without repeating any of it. A `Field` is what the align
+and transcription windows describe their own parameter files with too, and they load and save those
+through the same helpers at the bottom of this module.
 """
 
 from __future__ import annotations
@@ -11,17 +13,16 @@ from __future__ import annotations
 import copy
 import json
 import os
-import tempfile
 import warnings
+from collections.abc import Sequence
 from dataclasses import dataclass, field, make_dataclass
 from pathlib import Path
 from typing import Any
 
-import platformdirs
-
 from namioto.bpm import ALGORITHMS
 from namioto.i18n import LANGUAGE_CODES, LANGUAGE_LABELS, SYSTEM
 from namioto.spectrum import CHANNEL_MODES
+from namioto.utils import config_dir, write_text
 
 VERSION = 3
 TEXT_LIMIT = 4096
@@ -653,7 +654,7 @@ def default_path() -> Path:
     from_env = os.environ.get("NAMIOTO_SETTINGS")
     if from_env:
         return Path(from_env)
-    return Path(platformdirs.user_config_dir("namioto")) / "settings.json"
+    return config_dir("settings.json")
 
 
 def get_value(settings: Settings, section: str, name: str) -> Any:
@@ -682,6 +683,36 @@ def coerce(spec: Field, value: Any) -> Any:
         return spec.default
     text = str(value).strip()[:TEXT_LIMIT]
     return text
+
+
+def defaults(fields: Sequence[Field]) -> dict[str, Any]:
+    """The values a field table starts from."""
+    return {item.name: item.default for item in fields}
+
+
+def coerce_values(fields: Sequence[Field], values: Any) -> dict[str, Any]:
+    """A file may hold anything at all, so every value goes through its field's own check."""
+    if not isinstance(values, dict):
+        return defaults(fields)
+    return {item.name: coerce(item, values.get(item.name, item.default)) for item in fields}
+
+
+def load_values(path: str | Path, fields: Sequence[Field]) -> dict[str, Any]:
+    """What a dialog opens with: the file's values, or the defaults for anything unreadable."""
+    target = Path(path)
+    try:
+        data = json.loads(target.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return defaults(fields)
+    except (OSError, ValueError) as error:
+        warnings.warn(f"{target} could not be read ({error}); defaults are in use", stacklevel=2)
+        return defaults(fields)
+    return coerce_values(fields, data)
+
+
+def save_values(path: str | Path, fields: Sequence[Field], values: Any) -> Path:
+    """Write one field table's values out whole, checked first."""
+    return write_json(coerce_values(fields, values), path)
 
 
 def to_dict(settings: Settings) -> dict:
@@ -722,18 +753,7 @@ def load(path: str | Path | None = None) -> Settings:
 
 def write_json(data: dict, path: str | Path) -> Path:
     """Write a whole file at once, with the layout both settings and projects use."""
-    target = Path(path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    text = json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True) + "\n"
-    handle, name = tempfile.mkstemp(dir=target.parent, prefix=f"{target.name}.", suffix=".tmp")
-    try:
-        with os.fdopen(handle, "w", encoding="utf-8") as stream:
-            stream.write(text)
-        os.replace(name, target)
-    except BaseException:
-        Path(name).unlink(missing_ok=True)
-        raise
-    return target
+    return write_text(path, json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def save(settings: Settings, path: str | Path | None = None) -> Path:

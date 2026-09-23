@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Small helpers shared across the Qt-free modules.
+"""Small helpers shared across the Qt-free modules: the app's own directories, the identity of a
+file under a path, and `kana_tokens()`.
 
 `kana_tokens()` is the ruby `namioto-align` takes: it turns a `.krc` line's bracketed kana into
 one hepburn token per mora, the unit FA-Kara's models are trained on. It is deliberately small - a
@@ -11,7 +12,56 @@ string and a whole `.krc` line.
 
 from __future__ import annotations
 
+import os
+import tempfile
 import unicodedata
+from pathlib import Path
+
+import platformdirs
+
+# The name the platform's own directories are filed under: every path the program keeps is built
+# from it, so a renamed program takes its files with it.
+APP_DIRECTORY = "namioto"
+
+
+def data_dir(*parts: str) -> Path:
+    """A path under the app's data root, where derived results and downloaded models belong."""
+    return Path(platformdirs.user_data_dir(APP_DIRECTORY), *parts)
+
+
+def config_dir(*parts: str) -> Path:
+    """A path under the app's config root, where preferences belong."""
+    return Path(platformdirs.user_config_dir(APP_DIRECTORY), *parts)
+
+
+def resolved(path: str | Path) -> Path:
+    """`path` made absolute, with `~` and symlinks taken out, so two names for one file compare equal."""
+    return Path(path).expanduser().resolve()
+
+
+def file_stamp(path: str | Path) -> tuple[int, int]:
+    """Size and mtime, so the same path holding a different file is not the same file."""
+    try:
+        info = resolved(path).stat()
+    except OSError:
+        return (0, 0)
+    return (info.st_size, info.st_mtime_ns)
+
+
+def write_text(path: str | Path, text: str) -> Path:
+    """Write a whole file at once, so a half-written one never exists to be read."""
+    target = Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    handle, name = tempfile.mkstemp(dir=target.parent, prefix=f"{target.name}.", suffix=".tmp")
+    try:
+        with os.fdopen(handle, "w", encoding="utf-8") as stream:
+            stream.write(text)
+        os.replace(name, target)
+    except BaseException:
+        Path(name).unlink(missing_ok=True)
+        raise
+    return target
+
 
 _VOWELS = "aiueo"
 

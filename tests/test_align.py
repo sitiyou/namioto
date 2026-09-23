@@ -5,7 +5,7 @@ import json
 import numpy as np
 import pytest
 
-from namioto import align
+from namioto import align, model_store, utils
 
 
 @pytest.fixture(autouse=True)
@@ -169,7 +169,7 @@ def test_read_segments_accepts_a_list_or_an_object(tmp_path):
 
 
 def test_model_dir_separates_the_two_models(tmp_path, monkeypatch):
-    monkeypatch.setattr(align.platformdirs, "user_data_dir", lambda name: str(tmp_path))
+    monkeypatch.setattr(utils.platformdirs, "user_data_dir", lambda name: str(tmp_path))
     assert align.model_dir("mms", "ja") == tmp_path / "models" / "mms" / "ja"
     assert align.model_dir("yohane", "ja") == tmp_path / "models" / "yohane" / "ja"
     with pytest.raises(ValueError):
@@ -195,8 +195,16 @@ def test_resolve_model_rejects_a_directory_without_the_model(tmp_path):
         align.resolve_model(tmp_path)
 
 
-def test_resolve_model_says_what_is_missing(tmp_path, monkeypatch):
+def test_resolve_model_downloads_what_is_not_installed(tmp_path, monkeypatch):
     monkeypatch.delenv(align.MODEL_ENV, raising=False)
-    monkeypatch.setattr(align.platformdirs, "user_data_dir", lambda name: str(tmp_path))
-    with pytest.raises(FileNotFoundError):
-        align.resolve_model()
+    monkeypatch.setattr(utils.platformdirs, "user_data_dir", lambda name: str(tmp_path))
+    asked: list[tuple] = []
+
+    def install(name, parts=(), progress=None, **rest):
+        asked.append((name, parts))
+        return tmp_path
+
+    monkeypatch.setattr(model_store, "install", install)
+
+    assert align.resolve_model() == tmp_path
+    assert asked == [("aligner", ("mms", "ja"))]

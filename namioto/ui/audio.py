@@ -281,7 +281,7 @@ class MidiSink(SinkPlayer):
             self.mix = np.concatenate([self.mix, np.zeros(end - len(self.mix), dtype=np.float32)])
         self.mix[start:end] += voice
         self._voices[pitch] = (start, len(voice))
-        self._key = None  # the mix no longer holds the prepared program alone
+        self._key = None  # an audition is mixed in, so the next set_program has to render it again
 
     def _release_voice(self, pitch: int, from_frame: int) -> None:
         """Fade out the note this pitch is still sounding, the way a synth releases it on a retrigger."""

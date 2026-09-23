@@ -1,5 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Karaoke: the `.krc` lyric parser, and the renderers built on it."""
+"""Karaoke: the `.krc` lyric model, and what reads, writes and times it.
+
+`model.py` holds the tree (`Word`/`Ruby`/`Line`/`Chapter`/`Lyrics`), `parser.parse` reads a `.krc`
+into it, `writer.dumps` writes an edited tree back out, `transforms` holds the optional passes over
+one, and `timeline` turns a parsed lyric into the morae the editor draws and the aligner times. The
+whole package is Qt-free; the names it re-exports are its public surface.
+"""
 
 from namioto.karaoke.model import Chapter, KrcError, Line, Lyrics, Ruby, Word
 from namioto.karaoke.parser import parse

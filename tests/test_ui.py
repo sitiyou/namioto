@@ -55,7 +55,6 @@ from namioto.ui.midi_dialog import MidiImportDialog
 from namioto.ui.roll import (
     CONTENT_MARGIN,
     LENGTH_BEATS,
-    MORA_HEIGHT,
     NOTE_INSET,
     PITCH_MAX,
     PITCH_MIN,
@@ -68,6 +67,7 @@ from namioto.ui.roll import (
 )
 from namioto.ui.settings_dialog import SettingsDialog, field_editor
 from namioto.ui.spectrogram import SpectrumImage, SpectrumLoader
+from namioto.ui.strips import MORA_HEIGHT
 from namioto.ui.transcription_dialog import TranscriptionDialog
 
 DEMO_NOTES = (

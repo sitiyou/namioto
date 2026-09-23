@@ -24,22 +24,20 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
-import os
 import pathlib
 import sys
 import time
-import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Protocol
 
 import librosa
 import numpy as np
-import onnxruntime as ort
-import platformdirs
 
+from namioto import model_store
 from namioto import settings as store
 from namioto.settings import Field
+from namioto.utils import config_dir, data_dir, file_stamp, resolved
 
 SAMPLE_RATE = 16000
 # the convolutional front end strides 320 samples into one frame in both models, so a frame is
@@ -56,14 +54,11 @@ COLLAPSE_RUN = 3
 DIVERGE_SECONDS = 0.1
 MODEL_FILE = "model.onnx"
 VOCAB_FILE = "vocab.json"
-MODEL_ENV = "NAMIOTO_ALIGN_MODEL"
+MODEL_ENV = model_store.MODELS["aligner"].env
 LANGUAGES = ("ja",)
 MODELS = ("mms", "yohane")
 DEFAULT_MODEL = "mms"
-PROVIDERS = {
-    "cpu": ("CPUExecutionProvider",),
-    "cuda": ("CUDAExecutionProvider", "CPUExecutionProvider"),
-}
+PROVIDERS = model_store.PROVIDERS
 # the cells per quarter note the window offers to snap with; a label is the note that cell is
 QUANTIZE_CELLS = (0, 1, 2, 4, 8, 16, 32)
 QUANTIZE_LABELS = ("Off", "1/4", "1/8", "1/16", "1/32", "1/64", "1/128")
@@ -114,29 +109,22 @@ class AlignedSegment:
     tokens: tuple[Token, ...]
 
 
-def models_root() -> pathlib.Path:
-    """Where a converted aligner lives: the platform's data directory, beside GAME's models."""
-    return pathlib.Path(platformdirs.user_data_dir("namioto")) / "models"
-
-
-def model_dir(model: str = DEFAULT_MODEL, language: str = "ja") -> pathlib.Path:
+def _check(model: str, language: str) -> None:
+    """A model or language nobody has is a mistake worth raising before touching the disk."""
     if model not in MODELS:
         raise ValueError(f"no aligner named {model!r}, expected one of {', '.join(MODELS)}")
     if language not in LANGUAGES:
         raise ValueError(f"no aligner for {language!r}, expected one of {', '.join(LANGUAGES)}")
-    return models_root() / model / language
+
+
+def model_dir(model: str = DEFAULT_MODEL, language: str = "ja") -> pathlib.Path:
+    _check(model, language)
+    return model_store.path("aligner", model, language)
 
 
 def is_installed(model: str = DEFAULT_MODEL, language: str = "ja") -> bool:
-    directory = model_dir(model, language)
-    return (directory / MODEL_FILE).is_file() and (directory / VOCAB_FILE).is_file()
-
-
-def _require(directory: pathlib.Path) -> pathlib.Path:
-    """`directory` once it holds a converted model, else FileNotFoundError naming what is missing."""
-    if not (directory / MODEL_FILE).is_file() or not (directory / VOCAB_FILE).is_file():
-        raise FileNotFoundError(f"{directory} does not hold {MODEL_FILE} and {VOCAB_FILE}")
-    return directory
+    _check(model, language)
+    return model_store.installed("aligner", model, language)
 
 
 def resolve_model(
@@ -144,22 +132,12 @@ def resolve_model(
 ) -> pathlib.Path:
     """The directory holding `model.onnx` and `vocab.json`, which must exist.
 
-    An explicit path wins, then `$NAMIOTO_ALIGN_MODEL`, then the installed model; a file is read as
-    living in the directory beside its dictionary.
+    An explicit path or `$NAMIOTO_ALIGN_MODEL` wins, then an installed model; a file is read as
+    living in the directory beside its dictionary. Nothing is published to download yet, so a model
+    that is not installed is refused with what to do instead.
     """
-    if path is not None:
-        candidate = pathlib.Path(path)
-        return _require(candidate if candidate.is_dir() else candidate.parent)
-    from_env = os.environ.get(MODEL_ENV)
-    if from_env:
-        return _require(pathlib.Path(from_env))
-    directory = model_dir(model, language)
-    if not is_installed(model, language):
-        raise FileNotFoundError(
-            f"no {model} aligner in {directory}; convert one with scripts/export_align_model.py "
-            f"or point {MODEL_ENV} at a directory holding {MODEL_FILE} and {VOCAB_FILE}"
-        )
-    return directory
+    _check(model, language)
+    return model_store.resolve("aligner", path, parts=(model, language))
 
 
 def load_dictionary(path: str | pathlib.Path) -> tuple[dict[str, int], int]:
@@ -184,52 +162,33 @@ ALIGNMENT_STORE_VERSION = 1
 
 def parameter_path() -> pathlib.Path:
     """The preferences side of the tree: the window's remembered choices, beside settings.json."""
-    return pathlib.Path(platformdirs.user_config_dir("namioto")) / PARAMETER_FILE
+    return config_dir(PARAMETER_FILE)
 
 
 def default_parameters() -> dict[str, Any]:
-    return {item.name: item.default for item in PARAMETERS}
+    return store.defaults(PARAMETERS)
 
 
 def coerce_parameters(values: Any) -> dict[str, Any]:
-    """A file may hold anything at all, so every value goes through its field's own check."""
-    if not isinstance(values, dict):
-        return default_parameters()
-    return {item.name: store.coerce(item, values.get(item.name, item.default)) for item in PARAMETERS}
+    return store.coerce_values(PARAMETERS, values)
 
 
 def load_parameters() -> dict[str, Any]:
     """What the window opens with: the last run's choices, or the defaults for anything unreadable."""
-    try:
-        data = json.loads(parameter_path().read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return default_parameters()
-    except (OSError, ValueError) as error:
-        warnings.warn(f"{parameter_path()} could not be read ({error}); defaults are in use", stacklevel=2)
-        return default_parameters()
-    return coerce_parameters(data)
+    return store.load_values(parameter_path(), PARAMETERS)
 
 
 def save_parameters(values: Any) -> pathlib.Path:
-    return store.write_json(coerce_parameters(values), parameter_path())
+    return store.save_values(parameter_path(), PARAMETERS, values)
 
 
 def alignments_root() -> pathlib.Path:
     """Where a cached alignment lives: the platform's data directory, beside the models."""
-    return pathlib.Path(platformdirs.user_data_dir("namioto")) / ALIGNMENTS_DIR
-
-
-def _audio_stamp(path: str | pathlib.Path) -> tuple[int, int]:
-    """Size and mtime, so the same path holding different audio is not the same audio."""
-    try:
-        info = pathlib.Path(path).expanduser().resolve().stat()
-    except OSError:
-        return (0, 0)
-    return (info.st_size, info.st_mtime_ns)
+    return data_dir(ALIGNMENTS_DIR)
 
 
 def _store_path(audio: str | pathlib.Path) -> pathlib.Path:
-    digest = hashlib.sha1(str(pathlib.Path(audio).expanduser().resolve()).encode("utf-8")).hexdigest()
+    digest = hashlib.sha1(str(resolved(audio)).encode("utf-8")).hexdigest()
     return alignments_root() / f"{digest}.json"
 
 
@@ -239,7 +198,7 @@ def alignment_key(audio: str | pathlib.Path, model: str, provider: str, text: st
     The tempo and the grid offset are not part of it: they only snap the result, so changing either
     re-snaps a stored alignment instead of running the model again.
     """
-    identity = {"audio": list(_audio_stamp(audio)), "model": model, "provider": provider, "text": text}
+    identity = {"audio": list(file_stamp(audio)), "model": model, "provider": provider, "text": text}
     return hashlib.sha1(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -307,9 +266,7 @@ class OnnxBackend:
     """A converted CTC model: `logits(waveform)` is `[frames, vocabulary]` for one window."""
 
     def __init__(self, path: str | pathlib.Path, provider: str = "cpu"):
-        if provider not in PROVIDERS:
-            raise ValueError(f"unknown provider {provider!r}, expected one of {', '.join(PROVIDERS)}")
-        self.session = ort.InferenceSession(str(path), providers=list(PROVIDERS[provider]))
+        self.session = model_store.session(path, provider)
         self.input = self.session.get_inputs()[0].name
 
     def logits(self, waveform: np.ndarray) -> np.ndarray:

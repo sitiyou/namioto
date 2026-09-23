@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from PyQt6.QtGui import QColor, QGuiApplication, QPalette, QStyleHints
 from PyQt6.QtWidgets import QApplication, QStyleFactory
 
-# One body colour per channel; the first equals the single note colour the editor had before channels.
+# One body colour per channel, picked by channel number; the first is the default channel's own.
 NOTE_PALETTE = (
     "#ff2f2f",
     "#ff9d2f",

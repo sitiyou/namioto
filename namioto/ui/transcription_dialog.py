@@ -30,10 +30,9 @@ from PyQt6.QtWidgets import (
 from namioto import transcription
 from namioto.i18n import tr
 from namioto.settings import Field
-from namioto.ui.settings_dialog import advanced_section, field_editor
+from namioto.ui.settings_dialog import add_row, advanced_section, field_editor
 
 POLL_MS = 100
-FIELD_WIDTH = 300
 LOG_HEIGHT = 140
 
 
@@ -123,12 +122,7 @@ class TranscriptionDialog(QDialog):
             form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             for item in items:
                 editor, read, write = field_editor(self._parameters[item.name], item)
-                editor.setMaximumWidth(FIELD_WIDTH)
-                label = QLabel(tr(item.caption))
-                if item.tooltip:
-                    label.setToolTip(tr(item.tooltip))
-                    editor.setToolTip(tr(item.tooltip))
-                form.addRow(label, editor)
+                add_row(form, editor, item)
                 self._fields.append((item, read, write))
                 if item.name == "target":
                     self._target_read, self._target_write = read, write

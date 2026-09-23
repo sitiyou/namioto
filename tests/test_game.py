@@ -116,14 +116,14 @@ def test_the_backend_hands_its_provider_to_every_session(tmp_path, monkeypatch) 
     seen: list[list[str]] = []
 
     class Session:
-        def __init__(self, path, options, providers):
+        def __init__(self, path, providers=None, **options):
             seen.append(providers)
 
-    monkeypatch.setattr("namioto.game.ort.InferenceSession", Session)
+    monkeypatch.setattr("namioto.model_store.ort.InferenceSession", Session)
     backend = OnnxBackend(tmp_path, provider="cuda")
 
-    assert backend.providers == ["CUDAExecutionProvider", "CPUExecutionProvider"]
-    assert seen == [backend.providers] * len(MODEL_FILES)
+    assert backend.provider == "cuda"
+    assert seen == [["CUDAExecutionProvider", "CPUExecutionProvider"]] * len(MODEL_FILES)
 
 
 def test_the_cli_runs_on_the_cpu_unless_asked_otherwise() -> None:
@@ -220,6 +220,10 @@ def test_downloading_unpacks_the_release_into_the_data_directory(tmp_path, monke
 def test_resolve_model_prefers_what_is_already_there(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
     monkeypatch.delenv("NAMIOTO_GAME_MODEL", raising=False)
+    for directory in (tmp_path / "handmade", tmp_path / "from-env"):
+        directory.mkdir()
+        (directory / "config.json").write_text("{}", encoding="utf8")
+    (tmp_path / "bare").mkdir()
 
     assert resolve_model(tmp_path / "handmade") == tmp_path / "handmade"  # an explicit path wins
     monkeypatch.setenv("NAMIOTO_GAME_MODEL", str(tmp_path / "from-env"))
@@ -230,6 +234,8 @@ def test_resolve_model_prefers_what_is_already_there(tmp_path, monkeypatch) -> N
     assert resolve_model(size="small") == model_dir("small")  # already installed: no download
     with pytest.raises(FileNotFoundError, match="no medium model"):
         resolve_model(size="medium", download=False)
+    with pytest.raises(FileNotFoundError, match="config.json"):
+        resolve_model(tmp_path / "bare")  # a path that holds nothing is refused
 
 
 def test_the_cli_reports_a_model_it_cannot_get(capsys, monkeypatch) -> None:

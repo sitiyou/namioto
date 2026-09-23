@@ -3,7 +3,8 @@
 
 The window is built from `namioto.settings`: one row per field of the spec, so a new setting is a
 line in that table and nothing here. A field the spec marks `hidden` is what the program remembers
-by itself - a bar value, the session - and never a row.
+by itself - a bar value, the session - and never a row. `field_editor`, `add_row` and
+`advanced_section` are the pieces a form is made of, shared with the align and transcription windows.
 """
 
 from __future__ import annotations
@@ -38,7 +39,17 @@ from namioto.settings import Field
 from namioto.ui import theme
 
 SAVE_DELAY_MS = 1000
-EDITOR_WIDTH = 300  # a form of numbers that stretch across the page is hard to read
+FIELD_WIDTH = 300  # a form of numbers that stretch across the page is hard to read
+
+
+def add_row(form: QFormLayout, editor: QWidget, field: Field) -> None:
+    """One row of a form: the spec's caption and tooltip, then the widget that edits its value."""
+    editor.setMaximumWidth(FIELD_WIDTH)
+    label = QLabel(tr(field.caption))
+    if field.tooltip:
+        label.setToolTip(tr(field.tooltip))
+        editor.setToolTip(tr(field.tooltip))
+    form.addRow(label, editor)
 
 
 class SettingsStore(QObject):
@@ -250,13 +261,8 @@ class SettingsDialog(QDialog):
             form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
             for section, field in rows:
                 editor, read, write = self._editor(section.name, field)
-                editor.setMaximumWidth(EDITOR_WIDTH)
                 self._rows.append((section.name, field, read, write))
-                label = QLabel(tr(field.caption))
-                if field.tooltip:
-                    label.setToolTip(tr(field.tooltip))
-                    editor.setToolTip(tr(field.tooltip))
-                form.addRow(label, editor)
+                add_row(form, editor, field)
             if advanced:
                 layout.addWidget(advanced_section(form))
             layout.addLayout(form)
