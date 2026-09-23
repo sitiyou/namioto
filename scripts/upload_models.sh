@@ -45,7 +45,7 @@ release - one zip per ONNX model - and prints the registry lines that point the 
   --repo OWNER/NAME  default: sitiyou/namioto
   --data-dir DIR     where the aligners live (default: $XDG_DATA_HOME/namioto/models)
   --language CODE    the aligners' language directory (default: ja)
-  --tempocnn FILE    the TempoCNN .onnx (default: the data directory, else namioto/models/)
+  --tempocnn FILE    the TempoCNN .onnx (default: the one in the data directory)
   --out DIR          where the zips are built (default: dist/models)
   --title TEXT       release title (default: "ONNX models")
   --notes TEXT       release notes (default: attribution and license summary)
@@ -168,8 +168,7 @@ for model in $ONLY; do
         tempocnn)
             source="$TEMPOCNN"
             [ -n "$source" ] || source="$DATA_DIR/tempocnn/deeptemp-k16-3.onnx"
-            [ -f "$source" ] || source="namioto/models/deeptemp-k16-3.onnx"
-            license="namioto/models/LICENSE-CC-BY-NC-SA-4.0.txt"
+            license="LICENSE-CC-BY-NC-SA-4.0.txt"
             if [ -f "$license" ]; then
                 build_zip "tempocnn-onnx.zip" "$source" "$license"
             else

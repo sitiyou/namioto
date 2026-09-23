@@ -1,5 +1,8 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Tempo (BPM) estimation with the TempoCNN model, using ONNX Runtime only."""
+"""Tempo (BPM) estimation with the TempoCNN model, using ONNX Runtime only.
+
+The model is not shipped: it is downloaded from this project's `models` release on first use.
+"""
 
 from __future__ import annotations
 
@@ -9,12 +12,13 @@ import sys
 from collections import Counter
 from dataclasses import dataclass
 from functools import lru_cache
-from importlib import resources
 from pathlib import Path
 
 import librosa
 import numpy as np
 import onnxruntime as ort
+
+from namioto import model_store
 
 SAMPLE_RATE = 11025
 N_FFT = 1024
@@ -25,7 +29,6 @@ FMAX = 5000
 PATCH_SIZE = 256
 PATCH_HOP_SIZE = 128
 BPM_OFFSET = 30
-DEFAULT_MODEL_NAME = "deeptemp-k16-3.onnx"
 AGGREGATIONS = ("majority", "mean", "median")
 
 
@@ -71,7 +74,9 @@ class TempoEstimate:
 
 
 def default_model_path() -> Path:
-    return Path(resources.files("namioto.models").joinpath(DEFAULT_MODEL_NAME))
+    """The TempoCNN graph: the one in the data directory, downloaded there when it is not."""
+    model = model_store.MODELS["tempocnn"]
+    return model_store.resolve("tempocnn") / model.files[0]
 
 
 def mel_spectrogram(audio: np.ndarray, sample_rate: int = SAMPLE_RATE) -> np.ndarray:

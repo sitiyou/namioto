@@ -33,8 +33,9 @@ uv run pytest -m slow                     # just those, minutes of synthetic aud
 uv run scripts/bench_spectrum.py          # spectrum benchmark
 ```
 
-`uv` creates the virtual environment and installs the dependencies, including the bundled
-TempoCNN model used by `namioto-tempocnn` and `namioto.tempo`, on first run.
+`uv` creates the virtual environment and installs the dependencies on first run. No model is part
+of the program: the ones it uses are downloaded from this project's `models` release (or GAME's, for
+GAME's own), so the first run of an analysis is the one that fetches them.
 
 ## Spectrum
 
@@ -145,9 +146,9 @@ this run alone and are never written back into the file.
 ./build.sh clean
 ```
 
-The ONNX model ships as package data: `uv build` puts it in the wheel, and the PyInstaller
-targets collect it with `--collect-data namioto.models`. Bundled third-party models carry their
-own license — see [namioto/models/README.md](namioto/models/README.md).
+Neither the wheel nor the frozen builds carry a model: they are downloaded at run time into the
+data directory, and each keeps its own license — see [NOTICE](NOTICE) and
+`scripts/upload_models.sh`, which publishes them.
 
 ## Layout
 
@@ -172,7 +173,7 @@ namioto/bpm.py        the tempo algorithms behind one setting, no Qt
 namioto/wavetone.py   WaveTone's own volume-envelope tempo analysis, no Qt
 namioto/utils.py      the app's directories, a file's identity, kana to romaji tokens, no Qt
 namioto/i18n.py       the language catalogs and the language in force, no Qt
-namioto/models/       the TempoCNN model, still shipped until it gets a release of its own
+LICENSE-CC-BY-NC-SA-4.0.txt  the license text of the downloaded TempoCNN model
 namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars,
                       roll.py: the view, its items, undo, ruler and keyboard, strips.py: the
                       lyrics strip and the span geometry it shares with the view,
@@ -194,10 +195,11 @@ The AGPL is required because the program reuses code from the GPL-3.0 licensed N
 project, reimplements the AGPL-3.0 licensed Essentia TempoCNN front end, and links PyQt6
 (GPL-3.0 or commercial). See [NOTICE](NOTICE) for the full reasoning and the attributions.
 
-The bundled tempo model is **not** AGPL: `namioto/models/deeptemp-k16-3.onnx` comes from
-Essentia/TempoCNN and is licensed **CC BY-NC-SA 4.0** (attribution, non-commercial,
-share-alike) — see [namioto/models/README.md](namioto/models/README.md). Builds that ship this
-file are therefore non-commercial; drop the model or replace it to distribute commercially.
+None of the program's models is AGPL, and none of them is part of a build: `deeptemp-k16-3.onnx`
+comes from Essentia/TempoCNN and the aligners are converted from Meta's MMS and NextFire's yohane
+checkpoint, all of them under **non-commercial** Creative Commons licenses (CC BY-NC-SA 4.0 /
+CC BY-NC 4.0). They are downloaded from this project's `models` release, so the program itself can
+be; using them makes the *output* non-commercial. See [NOTICE](NOTICE) for each one.
 
 ## Controls
 
@@ -378,8 +380,9 @@ reference times handed to the module's `problems()`. A line wearing one of them 
 again with another window before it is believed.
 
 `namioto.utils.kana_tokens` turns a line's kana into those tokens, one hepburn token per mora. The
-model is not redistributed and has no download of its own: `scripts/export_align_model.py` converts
-one into the data directory once, and `--dir` or `$NAMIOTO_ALIGN_MODEL` points at a converted one.
+converted graph is downloaded from this project's `models` release on first use, into the data
+directory; `scripts/export_align_model.py` builds one yourself, and `--dir` or
+`$NAMIOTO_ALIGN_MODEL` points at a converted one instead.
 Two models can be exported: `mms` (Meta's MMS forced-alignment checkpoint, the default) and `yohane`
 (the karaoke fine-tune `NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`).
 

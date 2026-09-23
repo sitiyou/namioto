@@ -3,11 +3,14 @@
 
 from __future__ import annotations
 
+import os
+
 import librosa
 import numpy as np
 import pytest
 import soundfile
 
+from namioto import model_store
 from namioto.tempo import (
     N_MELS,
     LocalTempo,
@@ -41,9 +44,15 @@ def write_wav(path, audio: np.ndarray):
 
 @pytest.fixture(scope="module")
 def model_file() -> str:
-    path = default_model_path()
-    assert path.is_file(), "the ONNX model must ship inside the package"
-    return str(path)
+    """The real graph, which the program downloads on first use rather than shipping.
+
+    A test run has its own data directory, so the model has to be pointed at: either let
+    `namioto-tempocnn` fetch one, or set the model's environment variable to a local copy.
+    """
+    env = model_store.MODELS["tempocnn"].env
+    if not model_store.installed("tempocnn") and not os.environ.get(env):
+        pytest.skip(f"no TempoCNN model installed; set {env} to one, or let namioto-tempocnn fetch it")
+    return str(default_model_path())
 
 
 @pytest.mark.parametrize("bpm", [90, 120, 140])

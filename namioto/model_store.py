@@ -70,6 +70,13 @@ MODELS: dict[str, Model] = {
         hint="convert one with scripts/export_align_model.py",
         asset="https://github.com/sitiyou/namioto/releases/download/models/{model}-onnx.zip",
     ),
+    "tempocnn": Model(
+        name="tempocnn",
+        env="NAMIOTO_TEMPOCNN_MODEL",
+        files=("deeptemp-k16-3.onnx",),
+        directory="tempocnn",
+        asset="https://github.com/sitiyou/namioto/releases/download/models/tempocnn-onnx.zip",
+    ),
 }
 
 

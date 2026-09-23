@@ -28,8 +28,6 @@ pyinstaller_common=(
     --clean
     --paths .
     --specpath build
-    --hidden-import namioto.models
-    --collect-data namioto.models
 )
 
 build_wheel() {

@@ -42,21 +42,26 @@ Third-party code and assets
 - Used for: the TempoCNN algorithm and its audio front end (mel spectrogram parameters, patch
   extraction and normalisation) that namioto/tempo.py reimplements with librosa and ONNX Runtime
 
-### TempoCNN model  (namioto/models/deeptemp-k16-3.onnx)
+### TempoCNN model  (downloaded, not part of this repository)
 - Upstream: Essentia `deeptemp-k16-3` (TempoCNN, MTG-UPF), https://essentia.upf.edu/models.html
 - License: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
-  (namioto/models/LICENSE-CC-BY-NC-SA-4.0.txt) — NOT AGPL-3.0
-- The model is an independent work aggregated with the program, not a derivative of the AGPL code,
-  and it keeps its own license. Upstream states that all models created by the MTG are licensed
-  under CC BY-NC-SA 4.0 and are available under a proprietary license on request.
-- Consequence: any distribution of Namioto that includes this file is non-commercial. Remove it
-  (or supply a permissively licensed replacement) if a commercial distribution is required.
-- See namioto/models/README.md for the attribution and the list of changes.
+  (https://creativecommons.org/licenses/by-nc-sa/4.0/) — NOT AGPL-3.0
+- The model is an independent work aggregated with the program's output rather than a derivative of
+  the AGPL code, and it keeps its own license. Upstream states that all models created by the MTG
+  are licensed under CC BY-NC-SA 4.0 and are available under a proprietary license on request.
+- Namioto ships no model at all: `namioto-tempocnn`, and the editor's TempoCNN tempo algorithm,
+  download `tempocnn-onnx.zip` from this project's `models` release into the data directory
+  (`platformdirs.user_data_dir("namioto")/models/tempocnn`, so
+  ~/.local/share/namioto/models/tempocnn on Linux). That zip carries this license text, and
+  `LICENSE-CC-BY-NC-SA-4.0.txt` in this repository is a copy of it.
+- Consequence: running the TempoCNN algorithm produces non-commercial output, and the `models`
+  release is a non-commercial distribution. The program itself - the AGPL-3.0 sources, the wheel and
+  the frozen builds - contains none of the models named here.
 
 ### GAME (Generative Adaptive MIDI Extractor)
 - Upstream: Team OpenVPI, https://github.com/openvpi/GAME
 - License: MIT (code) / Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
-  (the released models, namioto/models/LICENSE-CC-BY-NC-SA-4.0.txt) — the models are NOT AGPL-3.0
+  (https://creativecommons.org/licenses/by-nc-sa/4.0/) — the models are NOT AGPL-3.0
 - Used for: extracting notes from a singing voice. `namioto/game.py` is a port of the standalone
   `infer_onnx.py` that goes with GAME's ONNX model exports - GAME itself is a PyTorch project and
   ships no ONNX inference - so the module keeps GAME's MIT license, while the models stay a separate
@@ -66,7 +71,7 @@ Third-party code and assets
   ~/.local/share/namioto/models/game/small on Linux - and a directory of them can also be given
   directly with `--model` or `$NAMIOTO_GAME_MODEL`.
 - Consequence: a transcription produced with those models is non-commercial, exactly as with the
-  bundled TempoCNN model above.
+  downloaded TempoCNN model above.
 
 ### FA-Kara (forced alignment)
 - Upstream: moriwx/FA-Kara, https://github.com/moriwx/FA-Kara
@@ -74,9 +79,11 @@ Third-party code and assets
 - Used for: the alignment core `namioto/align.py` ports. `align()`'s per-token flow - flatten a
   line's tokens into characters, force them onto the model's frames, group the frames back into one
   span per token - is reimplemented here in numpy and ONNX Runtime, with the audio windowed by the
-  caller. The model is not redistributed: the module loads a converted ONNX graph from the data
-  directory (`~/.local/share/namioto/models/<model>/<language>`, via `platformdirs`) or from
-  `$NAMIOTO_ALIGN_MODEL`, and `scripts/export_align_model.py` produces it from the two models below.
+  caller. The module loads a converted ONNX graph from the data directory
+  (`~/.local/share/namioto/models/<model>/<language>`, via `platformdirs`), from
+  `$NAMIOTO_ALIGN_MODEL`, or, when neither has one, from this project's `models` release
+  (`mms-onnx.zip`, `yohane-onnx.zip`), which it downloads. `scripts/export_align_model.py` produces
+  those graphs from the two models below, and `scripts/upload_models.sh` publishes them.
 
 ### torchaudio (CTC forced alignment)
 - Upstream: pytorch/audio, https://github.com/pytorch/audio
@@ -85,19 +92,24 @@ Third-party code and assets
   CTC trellis and the token spans. torchaudio is not a dependency of the program; only
   `scripts/export_align_model.py` uses it, to convert the MMS checkpoint.
 
-### MMS forced-alignment model (not redistributed)
+### MMS forced-alignment model (redistributed, converted)
 - Upstream: Meta AI, `torchaudio.pipelines.MMS_FA` (the `ctc_alignment_mling_uroman` checkpoint)
-- License: Creative Commons Attribution-NonCommercial 4.0 International — NOT AGPL-3.0
-- Namioto's default aligner (`--model mms`); `scripts/export_align_model.py` converts it from the
-  network, and it is never shipped with the program.
+- License: Creative Commons Attribution-NonCommercial 4.0 International
+  (https://creativecommons.org/licenses/by-nc/4.0/) — NOT AGPL-3.0
+- Namioto's default aligner (`--model mms`). `scripts/export_align_model.py` converts it from the
+  network, and this project publishes the converted graph as `mms-onnx.zip` on its `models` release;
+  the original checkpoint is never shipped. Conversion changes nothing about the license, so the
+  published graph stays non-commercial, with the attribution above.
 
-### yohane karaoke alignment model (not redistributed)
+### yohane karaoke alignment model (redistributed, converted)
 - Upstream: `NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`,
   https://huggingface.co/NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn
-- License: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International — NOT AGPL-3.0
-- Namioto's `--model yohane`; `scripts/export_align_model.py` converts it from HuggingFace, and it is
-  never shipped with the program.
-- Consequence: a converted aligner is non-commercial, like the bundled TempoCNN and GAME's models.
+- License: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+  (https://creativecommons.org/licenses/by-nc-sa/4.0/) — NOT AGPL-3.0
+- Namioto's `--model yohane`, converted from HuggingFace by `scripts/export_align_model.py` and
+  published as `yohane-onnx.zip` on this project's `models` release, under the same terms as MMS.
+- Consequence: an alignment produced with a converted aligner is non-commercial, like TempoCNN's and
+  GAME's models.
 
 ### Dependencies (all AGPL-compatible)
 | Component | License |
