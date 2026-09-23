@@ -9,6 +9,7 @@ choices are `align.PARAMETERS`, remembered between runs in the file `align.param
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
 from contextlib import suppress
 
@@ -40,26 +41,59 @@ class Aligner(LoadingThread):
 
     progress = pyqtSignal(int, int)
     aligned = pyqtSignal(object)
+    message = pyqtSignal(str)
 
-    def __init__(self, audio: str, text: str, model: str = align.DEFAULT_MODEL, provider: str = "cpu", parent=None):
+    def __init__(
+        self,
+        audio: str,
+        text: str,
+        model: str = align.DEFAULT_MODEL,
+        provider: str = "cpu",
+        chunk: bool = True,
+        parent=None,
+    ):
         super().__init__(audio, parent)
         self.text = text
         self.model = model
         self.provider = provider
+        self.chunk = chunk
+        self._downloaded = -10
 
     def load(self) -> None:
-        directory = align.resolve_model(None, self.model, "ja")
+        started = time.monotonic()
+        self.message.emit(tr("Loading the {model} model on {provider}\u2026", model=self.model, provider=self.provider))
+        directory = align.resolve_model(None, self.model, "ja", progress=self._downloading)
         backend = align.OnnxBackend(directory / align.MODEL_FILE, provider=self.provider)
+        if self.chunk:
+            backend = align.ChunkedBackend(backend, progress=self.progress.emit)
         dictionary, blank_id = align.load_dictionary(directory / align.VOCAB_FILE)
         lines = mora_lines(self.text)
+        morae = sum(len(line.morae) for line in lines)
+        self.message.emit(tr("Read {lines} lines, {morae} morae", lines=len(lines), morae=morae))
         audio = align.load_audio(self.path)
-        segment = align.Segment(0.0, len(audio) / align.SAMPLE_RATE, tuple(align_tokens(lines)))
-        found = align.align([segment], backend, dictionary, audio, blank_id=blank_id, progress=self.progress.emit)[0]
+        seconds = len(audio) / align.SAMPLE_RATE
+        if self.chunk:
+            self.message.emit(tr("Aligning over {seconds:.1f}s of audio in chunks\u2026", seconds=seconds))
+        else:
+            self.message.emit(tr("Aligning over {seconds:.1f}s of audio in one pass\u2026", seconds=seconds))
+        segment = align.Segment(0.0, seconds, tuple(align_tokens(lines)))
+        found = align.align([segment], backend, dictionary, audio, blank_id=blank_id)[0]
+        self.message.emit(tr("Fitting the morae to the voice\u2026"))
         rows = align.correct_times(split(found.tokens, lines), audio)
         problems = self._problems(found, lines)
         with suppress(OSError):  # the cache is disposable, and the alignment itself already came back
-            align.save_alignment(self.path, self.model, self.provider, self.text, rows, problems)
+            align.save_alignment(self.path, self.model, self.provider, self.text, rows, problems, self.chunk)
+        self.message.emit(tr("Alignment took {seconds:.1f}s", seconds=time.monotonic() - started))
         self.aligned.emit((rows, self.model, problems))
+
+    def _downloading(self, done: int, total: int) -> None:
+        """A download of a model that was not installed, logged a tenth at a time."""
+        if not total:
+            return
+        percent = done * 100 // total
+        if percent >= self._downloaded + 10:
+            self._downloaded = percent
+            self.message.emit(tr("Downloading the {model} model\u2026 {percent}%", model=self.model, percent=percent))
 
     @staticmethod
     def _problems(found, lines) -> list[str]:
@@ -140,16 +174,18 @@ class AlignDialog(QDialog):
         self._remember()
         model = self._parameters["model"]
         provider = self._parameters["provider"]
-        cached = align.find_alignment(self.audio, model, provider, self.text)
+        chunk = bool(self._parameters["chunk"])
+        cached = align.find_alignment(self.audio, model, provider, self.text, chunk)
         if cached is not None:
             rows, problems = cached
             self._done((rows, model, problems))  # re-snapped with the tempo and grid offset in hand
             self.log.setPlainText("\n".join([tr("saved alignment reused"), *problems]))
             return
-        self.progress.setRange(0, 0)  # one busy bar: the whole song is one pass, so nothing ticks yet
+        self.progress.setRange(0, 0)  # busy until the first chunk of the model's pass comes back
         self.status.setText(tr("Aligning…"))
-        self._thread = Aligner(self.audio, self.text, model, provider, self)
+        self._thread = Aligner(self.audio, self.text, model, provider, chunk, self)
         self._thread.progress.connect(self._show_progress)
+        self._thread.message.connect(self.log.appendPlainText)
         self._thread.aligned.connect(self._done)
         self._thread.failed.connect(self._fail)
         self._thread.finished.connect(self._thread.deleteLater)
@@ -169,7 +205,8 @@ class AlignDialog(QDialog):
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
         self.status.setText(tr("Aligned {lines} lines", lines=len(times)))
-        self.log.setPlainText("\n".join(problems))
+        if problems:
+            self.log.appendPlainText("\n".join(problems))
         self.aligned.emit(times, model)
 
     def _fail(self, message: str) -> None:

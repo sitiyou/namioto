@@ -4633,14 +4633,35 @@ def test_a_cached_alignment_is_reused_and_resnapped(own_window, monkeypatch) -> 
     assert "saved alignment reused" in dialog.log.toPlainText()
 
 
+def test_a_cached_whole_song_alignment_is_reused_when_chunking_is_off(own_window, monkeypatch) -> None:
+    align.save_alignment("/tmp/vocal.wav", "mms", "cpu", "あん\n", [[(0.1, 0.6), (0.6, 1.1)]], [], chunk=False)
+    monkeypatch.setattr(align, "align", lambda *args, **kwargs: pytest.fail("must not run the model"))
+    dialog = AlignDialog("/tmp/vocal.wav", "あん\n", 120.0, parent=own_window)
+    parameter_writer(dialog, "chunk")(False)
+    got: list = []
+    dialog.aligned.connect(lambda times, model: got.append(times))
+
+    dialog._start()
+
+    assert dialog._thread is None
+    assert got == [[[(0.1, 0.6), (0.6, 1.1)]]]
+    assert "saved alignment reused" in dialog.log.toPlainText()
+
+
 def test_the_align_dialog_remembers_what_was_chosen(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
     parameter_writer(dialog, "model")("yohane")
     parameter_writer(dialog, "quantize")(4)
+    parameter_writer(dialog, "chunk")(False)
     dialog.reject()
 
     again = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
-    assert again.parameters() == {"model": "yohane", "provider": "cpu", "quantize": 4}
+    assert again.parameters() == {"model": "yohane", "provider": "cpu", "quantize": 4, "chunk": False}
+
+
+def test_the_align_dialog_runs_chunked_unless_told_otherwise(own_window) -> None:
+    dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
+    assert dialog.parameters()["chunk"] is True
 
 
 def test_the_align_dialog_leaves_the_times_alone_by_default(own_window) -> None:
@@ -4656,6 +4677,24 @@ def test_the_align_dialog_shows_a_failure(own_window) -> None:
     dialog._fail("FileNotFoundError: no mms aligner")
     assert "FileNotFoundError" in dialog.log.toPlainText()
     assert dialog.run.isEnabled()
+
+
+def test_the_align_dialog_keeps_its_progress_beside_the_problems(own_window) -> None:
+    dialog = AlignDialog("vocal.wav", "あい\n", 120.0, parent=own_window)
+    dialog.log.setPlainText("Aligning over 204.0s of audio…")
+    dialog._done(([[(0.0, 1.0), (1.0, 2.0)]], "mms", ["あい: empty"]))
+    assert "Aligning over 204.0s of audio…" in dialog.log.toPlainText()
+    assert "あい: empty" in dialog.log.toPlainText()
+
+
+def test_the_aligner_logs_a_download_a_tenth_at_a_time(qt_app) -> None:
+    aligner = Aligner("vocal.wav", "あい\n", "yohane")
+    logged: list[str] = []
+    aligner.message.connect(logged.append)
+    aligner._downloading(0, 1000)
+    aligner._downloading(50, 1000)
+    aligner._downloading(100, 1000)
+    assert logged == ["Downloading the yohane model… 0%", "Downloading the yohane model… 10%"]
 
 
 def test_the_aligner_reports_the_lines_it_doubts() -> None:

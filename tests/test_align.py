@@ -26,6 +26,18 @@ class FakeBackend:
         return self._logits
 
 
+class WindowBackend:
+    """A CTC model that answers a window with one frame per 20 ms, and remembers the windows."""
+
+    def __init__(self, vocabulary: int = 3):
+        self.windows: list[int] = []
+        self.vocabulary = vocabulary
+
+    def logits(self, waveform):
+        self.windows.append(waveform.size)
+        return np.zeros((max(0, waveform.size // align.FRAME_SAMPLES - 1), self.vocabulary), dtype=np.float32)
+
+
 AUDIO = np.zeros(align.SAMPLE_RATE * 2, dtype=np.float32)
 
 # blank, "a", "b": a over frames 0-1, a rest, b over frames 3-4, a rest
@@ -43,8 +55,8 @@ DICTIONARY = {"[pad]": 0, "a": 1, "b": 2}
 def test_the_alignment_parameters_are_remembered_and_checked():
     assert align.load_parameters() == align.default_parameters()
 
-    align.save_parameters({"model": "yohane", "provider": "cuda", "quantize": 4})
-    assert align.load_parameters() == {"model": "yohane", "provider": "cuda", "quantize": 4}
+    align.save_parameters({"model": "yohane", "provider": "cuda", "quantize": 4, "chunk": False})
+    assert align.load_parameters() == {"model": "yohane", "provider": "cuda", "quantize": 4, "chunk": False}
 
     align.save_parameters({"model": "nope", "provider": 7, "quantize": "eight"})
     assert align.load_parameters() == align.default_parameters()  # every value goes through its check
@@ -64,6 +76,14 @@ def test_the_alignment_cache_holds_the_raw_lines_and_reuses_them_by_their_inputs
     assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "うえ\n") is None
 
 
+def test_the_alignment_cache_tells_chunked_and_whole_song_apart():
+    rows = [[(0.0, 0.5)]]
+    align.save_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", rows, [], chunk=False)
+
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk=False) == (rows, [])
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk=True) is None
+
+
 def test_a_broken_alignment_cache_is_no_alignment():
     target = align._store_path("/tmp/song.wav")
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -71,6 +91,42 @@ def test_a_broken_alignment_cache_is_no_alignment():
 
     assert align.load_alignments("/tmp/song.wav") == {}
     assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n") is None
+
+
+def test_a_window_under_a_chunk_is_one_pass():
+    backend = WindowBackend()
+    chunked = align.ChunkedBackend(backend, chunk_seconds=1.0, overlap_seconds=0.2)
+    audio = np.zeros(align.SAMPLE_RATE // 2, dtype=np.float32)
+
+    got = chunked.logits(audio)
+
+    assert backend.windows == [audio.size]
+    assert got.shape[0] == audio.size // align.FRAME_SAMPLES - 1
+
+
+def test_chunking_a_long_window_keeps_the_one_pass_frame_grid():
+    backend = WindowBackend()
+    chunked = align.ChunkedBackend(backend, chunk_seconds=1.0, overlap_seconds=0.2)
+    audio = np.zeros(align.SAMPLE_RATE * 3, dtype=np.float32)
+
+    got = chunked.logits(audio)
+
+    assert got.shape[0] == audio.size // align.FRAME_SAMPLES - 1  # the frames one long pass would have
+    assert len(backend.windows) > 1
+    assert max(backend.windows) <= chunked.chunk
+
+
+def test_every_chunk_of_a_long_window_is_reported():
+    backend = WindowBackend()
+    seen: list[tuple[int, int]] = []
+    chunked = align.ChunkedBackend(
+        backend, chunk_seconds=1.0, overlap_seconds=0.2, progress=lambda done, total: seen.append((done, total))
+    )
+
+    chunked.logits(np.zeros(align.SAMPLE_RATE * 3, dtype=np.float32))
+
+    assert [done for done, _total in seen] == list(range(1, len(seen) + 1))
+    assert all(total == len(backend.windows) for _done, total in seen)
 
 
 def test_forced_align_visits_every_target_in_order():

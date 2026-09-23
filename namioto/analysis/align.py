@@ -51,6 +51,12 @@ MIN_SAMPLES = 400
 # fast line; a single close pair is a zero-mora symbol or a punctuation mark and means nothing
 COLLAPSE_SECONDS = 0.04
 COLLAPSE_RUN = 3
+# a wav2vec2 graph attends over its whole input, so one pass over a song costs quadratically in
+# frames - minutes of audio need tens of gigabytes. The window is cut into overlapping chunks and
+# only the frames that saw context on both sides are kept, which bounds a pass without changing the
+# global CTC path.
+CHUNK_SECONDS = 60.0
+CHUNK_OVERLAP_SECONDS = 4.0
 # the energy windows the voice detector reads: a short one finds the tail a mora ends in, a wide
 # one the stretch a line's head sits in; a frame counts as voice above a fraction of the loud
 # percentile
@@ -85,6 +91,13 @@ PARAMETERS: tuple[Field, ...] = (
         "Snap the times to the beat grid, this many cells per quarter note",
         choices=QUANTIZE_CELLS,
         labels=QUANTIZE_LABELS,
+    ),
+    Field(
+        "chunk",
+        "bool",
+        True,
+        "Chunked inference",
+        "Run the model in overlapping chunks instead of one pass over the whole song, which bounds memory",
     ),
 )
 
@@ -136,16 +149,19 @@ def is_installed(model: str = DEFAULT_MODEL, language: str = "ja") -> bool:
 
 
 def resolve_model(
-    path: str | pathlib.Path | None = None, model: str = DEFAULT_MODEL, language: str = "ja"
+    path: str | pathlib.Path | None = None,
+    model: str = DEFAULT_MODEL,
+    language: str = "ja",
+    progress: Callable[[int, int], None] | None = None,
 ) -> pathlib.Path:
     """The directory holding `model.onnx` and `vocab.json`, which must exist.
 
-    An explicit path or `$NAMIOTO_ALIGN_MODEL` wins, then an installed model; a file is read as
-    living in the directory beside its dictionary. Nothing is published to download yet, so a model
-    that is not installed is refused with what to do instead.
+    An explicit path or `$NAMIOTO_ALIGN_MODEL` wins, then an installed model, and only then the
+    release it is published in, whose download reports `progress(done, total)` bytes; a file is read
+    as living in the directory beside its dictionary.
     """
     _check(model, language)
-    return model_store.resolve("aligner", path, parts=(model, language))
+    return model_store.resolve("aligner", path, parts=(model, language), progress=progress)
 
 
 def load_dictionary(path: str | pathlib.Path) -> tuple[dict[str, int], int]:
@@ -200,13 +216,21 @@ def _store_path(audio: str | pathlib.Path) -> pathlib.Path:
     return alignments_root() / f"{digest}.json"
 
 
-def alignment_key(audio: str | pathlib.Path, model: str, provider: str, text: str) -> str:
-    """What makes two alignments the same one: the audio, the model, where it runs, and the lyrics.
+def alignment_key(audio: str | pathlib.Path, model: str, provider: str, text: str, chunk: bool = True) -> str:
+    """What makes two alignments the same one: the audio, the model, where it runs, the lyrics and
+    whether the model ran in chunks.
 
     The tempo and the grid offset are not part of it: they only snap the result, so changing either
-    re-snaps a stored alignment instead of running the model again.
+    re-snaps a stored alignment instead of running the model again. Chunking is, because it is part
+    of how the model ran and so of the times it found.
     """
-    identity = {"audio": list(file_stamp(audio)), "model": model, "provider": provider, "text": text}
+    identity = {
+        "audio": list(file_stamp(audio)),
+        "model": model,
+        "provider": provider,
+        "text": text,
+        "chunk": chunk,
+    }
     return hashlib.sha1(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -234,9 +258,9 @@ def load_alignments(audio: str | pathlib.Path) -> dict[str, dict]:
     return {key: entry for key, entry in entries.items() if isinstance(entry, dict)}
 
 
-def find_alignment(audio: str | pathlib.Path, model: str, provider: str, text: str):
+def find_alignment(audio: str | pathlib.Path, model: str, provider: str, text: str, chunk: bool = True):
     """The lines and doubts an alignment with these exact inputs already found, or None when there is none."""
-    entry = load_alignments(audio).get(alignment_key(audio, model, provider, text))
+    entry = load_alignments(audio).get(alignment_key(audio, model, provider, text, chunk))
     if not entry:
         return None
     rows = _stored_rows(entry.get("rows"))
@@ -246,10 +270,12 @@ def find_alignment(audio: str | pathlib.Path, model: str, provider: str, text: s
     return rows, [str(problem) for problem in problems] if isinstance(problems, list) else []
 
 
-def save_alignment(audio: str | pathlib.Path, model: str, provider: str, text: str, rows, problems) -> pathlib.Path:
+def save_alignment(
+    audio: str | pathlib.Path, model: str, provider: str, text: str, rows, problems, chunk: bool = True
+) -> pathlib.Path:
     """Keep one entry per alignment key: running the same one again replaces what it found last time."""
     entries = load_alignments(audio)
-    entries[alignment_key(audio, model, provider, text)] = {
+    entries[alignment_key(audio, model, provider, text, chunk)] = {
         "at": int(time.time()),
         "model": model,
         "rows": [[[start, end] for start, end in row] for row in rows],
@@ -280,6 +306,54 @@ class OnnxBackend:
     def logits(self, waveform: np.ndarray) -> np.ndarray:
         values = np.asarray(waveform, dtype=np.float32)[None, :]
         return self.session.run(None, {self.input: values})[0][0]
+
+
+class ChunkedBackend:
+    """A backend over overlapping chunks, so no pass sees more than `chunk_seconds` of audio.
+
+    The frames of a wav2vec2 pass are a grid of `FRAME_SAMPLES`; a chunk starts on that grid, and
+    only its frames with `overlap` of audio on either side are kept, so consecutive chunks tile the
+    one long pass's grid exactly and each kept frame still had its neighbours in the window. The
+    frames at the seam are the ones a long pass would have seen with less context, which is the
+    price of bounding memory.
+    """
+
+    def __init__(
+        self,
+        backend: Backend,
+        *,
+        chunk_seconds: float = CHUNK_SECONDS,
+        overlap_seconds: float = CHUNK_OVERLAP_SECONDS,
+        progress: Callable[[int, int], None] | None = None,
+    ):
+        self.backend = backend
+        self.chunk = max(FRAME_SAMPLES, int(chunk_seconds * SAMPLE_RATE) // FRAME_SAMPLES * FRAME_SAMPLES)
+        overlap = max(0, int(overlap_seconds * SAMPLE_RATE) // FRAME_SAMPLES * FRAME_SAMPLES)
+        self.overlap = min(overlap, self.chunk - FRAME_SAMPLES)
+        self.progress = progress
+
+    def logits(self, waveform: np.ndarray) -> np.ndarray:
+        values = np.asarray(waveform, dtype=np.float32)
+        if values.size <= self.chunk:
+            return self.backend.logits(values)
+        step = self.chunk - self.overlap
+        pad = self.overlap // 2
+        starts = list(range(0, values.size, step))
+        pieces = []
+        for index, start in enumerate(starts):
+            end = min(start + self.chunk, values.size)
+            window = values[start:end]
+            if window.size < MIN_SAMPLES:
+                window = np.pad(window, (0, MIN_SAMPLES - window.size))
+            found = self.backend.logits(window)
+            base = start // FRAME_SAMPLES
+            first = base if index == 0 else (start + pad) // FRAME_SAMPLES
+            last = (values.size if end >= values.size else start + step + pad) // FRAME_SAMPLES
+            low, high = max(first, base), min(last, base + found.shape[0])
+            pieces.append(found[low - base : high - base])
+            if self.progress is not None:
+                self.progress(index + 1, len(starts))
+        return np.concatenate(pieces, axis=0)
 
 
 def log_softmax(values: np.ndarray) -> np.ndarray:
