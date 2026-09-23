@@ -46,6 +46,10 @@ include = ["namioto", "scripts", "build.sh", "LICENSE", "NOTICE", "README.md", "
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# the beat tracker's own tests run the real estimator over 60-90 s of audio, which is most of the
+# suite's time; they are there for -m slow, and for a full run pass -m ''
+markers = ["slow: measures the beat tracker over minutes of audio"]
+addopts = "-m 'not slow'"
 
 [tool.pyright]
 venvPath = "."

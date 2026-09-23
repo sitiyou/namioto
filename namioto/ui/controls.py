@@ -490,7 +490,9 @@ class TransportBar(_Group):
         self.latency = LatencyBox()
         self.latency.setRange(-500, 500)
         self.latency.setValue(0)
-        self.latency.setToolTip(tr("Global offset between audio playback and the displayed waveform"))
+        self.latency.setToolTip(
+            tr("Grid offset: slides the grid lines, - left and + right; notes and playback keep their timestamps")
+        )
         self.latency.setFixedWidth(self.latency.sizeHint().width())
         self.latency.setFixedHeight(FIELD_HEIGHT)
         self.latency.setKeyboardTracking(False)

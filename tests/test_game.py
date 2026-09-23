@@ -28,6 +28,7 @@ from namioto.game import (
     models_root,
     parse_args,
     quantize_notes,
+    quantized,
     resolve_model,
 )
 
@@ -75,6 +76,13 @@ def test_quantize_notes_drops_a_note_the_onset_push_leaves_without_a_cell() -> N
     # its end behind where the onset is pushed to, so there is no cell left for it
     notes = [(0.0, 0.6, 60.0), (0.2, 0.4, 62.0)]
     assert quantize_notes(notes, 0.5) == [(0.0, 0.5, 60.0)]
+
+
+def test_quantized_puts_the_notes_on_the_offset_grid() -> None:
+    snapped, unit, phase = quantized([(0.51, 0.98, 60.0)], 120.0, 2, offset=0.25)
+    assert snapped == [(0.5, 1.0, 60.0)]  # the cells sit at 0.25 + k*0.25, so the note lands on 1.0
+    assert unit == pytest.approx(0.25)
+    assert phase == pytest.approx(0.25)
 
 
 def test_the_grid_phase_is_the_one_that_fits_the_onsets() -> None:

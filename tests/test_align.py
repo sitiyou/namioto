@@ -8,6 +8,13 @@ import pytest
 from namioto import align
 
 
+@pytest.fixture(autouse=True)
+def isolated_store(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "config"))
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    return tmp_path
+
+
 class FakeBackend:
     """A CTC model that answers every window with the same hand-built posteriors."""
 
@@ -30,6 +37,39 @@ LOGITS = [
     [20.0, 0.0, 0.0],
 ]
 DICTIONARY = {"[pad]": 0, "a": 1, "b": 2}
+
+
+def test_the_alignment_parameters_are_remembered_and_checked():
+    assert align.load_parameters() == align.default_parameters()
+
+    align.save_parameters({"model": "yohane", "provider": "cuda", "quantize": 4})
+    assert align.load_parameters() == {"model": "yohane", "provider": "cuda", "quantize": 4}
+
+    align.save_parameters({"model": "nope", "provider": 7, "quantize": "eight"})
+    assert align.load_parameters() == align.default_parameters()  # every value goes through its check
+
+    align.parameter_path().write_text("{not json", encoding="utf-8")
+    with pytest.warns(UserWarning):
+        assert align.load_parameters() == align.default_parameters()
+
+
+def test_the_alignment_cache_holds_the_raw_lines_and_reuses_them_by_their_inputs():
+    rows = [[(0.0, 0.5), (0.5, 1.0), (None, None)]]
+    problems = ["あい: empty"]
+    align.save_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", rows, problems)
+
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n") == (rows, problems)
+    assert align.find_alignment("/tmp/song.wav", "yohane", "cpu", "あい\n") is None
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "うえ\n") is None
+
+
+def test_a_broken_alignment_cache_is_no_alignment():
+    target = align._store_path("/tmp/song.wav")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text("{not json", encoding="utf-8")
+
+    assert align.load_alignments("/tmp/song.wav") == {}
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n") is None
 
 
 def test_forced_align_visits_every_target_in_order():

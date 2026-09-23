@@ -3,14 +3,17 @@
 
 The run is a `LoadingThread` of its own (`Aligner`), because the model is an ONNX graph and the
 audio is read once; the window only starts it, shows the progress, and shows the failures
-`namioto.align` reports. The whole stream is aligned in one pass, the way FA-Kara does it.
+`namioto.align` reports. The whole stream is aligned in one pass, the way FA-Kara does it. Its
+choices are `align.PARAMETERS`, remembered between runs in the file `align.parameter_path()` names.
 """
 
 from __future__ import annotations
 
-from PyQt6.QtCore import pyqtSignal
+from collections.abc import Callable
+from contextlib import suppress
+
+from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -19,16 +22,18 @@ from PyQt6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from namioto import align
 from namioto.i18n import tr
 from namioto.karaoke import align_tokens, mora_lines, snap_to_beats, split
+from namioto.settings import Field
 from namioto.ui.loading import LoadingThread
+from namioto.ui.settings_dialog import field_editor
 
 LOG_HEIGHT = 120
-# the cells per quarter note, the way GAME's Quantize counts them: a label is the note the cell is
-QUANTIZE = ((0, "Off"), (1, "1/4"), (2, "1/8"), (4, "1/16"), (8, "1/32"), (16, "1/64"), (32, "1/128"))
+FIELD_WIDTH = 300
 
 
 class Aligner(LoadingThread):
@@ -51,7 +56,11 @@ class Aligner(LoadingThread):
         audio = align.load_audio(self.path)
         segment = align.Segment(0.0, len(audio) / align.SAMPLE_RATE, tuple(align_tokens(lines)))
         found = align.align([segment], backend, dictionary, audio, blank_id=blank_id, progress=self.progress.emit)[0]
-        self.aligned.emit((split(found.tokens, lines), self.model, self._problems(found, lines)))
+        rows = split(found.tokens, lines)
+        problems = self._problems(found, lines)
+        with suppress(OSError):  # the cache is disposable, and the alignment itself already came back
+            align.save_alignment(self.path, self.model, self.provider, self.text, rows, problems)
+        self.aligned.emit((rows, self.model, problems))
 
     @staticmethod
     def _problems(found, lines) -> list[str]:
@@ -71,31 +80,19 @@ class AlignDialog(QDialog):
 
     aligned = pyqtSignal(object, str)
 
-    def __init__(self, audio: str, text: str, tempo: float, parent=None):
+    def __init__(self, audio: str, text: str, tempo: float, parent=None, offset: float = 0.0):
         super().__init__(parent)
         self.setWindowTitle(tr("Align lyrics"))
         self.audio = audio
         self.text = text
         self.tempo = tempo
+        self.offset = offset
         self._thread: Aligner | None = None
+        # the choices the last run was made with, straight onto the form
+        self._parameters = align.load_parameters()
+        self._fields: list[tuple[Field, Callable[[], object], Callable[[object], None]]] = []
 
-        self.model = QComboBox()
-        for name in align.MODELS:
-            self.model.addItem(name, name)
-        self.model.setToolTip(tr("Which forced-alignment model to use"))
-        self.provider = QComboBox()
-        for name in align.PROVIDERS:
-            self.provider.addItem(name, name)
-        self.provider.setToolTip(tr("Where the model runs"))
-        self.snap = QComboBox()
-        for cells, label in QUANTIZE:
-            self.snap.addItem(label, cells)
-        self.snap.setToolTip(tr("Snap the times to the beat grid, this many cells per quarter note"))
-
-        form = QFormLayout()
-        form.addRow(tr("Model"), self.model)
-        form.addRow(tr("Device"), self.provider)
-        form.addRow(tr("Quantize"), self.snap)
+        form = self._build_form()
         self.progress = QProgressBar()
         self.progress.setRange(0, 1)
         self.status = QLabel(tr("Ready"))
@@ -110,20 +107,54 @@ class AlignDialog(QDialog):
         buttons.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
-        layout.addLayout(form)
+        layout.addWidget(form)
         layout.addWidget(self.progress)
         layout.addWidget(self.status)
         layout.addWidget(self.log)
         layout.addWidget(buttons)
+
+    def parameters(self) -> dict:
+        """What the form holds now, checked the way the store checks it."""
+        return align.coerce_parameters({field.name: read() for field, read, _write in self._fields})
+
+    def _build_form(self) -> QWidget:
+        widget = QWidget()
+        form = QFormLayout(widget)
+        form.setContentsMargins(0, 0, 0, 0)
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+        for item in align.PARAMETERS:
+            editor, read, write = field_editor(self._parameters[item.name], item)
+            editor.setMaximumWidth(FIELD_WIDTH)
+            label = QLabel(tr(item.caption))
+            if item.tooltip:
+                label.setToolTip(tr(item.tooltip))
+                editor.setToolTip(tr(item.tooltip))
+            form.addRow(label, editor)
+            self._fields.append((item, read, write))
+        return widget
+
+    def _remember(self) -> None:
+        """Keep what the form holds, so the next window opens on it."""
+        self._parameters = self.parameters()
+        align.save_parameters(self._parameters)
 
     def _start(self) -> None:
         if self._thread is not None:
             return
         self.log.clear()
         self.run.setEnabled(False)
+        self._remember()
+        model = self._parameters["model"]
+        provider = self._parameters["provider"]
+        cached = align.find_alignment(self.audio, model, provider, self.text)
+        if cached is not None:
+            rows, problems = cached
+            self._done((rows, model, problems))  # re-snapped with the tempo and grid offset in hand
+            self.log.setPlainText("\n".join([tr("saved alignment reused"), *problems]))
+            return
         self.progress.setRange(0, 0)  # one busy bar: the whole song is one pass, so nothing ticks yet
         self.status.setText(tr("Aligning…"))
-        self._thread = Aligner(self.audio, self.text, self.model.currentData(), self.provider.currentData(), self)
+        self._thread = Aligner(self.audio, self.text, model, provider, self)
         self._thread.progress.connect(self._show_progress)
         self._thread.aligned.connect(self._done)
         self._thread.failed.connect(self._fail)
@@ -136,9 +167,9 @@ class AlignDialog(QDialog):
 
     def _done(self, result) -> None:
         times, model, problems = result
-        cells = self.snap.currentData()
+        cells = self.parameters()["quantize"]  # read now, so a change made while the run went counts
         if cells:
-            times = snap_to_beats(times, self.tempo, 1.0 / cells)
+            times = snap_to_beats(times, self.tempo, 1.0 / cells, self.offset)
         self._thread = None
         self.run.setEnabled(True)
         self.progress.setRange(0, 1)
@@ -156,6 +187,7 @@ class AlignDialog(QDialog):
         self.log.setPlainText(message)
 
     def reject(self) -> None:
+        self._remember()
         if self._thread is not None:
             self._thread.wait()
         super().reject()

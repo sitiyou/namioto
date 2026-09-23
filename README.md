@@ -28,7 +28,8 @@ uv run namioto-spectrum song.mp3 --bench  # plus per-stage timings
 uv run namioto-spectrum song.mp3 --threshold 1.2   # plus auto-filled note spans
 uv run namioto-game song.mp3 --model DIR  # extract the notes of a singing voice (GAME's models)
 uv run namioto-align vocal.wav lines.json # time known lyrics against a separated vocal
-uv run pytest                             # tests
+uv run pytest                             # tests (the beat tracker's slow ones left out)
+uv run pytest -m slow                     # just those, minutes of synthetic audio
 uv run scripts/bench_spectrum.py          # spectrum benchmark
 ```
 
@@ -125,7 +126,7 @@ and MIDI volumes, the speed, the snap grid, the division, the zoom, the two swit
 transport readout and the window's own size and position are written to
 `~/.config/namioto/settings.json`
 (`$NAMIOTO_SETTINGS` points somewhere else) as they change on screen, and are back the way they were
-next time. The tempo and the latency are not among them: they describe one song, so they start from
+next time. The tempo and the grid offset are not among them: they describe one song, so they start from
 their defaults (120 BPM, 0 ms) whenever another file is loaded, and a project carries them - opening
 it puts its own back. The file is plain JSON, so it can be edited by hand - and a hand-mangled or
 half-written one falls back to the defaults field by field instead of refusing to start.
@@ -188,7 +189,7 @@ The window has three control bars, each split into captioned blocks of related c
 
 | Bar | Blocks |
 | --- | --- |
-| Transport | **Project** (open, save, export MIDI), **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout, and the four display switches: auto page turn, overtone highlight, the channel sidebar, and the time division - the metronome icon checked means the time axis follows the beats of the tempo map, unchecked the seconds), **Speed** (0.10x-2.00x in 5% steps, pitch unchanged, with a reset icon back to 1.00x), **Tempo** (BPM, the estimated tempo of the audio, and the latency in ms) |
+| Transport | **Project** (open, save, export MIDI), **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout, and the four display switches: auto page turn, overtone highlight, the channel sidebar, and the time division - the metronome icon checked means the time axis follows the beats of the tempo map, unchecked the seconds), **Speed** (0.10x-2.00x in 5% steps, pitch unchanged, with a reset icon back to 1.00x), **Tempo** (BPM, the estimated tempo of the audio, and the grid offset in ms) |
 | Edit | **Tools** (edit mode, pen, select, snap grid, quantize, the GAME transcription, the lyrics importer) |
 | Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window (the few options the bars do not hold; the analysis parameters belong to the project) |
 
@@ -210,9 +211,9 @@ the real GM program on the channel's own number.
 | --- | --- |
 | Edit mode | The button in front of the tools: notes are drawn only while it is on (WaveTone keeps its graph to the spectrum outside note edit mode), and only then can they be drawn, moved, resized and selected; the spectrum behind them fades so that they stand out over it (WaveTone does the same), and picking the pen or the select tool turns the mode on as well - entering it starts on the pen. The snap grid and the quantize button are the two that work in either mode: they set the grid and apply it, and the notes they move are drawn once the mode is on. The window opens with it off, so a click in the roll moves the playhead until a tool is picked. Hovering marks the row under the mouse, and the piano key with it, in either mode; with **Overtone highlight** on, the overtones of that row - `f`, `2f`, `3f` and `4f` - are marked the same way, in either mode, as WaveTone does |
 | Draw note | Pen tool: left drag on the empty grid. Horizontal movement sets the length, vertical movement sets the pitch, so the note follows the pointer |
-| Move note(s) | Left drag a note |
-| Resize note | Left drag either edge of a note, or Shift + left drag anywhere on it: its left half moves the start, its right half the end |
-| Select note | Left click |
+| Move note(s) | Left drag a note, which steps in whole snap cells and keeps where it sits inside its cell; Quantize is what lands it on the grid |
+| Resize note | Left drag either edge of a note, or Shift + left drag anywhere on it: its left half moves the start, its right half the end. A note is never left shorter than one snap cell |
+| Select note | Left click; a click on one that is already selected leaves only that one, while a press that drags carries the whole selection |
 | Add to selection | Ctrl + left click |
 | Box select | Select tool: left drag on the grid, or Ctrl + left drag with either tool |
 | Select all | Ctrl + A |
@@ -313,13 +314,30 @@ checks the `.krc` syntax: a file with a mistake in it is still one you can fix i
 
 Once a `.krc` is open and its audio is loaded, the clock button beside the text-box one puts a time
 on every mora: the whole stream is forced onto the frames of a wav2vec2 CTC model in one pass, and
-each mora gets the span of frames it won. The morae of the line under the playhead are drawn in a
-strip above the roll, on the roll's own columns; drag the line between two morae to move it, and it
-snaps onto a nearby note. The times ride in the `.nto` beside the notes, saved and undone with them.
+each mora gets the span of frames it won. The lyrics are drawn above the roll as one row of
+note-like blocks, on the roll's own columns; a block is green while its mora sits on a note and red
+while it does not. Drag a block to move it or an edge to trim it, and it snaps onto the note grid; a
+line's blocks keep the order they were read in and never overlap, so a block dragged by its middle
+needs the room to be free while an edge dragged into a neighbour takes the room from it. A drag is a
+preview: come back to where you started before letting go and nothing changes, not even an undo step.
+A dragged block steps in whole cells too, keeping where it sits inside its cell.
+Drag a block up or down and its length goes away: a mora nothing is sung on, its block no longer drawn and no
+longer standing in the way of the blocks around it. The menu
+over the block it follows puts it back, out of the room in front of it or out of that block's own
+space. Click a block to select it, Ctrl-click to add or drop one, Shift-click for everything from
+the last click to the pointer, and a click on a block that is already selected leaves only it; a
+press that drags carries them all. A selected block wears a yellow rim (`theme.LYRIC_SELECT`) over a body
+that keeps saying whether its mora sits on its notes, and dragging one of the blocks moves them all
+together. Right-click a run of them and they can be made one word: the `.krc` gains `(...)`, and the
+run counts as one word from then on, so its `.N` is the notes the whole run covers - コー, two morae
+of one sound, shares the one note under it rather than one of them being squeezed away.
+The times ride in the `.nto` beside the notes, saved and undone with them.
 Exporting MIDI checks the morae against the notes first - a mora has to start and end on the notes
 it covers, though it may cover several with gaps between - and writes each mora's note count back
 into the `.krc` as its `.N`. The align window also offers a Quantize choice (Off / 1/4 / 1/8 / …)
-that snaps the result onto the BPM beat grid.
+that snaps the result onto the BPM beat grid, and remembers the model, the device and the Quantize
+choice for the next run. A finished run is kept as a cache, so changing the
+tempo or the grid offset and running again re-snaps it without touching the model.
 
 ## Aligning lyrics to a vocal
 
@@ -374,8 +392,9 @@ The notes go to a **software MIDI synth** when one is listening on the
 MIDI bus - TiMidity and FluidSynth are recognised by name, and the tooltip of the **MIDI** slider
 says which one is in use, because that is where the sound comes from (patches included). Without
 one, the notes are rendered by a small additive synth inside the program and streamed through Qt's
-audio output instead. **Latency** nudges the
-position readout. A click in the roll auditions what it lands on - the pitch of the row, whether or
+audio output instead. **Grid offset (ms)** slides the grid lines - `-` draws them to the left, `+` to
+the right, and snapping follows them - while the notes and the playback keep their exact
+timestamps. A click in the roll auditions what it lands on - the pitch of the row, whether or
 not it is a note - in either mode, and so does a key on the keyboard: listening and editing are
 separate. Auditions never wait for the one before them: each click is its own note, and clicking the
 same row again releases that note and starts it over - one note-off before the new note-on on the

@@ -28,7 +28,7 @@ LANGUAGE_CODES = ("", "en", "ja", "yue", "zh")
 LANGUAGE_LABELS = ("Universal", "English", "Japanese", "Cantonese", "Mandarin")
 TARGETS = ("new", "active")
 PARAMETER_FILE = "transcription.json"
-STORE_VERSION = 2
+STORE_VERSION = 3
 
 PARAMETERS: tuple[Field, ...] = (
     Field(
@@ -191,17 +191,17 @@ def audio_key(path: Any) -> str:
     return hashlib.sha1(str(_resolved(path)).encode("utf-8")).hexdigest()
 
 
-def run_key(path: Any, parameters: Any, tempo: float) -> str:
-    """What makes two runs the same one: the audio, the run's inputs, and a quantised run's grid.
+def run_key(path: Any, parameters: Any) -> str:
+    """What makes two runs the same one: the audio and the model's own inputs.
 
-    Where the notes are put afterwards is not one of them: the same transcription can be inserted
-    somewhere else without asking the model again.
+    The grid is not one of them: a quantised run and a raw one are the same model run, so changing
+    the tempo, the quantize choice or the grid offset re-snaps the stored notes instead of asking
+    the model again. Nor is `target`, which only says where the notes go afterwards.
     """
     values = coerce_parameters(parameters)
     identity = {
         "audio": list(_audio_stamp(path)),
-        "parameters": {item.name: values[item.name] for item in PARAMETERS if item.name != "target"},
-        "tempo": round(float(tempo), 6) if values["quantize"] else None,
+        "parameters": {item.name: values[item.name] for item in PARAMETERS if item.name not in ("target", "quantize")},
     }
     return hashlib.sha1(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -239,16 +239,16 @@ def load_runs(path: Any) -> dict[str, dict]:
     return {key: run for key, run in runs.items() if isinstance(run, dict) and _notes(run) is not None}
 
 
-def find_run(path: Any, parameters: Any, tempo: float) -> list[tuple[float, float, float]] | None:
+def find_run(path: Any, parameters: Any) -> list[tuple[float, float, float]] | None:
     """The notes a run with these exact inputs already found, or None when there is no such run."""
-    found = load_runs(path).get(run_key(path, parameters, tempo))
+    found = load_runs(path).get(run_key(path, parameters))
     return _notes(found) if found else None
 
 
-def save_run(path: Any, parameters: Any, tempo: float, notes) -> pathlib.Path:
+def save_run(path: Any, parameters: Any, notes) -> pathlib.Path:
     """Keep one entry per run key: running the same thing again replaces what it found last time."""
     runs = load_runs(path)
-    runs[run_key(path, parameters, tempo)] = {
+    runs[run_key(path, parameters)] = {
         "at": int(time.time()),
         "parameters": coerce_parameters(parameters),
         "notes": [
@@ -259,12 +259,15 @@ def save_run(path: Any, parameters: Any, tempo: float, notes) -> pathlib.Path:
     return store.write_json(payload, _results_path(path))
 
 
-def transcribe(path: str, parameters: dict, tempo: float, queue) -> None:
+def transcribe(path: str, parameters: dict, queue) -> None:
     """Run GAME for one audio file, reporting through `queue`: a spawned process's whole job.
 
-    The messages are `("log", text)`, `("progress", stage, done, total)`, `("done", notes)` and
-    `("error", traceback)`. Nothing is written to disk here: the parent saves what comes back, so a
-    crash cannot leave a half-written result behind.
+    The notes come back as the model found them, before any grid: the tempo, the quantize choice
+    and the grid offset are the parent's to apply, so changing any of them re-snaps a stored run
+    instead of asking the model again. The messages are `("log", text)`,
+    `("progress", stage, done, total)`, `("done", notes)` and `("error", traceback)`. Nothing is
+    written to disk here: the parent saves what comes back, so a crash cannot leave a half-written
+    result behind.
     """
     values = coerce_parameters(parameters)
     try:
@@ -290,9 +293,6 @@ def transcribe(path: str, parameters: dict, tempo: float, queue) -> None:
             silence_slice=values["silence_slice"],
             progress=lambda done, total: queue.put(("progress", "parts", done, total)),
         )
-        if values["quantize"]:
-            notes, unit, phase = game.quantized(notes, tempo, values["quantize"])
-            queue.put(("log", f"grid {unit * 1000:.1f} ms, phase {phase * 1000:.1f} ms"))
         queue.put(("log", f"{len(notes)} notes"))
         queue.put(("done", notes))
     except Exception:  # the child must report a crash rather than take the queue down with it

@@ -22,18 +22,24 @@ barely supports - which is what `problems()` is for.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pathlib
 import sys
+import time
+import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Any, Protocol
 
 import librosa
 import numpy as np
 import onnxruntime as ort
 import platformdirs
+
+from namioto import settings as store
+from namioto.settings import Field
 
 SAMPLE_RATE = 16000
 # the convolutional front end strides 320 samples into one frame in both models, so a frame is
@@ -58,6 +64,26 @@ PROVIDERS = {
     "cpu": ("CPUExecutionProvider",),
     "cuda": ("CUDAExecutionProvider", "CPUExecutionProvider"),
 }
+# the cells per quarter note the window offers to snap with; a label is the note that cell is
+QUANTIZE_CELLS = (0, 1, 2, 4, 8, 16, 32)
+QUANTIZE_LABELS = ("Off", "1/4", "1/8", "1/16", "1/32", "1/64", "1/128")
+
+# What the alignment window remembers between runs: the last choices, in a file of their own beside
+# settings.json. Nothing else is kept - the times live in the project, the runs in the data side.
+PARAMETER_FILE = "align.json"
+PARAMETERS: tuple[Field, ...] = (
+    Field("model", "choice", DEFAULT_MODEL, "Model", "Which forced-alignment model to use", choices=MODELS),
+    Field("provider", "choice", "cpu", "Device", "Where the model runs", choices=tuple(PROVIDERS)),
+    Field(
+        "quantize",
+        "choice",
+        0,
+        "Quantize",
+        "Snap the times to the beat grid, this many cells per quarter note",
+        choices=QUANTIZE_CELLS,
+        labels=QUANTIZE_LABELS,
+    ),
+)
 
 
 @dataclass(frozen=True)
@@ -148,6 +174,127 @@ def load_dictionary(path: str | pathlib.Path) -> tuple[dict[str, int], int]:
 def load_audio(path: str | pathlib.Path) -> np.ndarray:
     """A file as mono float32 at `SAMPLE_RATE`, the rate the aligner's model was trained on."""
     return librosa.load(path, sr=SAMPLE_RATE, mono=True)[0]
+
+
+# An alignment is a derived result, not a preference: the store is a cache the next run may re-make
+# from the model, so a file that is missing or unreadable simply means there is nothing to reuse.
+ALIGNMENTS_DIR = "alignments"
+ALIGNMENT_STORE_VERSION = 1
+
+
+def parameter_path() -> pathlib.Path:
+    """The preferences side of the tree: the window's remembered choices, beside settings.json."""
+    return pathlib.Path(platformdirs.user_config_dir("namioto")) / PARAMETER_FILE
+
+
+def default_parameters() -> dict[str, Any]:
+    return {item.name: item.default for item in PARAMETERS}
+
+
+def coerce_parameters(values: Any) -> dict[str, Any]:
+    """A file may hold anything at all, so every value goes through its field's own check."""
+    if not isinstance(values, dict):
+        return default_parameters()
+    return {item.name: store.coerce(item, values.get(item.name, item.default)) for item in PARAMETERS}
+
+
+def load_parameters() -> dict[str, Any]:
+    """What the window opens with: the last run's choices, or the defaults for anything unreadable."""
+    try:
+        data = json.loads(parameter_path().read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return default_parameters()
+    except (OSError, ValueError) as error:
+        warnings.warn(f"{parameter_path()} could not be read ({error}); defaults are in use", stacklevel=2)
+        return default_parameters()
+    return coerce_parameters(data)
+
+
+def save_parameters(values: Any) -> pathlib.Path:
+    return store.write_json(coerce_parameters(values), parameter_path())
+
+
+def alignments_root() -> pathlib.Path:
+    """Where a cached alignment lives: the platform's data directory, beside the models."""
+    return pathlib.Path(platformdirs.user_data_dir("namioto")) / ALIGNMENTS_DIR
+
+
+def _audio_stamp(path: str | pathlib.Path) -> tuple[int, int]:
+    """Size and mtime, so the same path holding different audio is not the same audio."""
+    try:
+        info = pathlib.Path(path).expanduser().resolve().stat()
+    except OSError:
+        return (0, 0)
+    return (info.st_size, info.st_mtime_ns)
+
+
+def _store_path(audio: str | pathlib.Path) -> pathlib.Path:
+    digest = hashlib.sha1(str(pathlib.Path(audio).expanduser().resolve()).encode("utf-8")).hexdigest()
+    return alignments_root() / f"{digest}.json"
+
+
+def alignment_key(audio: str | pathlib.Path, model: str, provider: str, text: str) -> str:
+    """What makes two alignments the same one: the audio, the model, where it runs, and the lyrics.
+
+    The tempo and the grid offset are not part of it: they only snap the result, so changing either
+    re-snaps a stored alignment instead of running the model again.
+    """
+    identity = {"audio": list(_audio_stamp(audio)), "model": model, "provider": provider, "text": text}
+    return hashlib.sha1(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def _stored_rows(raw) -> list[list[tuple[float | None, float | None]]] | None:
+    try:
+        return [
+            [(None if start is None else float(start), None if end is None else float(end)) for start, end in row]
+            for row in raw
+        ]
+    except (TypeError, ValueError):
+        return None
+
+
+def load_alignments(audio: str | pathlib.Path) -> dict[str, dict]:
+    """Every alignment saved for one audio file, keyed by alignment key; nothing usable means none."""
+    try:
+        data = json.loads(_store_path(audio).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict) or data.get("version") != ALIGNMENT_STORE_VERSION:
+        return {}
+    entries = data.get("alignments")
+    if not isinstance(entries, dict):
+        return {}
+    return {key: entry for key, entry in entries.items() if isinstance(entry, dict)}
+
+
+def find_alignment(audio: str | pathlib.Path, model: str, provider: str, text: str):
+    """The lines and doubts an alignment with these exact inputs already found, or None when there is none."""
+    entry = load_alignments(audio).get(alignment_key(audio, model, provider, text))
+    if not entry:
+        return None
+    rows = _stored_rows(entry.get("rows"))
+    if rows is None:
+        return None
+    problems = entry.get("problems")
+    return rows, [str(problem) for problem in problems] if isinstance(problems, list) else []
+
+
+def save_alignment(audio: str | pathlib.Path, model: str, provider: str, text: str, rows, problems) -> pathlib.Path:
+    """Keep one entry per alignment key: running the same one again replaces what it found last time."""
+    entries = load_alignments(audio)
+    entries[alignment_key(audio, model, provider, text)] = {
+        "at": int(time.time()),
+        "model": model,
+        "rows": [[[start, end] for start, end in row] for row in rows],
+        "problems": [str(problem) for problem in problems],
+    }
+    target = _store_path(audio)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps({"version": ALIGNMENT_STORE_VERSION, "audio": str(audio), "alignments": entries}, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    return target
 
 
 class Backend(Protocol):

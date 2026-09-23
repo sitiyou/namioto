@@ -32,7 +32,7 @@ from namioto import settings as store
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
 from namioto.channels import set_field as channel_set_field
-from namioto.karaoke import KrcError, conflicts, mora_lines, note_counts, text_key, with_counts
+from namioto.karaoke import KrcError, conflicts, group_morae, mora_lines, note_counts, text_key, with_counts
 from namioto.playback import note_frequency
 from namioto.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.ui import theme
@@ -203,6 +203,7 @@ class MainWindow(QMainWindow):
         self.ruler = TimelineRuler(self.view)
         self.mora_strip = MoraStrip(self.view)
         self.mora_strip.setVisible(False)
+        self.mora_strip.mora_group_requested.connect(self._group_morae)
         self.keyboard = PianoKeyboard(self.view)
         self.player, self.player_name = self._make_player()
         self._current_player_key = self._player_key()
@@ -265,6 +266,7 @@ class MainWindow(QMainWindow):
         self.view.snap = self.edit.snap.currentData()
         self.transport.bpm.setValue(self.settings.tempo.bpm)
         self.transport.latency.setValue(self.settings.playback.latency_ms)
+        self.view.set_offset(self.transport.latency.value() / 1000.0)
         self.transport.speed.set_value(self.settings.playback.speed)
         self.mix.gain.set_value(self.settings.spectrum.gain)
         self.mix.contrast.set_value(self.settings.spectrum.contrast)
@@ -418,6 +420,7 @@ class MainWindow(QMainWindow):
                 self.transport.latency.value,
                 self.transport.latency.setValue,
                 self.transport.latency.valueChanged,
+                self._on_latency_changed,
             ),
             _Binding(
                 "tempo",
@@ -964,7 +967,13 @@ class MainWindow(QMainWindow):
             return
         active = self.view.active_channel
         occupied = any(note.channel == active for note in self.view.notes())
-        dialog = TranscriptionDialog(self.audio_path, self.transport.bpm.value(), self, active_has_notes=occupied)
+        dialog = TranscriptionDialog(
+            self.audio_path,
+            self.transport.bpm.value(),
+            self,
+            active_has_notes=occupied,
+            offset=self.view.offset,
+        )
         if dialog.exec() == QDialog.DialogCode.Accepted:
             self._adopt_transcription(dialog.notes(), dialog.target())
 
@@ -1008,6 +1017,29 @@ class MainWindow(QMainWindow):
         self.lyrics_text = lyrics.load(path) if path is not None else ""
         self.lyrics_watcher.watch(path)
         self._load_mora()
+
+    def _group_morae(self, row: int, first: int, last: int) -> None:
+        """Fold a run of morae into one word of the `.krc`, and their times into the span they shared.
+
+        The window that offered it is the strip's menu; a run that cannot be read the same once it is
+        one word - a ruby, or a sokuon left leaning on nothing - is refused rather than written.
+        """
+        path = self.lyrics_path()
+        if path is None or not self.lyrics_text:
+            return
+        try:
+            text, times = group_morae(self.lyrics_text, self.view.lyric_times, row, first, last)
+        except KrcError as error:
+            self.statusBar().showMessage(i18n.tr("The morae could not be made one word: {error}", error=error))
+            return
+        lyrics.save(path, text)
+        self.lyrics_text = text
+        self._lyric_key = text_key(text)
+        self.view.load_lyrics(mora_lines(text), times)
+        self._stored_lyrics = project.LyricTimes(
+            key=self._lyric_key, model=self._lyric_model, lines=self.view.lyric_times
+        )
+        self.statusBar().showMessage(i18n.tr("Grouped {count} morae into one word", count=last - first + 1))
 
     def _load_mora(self) -> None:
         """Derive the morae of the open `.krc` and give them the times the project kept for them."""
@@ -1086,7 +1118,7 @@ class MainWindow(QMainWindow):
         if self.audio_path is None:
             self.statusBar().showMessage(i18n.tr("Load the audio before aligning the lyrics"))
             return
-        dialog = AlignDialog(self.audio_path, self.lyrics_text, self.view.bpm, self)
+        dialog = AlignDialog(self.audio_path, self.lyrics_text, self.view.bpm, self, offset=self.view.offset)
         dialog.aligned.connect(self._adopt_alignment)
         dialog.exec()
 
@@ -1314,7 +1346,7 @@ class MainWindow(QMainWindow):
         return self.song.is_playing or self.player.is_playing
 
     def _show_position(self) -> None:
-        seconds = self._position() + self.transport.latency.value() / 1000.0
+        seconds = self._position()
         playing = self._is_playing()
         self.transport.set_position(seconds)
         self.transport.set_playing(playing)
@@ -1372,6 +1404,10 @@ class MainWindow(QMainWindow):
     def _on_bpm_changed(self, *_args) -> None:
         self.transport.suggestion.hide()  # a tempo the user typed wins over the suggestion
         self.view.bpm = self.transport.bpm.value()
+
+    def _on_latency_changed(self, *_args) -> None:
+        """The latency only slides the drawn grid; the playhead and the notes keep their timestamps."""
+        self.view.set_offset(self.transport.latency.value() / 1000.0)
 
     def _on_spectrum_parameters(self, *_args) -> None:
         self.view.gain = self.mix.gain.value()

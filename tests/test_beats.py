@@ -1,5 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Tests for the beat-tracking tempo estimator, which needs no model and no audio fixtures."""
+"""Tests for the beat-tracking tempo estimator, which needs no model and no audio fixtures.
+
+Marked `slow`: every estimate runs over 60-90 s of synthetic audio, so the file is most of what the
+suite costs. `uv run pytest` leaves it out; `uv run pytest -m slow` is the file on its own.
+"""
 
 from __future__ import annotations
 
@@ -8,6 +12,8 @@ import pytest
 import soundfile
 
 from namioto.beats import SAMPLE_RATE, estimate_array, fit_beats, main, refine_grid
+
+pytestmark = pytest.mark.slow
 
 
 def click_track(bpm: float, seconds: float = 90.0, jitter: float = 0.0, missing: float = 0.0, seed: int = 1):

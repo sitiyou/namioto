@@ -32,11 +32,26 @@ TOLERANCE = 0.05
 
 @dataclass(frozen=True)
 class Mora:
-    """One mora: the surface it shows, its kana, and the one token the aligner reads for it."""
+    """One mora: the surface it belongs to, the kana it reads, and the token the aligner reads.
+
+    A mora of a ruby-bearing word carries the base unit it is read from - the whole run of kanji
+    when the `.krc` gives one ruby for it, or one kanji of a comma-separated ruby - and whether that
+    unit is the word's first, which `label` turns into its parentheses or its brackets.
+    """
 
     base: str
     ruby: str
     token: str
+    rubied: bool = False
+    first: bool = True
+
+    @property
+    def label(self) -> str:
+        """What a block shows: the word itself without a ruby, else the ruby beside its base unit."""
+        if not self.rubied:
+            return self.base
+        left, right = ("(", ")") if self.first else ("[", "]")
+        return f"{self.ruby}{left}{self.base}{right}"
 
 
 @dataclass(frozen=True)
@@ -77,13 +92,14 @@ def split(tokens: Sequence, lines: list[MoraLine]) -> list[list[tuple[float | No
 
 
 def snap_to_beats(
-    times: list[list[tuple[float | None, float | None]]], bpm: float, division: float = 1.0
+    times: list[list[tuple[float | None, float | None]]], bpm: float, division: float = 1.0, offset: float = 0.0
 ) -> list[list[tuple[float | None, float | None]]]:
-    """Every mora boundary rounded to the grid of `division` beats at `bpm`, kept in order.
+    """Every mora boundary rounded to the grid of `division` beats at `bpm` off `offset`, kept in order.
 
-    The boundaries are snapped, not each mora on its own, so two morae keep sharing the line
-    between them; a boundary pushed past its neighbour moves one step on so none collapse. A line
-    with an unaligned mora is left alone, since its boundaries say nothing yet.
+    The grid is the one that is drawn: `offset` is the editor's slid grid, 0 the absolute beats. The
+    boundaries are snapped, not each mora on its own, so two morae keep sharing the line between
+    them; a boundary pushed past its neighbour moves one step on so none collapse. A line with an
+    unaligned mora is left alone, since its boundaries say nothing yet.
     """
     step = 60.0 / max(bpm, 1.0) * division
     rows = []
@@ -95,7 +111,7 @@ def snap_to_beats(
         snapped: list[float] = []
         previous = None
         for value in bounds:
-            point = round(value / step) * step
+            point = offset + round((value - offset) / step) * step
             if previous is not None and point <= previous:
                 point = previous + step
             snapped.append(point)
@@ -122,10 +138,12 @@ def conflicts(
             problems.append(f"'{line.text}' has {len(line.morae)} morae but {len(row)} times")
             continue
         for mora, (start, end) in zip(line.morae, row, strict=True):
-            label = mora.base or mora.ruby
+            label = mora.label
             if start is None or end is None:
                 problems.append(f"{label}: not aligned")
                 continue
+            if end <= start:
+                continue  # a mora of no length has nothing to sit on
             inside = [index for index, note in enumerate(notes) if _inside(note, start, end)]
             if not inside:
                 problems.append(f"{label}: no note between {start:.3f} and {end:.3f}")
@@ -141,6 +159,41 @@ def conflicts(
     return problems
 
 
+def mora_ok(
+    lines: list[MoraLine], times: list[list[tuple[float | None, float | None]]], notes: Sequence[tuple[float, float]]
+) -> list[list[bool]]:
+    """Whether each mora sits on its own notes, the same judgement `conflicts` reports by hand.
+
+    A mora is not settled when it is unaligned, backs no note, does not start and end on its
+    boundary notes, or shares a note with another mora.
+    """
+    ok = []
+    holders: dict[int, list[tuple[int, int]]] = {}
+    for line, row in zip(lines, times, strict=True):
+        flags = []
+        for column, (start, end) in enumerate(row):
+            if start is not None and end is not None and end <= start:
+                flags.append(len(row) == len(line.morae))  # a mora of no length has nothing to sit on
+                continue
+            inside = (
+                [index for index, note in enumerate(notes) if _inside(note, start, end)]
+                if start is not None and end is not None
+                else []
+            )
+            good = bool(inside) and len(row) == len(line.morae)
+            if good:
+                good = abs(notes[inside[0]][0] - start) <= TOLERANCE and abs(notes[inside[-1]][1] - end) <= TOLERANCE
+            flags.append(good)
+            for index in inside:
+                holders.setdefault(index, []).append((len(ok), column))
+        ok.append(flags)
+    for cells in holders.values():
+        if len(cells) > 1:
+            for row_index, column in cells:
+                ok[row_index][column] = False
+    return ok
+
+
 def with_counts(text: str, counts: list[list[int]]) -> str:
     """A `.krc` with each mora's `.N` set to its note count; a count equal to the reading gets none."""
     lyrics = parse(text)
@@ -152,6 +205,66 @@ def with_counts(text: str, counts: list[list[int]]) -> str:
                 source.override = None if count == source.natural_mora else count
             index += 1
     return dumps(lyrics)
+
+
+def group_morae(
+    text: str,
+    times: Sequence[Sequence[tuple[float | None, float | None]]],
+    row: int,
+    first: int,
+    last: int,
+) -> tuple[str, list[list[tuple[float | None, float | None]]]]:
+    """Fold the morae `first..last` of one line into a single word of the `.krc`, written `(...)`.
+
+    A group is one word to the format, so its `.N` counts the notes the whole run covers rather than
+    one mora at a time: two morae that share a note stop clashing, and each keeps its own reading
+    instead of one of them being squeezed to no length. The run becomes one mora itself, so the
+    times come back as the span it covered. The kana is read the same way, so the aligner's token
+    stream does not move - a run that would move a sound, a sokuon or a long vowel left leaning on
+    nothing, raises `KrcError`.
+    """
+    lyrics = parse(text)
+    lines = [line for chapter in lyrics.chapters for line in chapter.lines]
+    if not 0 <= row < len(lines):
+        raise KrcError(f"the lyrics have no line {row}")
+    line = lines[row]
+    _line, sources = _row(line)
+    if not 0 <= first < last < len(sources):
+        raise KrcError("a group is made of two morae or more of one line")
+    indices = []
+    for source in sources[first : last + 1]:
+        index = next((index for index, word in enumerate(line.words) if word is source), None)
+        if index is None:
+            raise KrcError("a group cannot take in a mora that a ruby reads")
+        indices.append(index)
+    if indices != list(range(indices[0], indices[0] + len(indices))):
+        raise KrcError("a group takes whole words next to each other")
+
+    tokens = [[mora.token for mora in _row(other)[0].morae] for other in lines]
+    tokens[row] = tokens[row][:first] + ["".join(tokens[row][first : last + 1])] + tokens[row][last + 1 :]
+    words = line.words[indices[0] : indices[-1] + 1]
+    line.words = [
+        *line.words[: indices[0]],
+        Word("".join(word.text for word in words), grouped=True),
+        *line.words[indices[-1] + 1 :],
+    ]
+    grouped = dumps(lyrics)
+    if [[mora.token for mora in read.morae] for read in mora_lines(grouped)] != tokens:
+        raise KrcError("folding these morae into one word would move a sound")
+    return grouped, _fold_times(times, row, first, last)
+
+
+def _fold_times(
+    times: Sequence[Sequence[tuple[float | None, float | None]]], row: int, first: int, last: int
+) -> list[list[tuple[float | None, float | None]]]:
+    """The rows of times with one line's run of morae folded into the span the run covered."""
+    rows = [list(row_times) for row_times in times]
+    if not rows or row >= len(rows):
+        return rows
+    if last >= len(rows[row]):
+        raise KrcError("the times do not count the morae of this line")
+    rows[row] = [*rows[row][:first], (rows[row][first][0], rows[row][last][1]), *rows[row][last + 1 :]]
+    return rows
 
 
 def _inside(note: tuple[float, float], start: float, end: float) -> bool:
@@ -171,42 +284,46 @@ def _row(line: Line) -> tuple[MoraLine, list[Word]]:
     if unread:
         raise KrcError(f"'{text}' has kanji with no ruby to align: {' '.join(unread)}")
 
-    units: list[list[str]] = []
+    units: list[list] = []
     sources: list[Word] = []
     for word in line.words:
-        for base, kana, source in _units(word):
+        for base, kana, rubied, first, source in _units(word):
             if kana in SMALL_KANA:
                 if units:
                     units[-1][1] += kana
                 continue
             if word.natural_mora == 0:
                 continue
-            units.append([base, kana])
+            units.append([base, kana, rubied, first])
             sources.append(source)
 
-    folded = [char for token in kana_tokens("".join(kana for _base, kana in units)) for char in token]
-    sizes = [_size(kana) for _base, kana in units]
+    folded = [char for token in kana_tokens("".join(kana for _base, kana, _rubied, _first in units)) for char in token]
+    sizes = [_size(kana) for _base, kana, _rubied, _first in units]
     if sum(sizes) != len(folded):
         raise KrcError(f"'{text}' has a long vowel or a sokuon with no sound to lean on")
 
     morae = []
     at = 0
-    for (base, kana), size in zip(units, sizes, strict=True):
-        morae.append(Mora(base, kana, "".join(folded[at : at + size])))
+    for (base, kana, rubied, first), size in zip(units, sizes, strict=True):
+        morae.append(Mora(base, kana, "".join(folded[at : at + size]), rubied, first))
         at += size
     return MoraLine(text, tuple(morae)), sources
 
 
-def _units(word: Word) -> list[tuple[str, str, Word]]:
-    """`(surface, kana, source)` per unit: a plain word is one, a ruby is one per mora."""
+def _units(word: Word) -> list[tuple[str, str, bool, bool, Word]]:
+    """`(surface, kana, rubied, first, source)` per unit: a plain word is one, a ruby one per mora.
+
+    Every mora of a base unit carries that unit's whole text, and `first` marks the unit the word
+    opens with, so a comma-separated `世界[せ,かい]` reads `せ(世)` but `か[界]` and `い[界]`.
+    """
     if word.ruby is None:
-        return [(word.text, word.text, word)]
+        return [(word.text, word.text, False, True, word)]
     one_part = len(word.ruby.parts) == 1
     units = []
     for index, part in enumerate(word.ruby.parts):
         surface = word.text if one_part else word.text[index : index + 1]
-        for position, inner in enumerate(part):
-            units.append((surface if position == 0 else "", inner.text, inner))
+        for inner in part:
+            units.append((surface, inner.text, True, index == 0, inner))
     return units
 
 

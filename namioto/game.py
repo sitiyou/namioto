@@ -544,19 +544,27 @@ def extract(
     return merge_notes(notes)
 
 
-def quantized(notes: Sequence[Note], tempo: float, subdivisions: int, phase: float | None = None, fit_tempo=False):
+def quantized(
+    notes: Sequence[Note], tempo: float, subdivisions: int, phase: float | None = None, fit_tempo=False, offset=0.0
+):
     """Snap the notes to the beat grid `subdivisions` per quarter note apart, and report what was used.
 
-    Returns the notes, the seconds per cell and the phase the snapping was decided around; the phase
-    is only used to choose the cell, it is never written into the notes.
+    `offset` is the grid's own zero - the editor's slid grid - and is written into the notes, so they
+    land on the lines that are drawn; `phase`, fitted from the onsets when not given, only decides
+    which cell a note belongs to. Returns the notes, the seconds per cell and the phase.
     """
     unit = (60.0 / tempo) / subdivisions
     onsets = [note[0] for note in notes]
-    if phase is None:
+    if offset:
+        phase = offset  # the drawn grid is the one to snap to, not one fitted from the onsets
+    elif phase is None:
         phase = estimate_grid_phase(onsets, unit)
     if fit_tempo:
         unit = estimate_grid_period(onsets, phase, unit)
-    return quantize_notes(notes, unit, phase), unit, phase
+    snapped = quantize_notes(notes, unit, phase)
+    if offset:
+        snapped = [(onset + offset, oset + offset, pitch) for onset, oset, pitch in snapped]
+    return snapped, unit, phase
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

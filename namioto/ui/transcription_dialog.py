@@ -37,13 +37,13 @@ FIELD_WIDTH = 300
 LOG_HEIGHT = 140
 
 
-def start_job(audio: str, parameters: dict, tempo: float):
+def start_job(audio: str, parameters: dict):
     """Spawn the GAME child and the queue it reports on; the one seam the tests replace."""
     context = multiprocessing.get_context("spawn")
     channel = context.Queue()
     process = context.Process(
         target=transcription.transcribe,
-        args=(audio, parameters, tempo, channel),
+        args=(audio, parameters, channel),
         daemon=True,
     )
     process.start()
@@ -57,12 +57,13 @@ class TranscriptionDialog(QDialog):
     accepts on its own, so the notes land without a second click.
     """
 
-    def __init__(self, audio: str, tempo: float, parent=None, active_has_notes: bool = False):
+    def __init__(self, audio: str, tempo: float, parent=None, active_has_notes: bool = False, offset: float = 0.0):
         super().__init__(parent)
         self.setWindowTitle(tr("Transcribe the singing voice with GAME"))
         self.resize(600, 640)
         self.audio = str(audio)
         self.tempo = float(tempo)
+        self.offset = float(offset)
         self.active_has_notes = bool(active_has_notes)
         self._parameters = transcription.load_parameters()
         self._fields: list[tuple[Field, Callable[[], object], Callable[[object], None]]] = []
@@ -154,7 +155,7 @@ class TranscriptionDialog(QDialog):
     def _start(self) -> None:
         self._parameters = self.parameters()
         transcription.save_parameters(self._parameters)
-        cached = transcription.find_run(self.audio, self._parameters, self.tempo)
+        cached = transcription.find_run(self.audio, self._parameters)
         if cached is not None and self._use_cache(len(cached)):
             self._log_line(tr("saved run reused: {count} notes", count=len(cached)))
             self._settle(cached, save=False)
@@ -185,7 +186,7 @@ class TranscriptionDialog(QDialog):
         self.progress_label.setText(tr("Starting GAME …"))
         self._set_running(True)
         try:
-            self._process, self._queue = start_job(self.audio, self._parameters, self.tempo)
+            self._process, self._queue = start_job(self.audio, self._parameters)
         except Exception as error:  # a child that cannot start must not leave the form stuck
             self._fail(f"{type(error).__name__}: {error}")
             return
@@ -239,10 +240,10 @@ class TranscriptionDialog(QDialog):
         self._timer.stop()
         self._process = None
         self._queue = None
-        self._notes = [(float(onset), float(offset), float(pitch)) for onset, offset, pitch in notes]
+        self._notes = self._snapped(notes)
         if save:
             try:
-                transcription.save_run(self.audio, self._parameters, self.tempo, self._notes)
+                transcription.save_run(self.audio, self._parameters, notes)  # raw: the grid is applied here
             except OSError as error:
                 self._log_line(tr("the result could not be saved: {error}", error=error))
         self.progress.setRange(0, 1)
@@ -252,6 +253,20 @@ class TranscriptionDialog(QDialog):
         self._set_running(False)
         if self._notes:
             self.accept()
+
+    def _snapped(self, notes) -> list[tuple[float, float, float]]:
+        """GAME's own notes on the grid the editor draws: the run's quantize choice, the tempo and the
+        grid offset go on here, not in the model run, so changing any of them re-snaps a stored run
+        instead of asking for another one."""
+        raw = [(float(onset), float(offset), float(pitch)) for onset, offset, pitch in notes]
+        cells = self._parameters["quantize"]
+        if not cells:
+            return raw
+        from namioto import game
+
+        snapped, unit, phase = game.quantized(raw, self.tempo, cells, offset=self.offset)
+        self._log_line(f"grid {unit * 1000:.1f} ms, phase {phase * 1000:.1f} ms, offset {self.offset * 1000:.1f} ms")
+        return [(float(onset), float(offset), float(pitch)) for onset, offset, pitch in snapped]
 
     def _fail(self, message: str) -> None:
         self._settled = True

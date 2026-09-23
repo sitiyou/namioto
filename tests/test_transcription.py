@@ -37,10 +37,6 @@ def fake_game(monkeypatch):
         progress(2, 2)
         return [(0.0, 0.5, 60.0), (0.5, 1.0, 62.0)]
 
-    def quantized(notes, tempo, subdivisions):
-        calls["quantized"] = {"tempo": tempo, "subdivisions": subdivisions}
-        return [(0.0, 0.5, 60.0)], 0.25, 0.0
-
     def backend(model, provider="cpu"):
         calls["backend"] = provider
         return object()
@@ -48,7 +44,6 @@ def fake_game(monkeypatch):
     monkeypatch.setattr(game, "resolve_model", resolve_model)
     monkeypatch.setattr(game, "OnnxBackend", backend)
     monkeypatch.setattr(game, "extract", extract)
-    monkeypatch.setattr(game, "quantized", quantized)
     return calls
 
 
@@ -104,48 +99,46 @@ def test_the_parameters_round_trip() -> None:
 def test_a_run_is_found_by_its_exact_inputs() -> None:
     values = transcription.coerce_parameters({"size": "medium"})
     notes = [(0.0, 0.5, 60.0), (0.5, 1.0, 62.0)]
-    transcription.save_run(AUDIO, values, 120.0, notes)
+    transcription.save_run(AUDIO, values, notes)
 
-    assert transcription.find_run(AUDIO, values, 120.0) == notes
-    assert transcription.find_run(AUDIO, dict(values, language="zh"), 120.0) is None
-    assert transcription.find_run("/tmp/other.wav", values, 120.0) is None
+    assert transcription.find_run(AUDIO, values) == notes
+    assert transcription.find_run(AUDIO, dict(values, language="zh")) is None
+    assert transcription.find_run("/tmp/other.wav", values) is None
 
 
 def test_a_changed_audio_is_not_the_same_run(tmp_path) -> None:
     audio = tmp_path / "song.wav"
     audio.write_bytes(b"one")
     values = transcription.default_parameters()
-    transcription.save_run(audio, values, 120.0, [(0.0, 0.5, 60.0)])
+    transcription.save_run(audio, values, [(0.0, 0.5, 60.0)])
 
     audio.write_bytes(b"a longer take")
-    assert transcription.find_run(audio, values, 120.0) is None
+    assert transcription.find_run(audio, values) is None
 
 
-def test_the_tempo_counts_only_when_the_notes_are_quantised() -> None:
-    free = transcription.coerce_parameters({"quantize": 0})
-    transcription.save_run(AUDIO, free, 120.0, [(0.0, 0.5, 60.0)])
-    assert transcription.find_run(AUDIO, free, 93.0) is not None
+def test_the_grid_is_not_part_of_the_run() -> None:
+    raw = [(0.0, 0.5, 60.0)]
+    transcription.save_run(AUDIO, transcription.default_parameters(), raw)
 
-    snapped = transcription.coerce_parameters({"quantize": 4})
-    transcription.save_run(AUDIO, snapped, 120.0, [(0.0, 0.5, 60.0)])
-    assert transcription.find_run(AUDIO, snapped, 93.0) is None
-    assert transcription.find_run(AUDIO, snapped, 120.0) is not None
+    # the same model run, whatever the quantize choice turns out to be; the grid is the parent's
+    for values in (transcription.default_parameters(), transcription.coerce_parameters({"quantize": 4})):
+        assert transcription.find_run(AUDIO, values) == raw
 
 
 def test_where_the_notes_go_is_not_part_of_the_run() -> None:
     notes = [(0.0, 0.5, 60.0)]
-    transcription.save_run(AUDIO, dict(transcription.default_parameters(), target="new"), 120.0, notes)
-    assert transcription.find_run(AUDIO, dict(transcription.default_parameters(), target="active"), 120.0) == notes
+    transcription.save_run(AUDIO, dict(transcription.default_parameters(), target="new"), notes)
+    assert transcription.find_run(AUDIO, dict(transcription.default_parameters(), target="active")) == notes
 
 
 def test_running_the_same_thing_again_keeps_one_entry() -> None:
     values = transcription.default_parameters()
-    transcription.save_run(AUDIO, values, 120.0, [(0.0, 0.5, 60.0)])
-    transcription.save_run(AUDIO, values, 120.0, [(0.0, 0.5, 60.0), (1.0, 1.5, 62.0)])
+    transcription.save_run(AUDIO, values, [(0.0, 0.5, 60.0)])
+    transcription.save_run(AUDIO, values, [(0.0, 0.5, 60.0), (1.0, 1.5, 62.0)])
 
     runs = transcription.load_runs(AUDIO)
     assert len(runs) == 1
-    assert len(transcription.find_run(AUDIO, values, 120.0)) == 2
+    assert len(transcription.find_run(AUDIO, values)) == 2
 
 
 def test_a_run_file_that_makes_no_sense_is_no_runs(tmp_path) -> None:
@@ -160,8 +153,8 @@ def test_a_run_file_another_version_wrote_is_no_runs() -> None:
     from namioto import settings as store
 
     values = transcription.default_parameters()
-    assert transcription.save_run(AUDIO, values, 120.0, [(0.0, 0.5, 60.0)])
-    assert transcription.find_run(AUDIO, values, 120.0) is not None
+    assert transcription.save_run(AUDIO, values, [(0.0, 0.5, 60.0)])
+    assert transcription.find_run(AUDIO, values) is not None
 
     target = transcription.results_root() / f"{transcription.audio_key(AUDIO)}.json"
     stored = json.loads(target.read_text())
@@ -169,12 +162,12 @@ def test_a_run_file_another_version_wrote_is_no_runs() -> None:
     store.write_json(stored, target)
 
     assert transcription.load_runs(AUDIO) == {}
-    assert transcription.find_run(AUDIO, values, 120.0) is None
+    assert transcription.find_run(AUDIO, values) is None
 
 
 def test_transcribe_reports_progress_and_the_result(fake_game) -> None:
     channel = queue.Queue()
-    transcription.transcribe(AUDIO, {"size": "medium"}, 120.0, channel)
+    transcription.transcribe(AUDIO, {"size": "medium"}, channel)
     messages = drain(channel)
 
     assert fake_game["size"] == "medium"
@@ -183,25 +176,25 @@ def test_transcribe_reports_progress_and_the_result(fake_game) -> None:
     assert fake_game["extract"]["language"] is None
 
 
-def test_transcribe_quantises_when_asked(fake_game) -> None:
+def test_transcribe_hands_the_notes_over_raw(fake_game) -> None:
     channel = queue.Queue()
-    transcription.transcribe(AUDIO, {"quantize": 4}, 93.0, channel)
+    transcription.transcribe(AUDIO, {"quantize": 4}, channel)
     messages = drain(channel)
 
-    assert fake_game["quantized"] == {"tempo": 93.0, "subdivisions": 4}
-    assert messages[-1] == ("done", [(0.0, 0.5, 60.0)])
+    # the grid is the parent's to apply, so the model's own notes come back whole
+    assert messages[-1] == ("done", [(0.0, 0.5, 60.0), (0.5, 1.0, 62.0)])
 
 
 def test_transcribe_runs_on_the_provider_it_was_given(fake_game) -> None:
     channel = queue.Queue()
-    transcription.transcribe(AUDIO, {"provider": "cuda"}, 120.0, channel)
+    transcription.transcribe(AUDIO, {"provider": "cuda"}, channel)
 
     assert fake_game["backend"] == "cuda"
 
 
 def test_transcribe_falls_back_to_the_cpu_for_a_provider_nobody_offers(fake_game) -> None:
     channel = queue.Queue()
-    transcription.transcribe(AUDIO, {"provider": "gpu"}, 120.0, channel)
+    transcription.transcribe(AUDIO, {"provider": "gpu"}, channel)
 
     assert fake_game["backend"] == "cpu"
 
@@ -212,7 +205,7 @@ def test_transcribe_reports_a_failure_instead_of_raising(monkeypatch) -> None:
 
     monkeypatch.setattr(game, "resolve_model", broken)
     channel = queue.Queue()
-    transcription.transcribe(AUDIO, {}, 120.0, channel)
+    transcription.transcribe(AUDIO, {}, channel)
     messages = drain(channel)
 
     assert messages[-1][0] == "error"

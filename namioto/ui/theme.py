@@ -200,6 +200,18 @@ def note_shades(body: QColor) -> tuple[QColor, QColor, QColor]:
     return body, shade(QColor("#ffffff")), shade(QColor("#000000"))
 
 
+# A lyric mora that sits on its own notes, one that does not, and the rim around a selected one.
+LYRIC_OK = "#3fae5a"
+LYRIC_BAD = "#d0534e"
+LYRIC_TEXT = "#ffffff"
+LYRIC_SELECT = "#ffd52f"
+
+
+def lyric_shades(ok: bool) -> tuple[QColor, QColor, QColor]:
+    """A lyric block's body and bevels: green when it sits on its notes, red when it does not."""
+    return note_shades(QColor(LYRIC_OK if ok else LYRIC_BAD))
+
+
 def apply(app: QApplication, style: str = "") -> str:
     """Put the chosen widget style in force and say which canvas the desktop's palette asks for.
 
