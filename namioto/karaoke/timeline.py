@@ -94,29 +94,26 @@ def split(tokens: Sequence, lines: list[MoraLine]) -> list[list[tuple[float | No
 def snap_to_beats(
     times: list[list[tuple[float | None, float | None]]], bpm: float, division: float = 1.0, offset: float = 0.0
 ) -> list[list[tuple[float | None, float | None]]]:
-    """Every mora boundary rounded to the grid of `division` beats at `bpm` off `offset`, kept in order.
+    """Every mora's start and end rounded to the grid of `division` beats at `bpm` off `offset`.
 
-    The grid is the one that is drawn: `offset` is the editor's slid grid, 0 the absolute beats. The
-    boundaries are snapped, not each mora on its own, so two morae keep sharing the line between
-    them; a boundary pushed past its neighbour moves one step on so none collapse. A line with an
-    unaligned mora is left alone, since its boundaries say nothing yet.
+    The grid is the one that is drawn: `offset` is the editor's slid grid, 0 the absolute beats. A
+    mora rounds on its own, so one whose two ends land in the same cell comes back with no length -
+    a mora nothing is sung on, which the strip and the conflict check already read - rather than
+    pushing the rest of its line one cell per collision off the beat. A line with an unaligned mora
+    is left alone, since its boundaries say nothing yet.
     """
     step = 60.0 / max(bpm, 1.0) * division
     rows = []
     for row in times:
-        bounds = ([span[0] for span in row] + [row[-1][1]]) if row else []
-        if any(value is None for value in bounds):
+        if any(start is None or end is None for start, end in row):
             rows.append([tuple(span) for span in row])
             continue
-        snapped: list[float] = []
-        previous = None
-        for value in bounds:
-            point = offset + round((value - offset) / step) * step
-            if previous is not None and point <= previous:
-                point = previous + step
-            snapped.append(point)
-            previous = point
-        rows.append([(snapped[i], snapped[i + 1]) for i in range(len(snapped) - 1)])
+        snapped = []
+        for start, end in row:
+            start = offset + round((start - offset) / step) * step
+            end = offset + round((end - offset) / step) * step
+            snapped.append((start, max(start, end)))
+        rows.append(snapped)
     return rows
 
 

@@ -160,8 +160,9 @@ def test_snap_to_beats_rounds_onto_the_offset_grid():
     assert snap_to_beats([[(0.1, 0.6), (0.6, 1.1)]], 120.0, 1.0, 0.25) == [[(0.25, 0.75), (0.75, 1.25)]]
 
 
-def test_snap_to_beats_keeps_two_morae_from_collapsing():
-    assert snap_to_beats([[(0.1, 0.9), (0.2, 1.1)]], 120.0) == [[(0.0, 0.5), (0.5, 1.0)]]
+def test_snap_to_beats_gives_a_mora_that_rounds_to_one_cell_no_length():
+    # both ends of the first mora fall in the 0.0 cell, so it comes back with no length
+    assert snap_to_beats([[(0.05, 0.2), (0.2, 0.3)]], 120.0) == [[(0.0, 0.0), (0.0, 0.5)]]
 
 
 def test_snap_to_beats_leaves_an_unaligned_line_alone():
