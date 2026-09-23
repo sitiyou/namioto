@@ -10,8 +10,8 @@ import numpy as np
 import pytest
 import soundfile
 
-from namioto import model_store
-from namioto.tempo import (
+from namioto.analysis import model_store
+from namioto.analysis.tempo import (
     N_MELS,
     LocalTempo,
     TempoEstimate,

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """The transcription window: GAME's parameters, the run's progress and log, and what it found.
 
-The run lives in a process of its own (`namioto.transcription.transcribe`), so a model crash cannot
+The run lives in a process of its own (`namioto.analysis.transcription.transcribe`), so a model crash cannot
 take the editor down; this window only spawns it, drains its queue and offers the result.
 """
 
@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from namioto import transcription
+from namioto.analysis import transcription
 from namioto.i18n import tr
 from namioto.settings import Field
 from namioto.ui.settings_dialog import add_row, advanced_section, field_editor
@@ -256,7 +256,7 @@ class TranscriptionDialog(QDialog):
         cells = self._parameters["quantize"]
         if not cells:
             return raw
-        from namioto import game
+        from namioto.analysis import game
 
         snapped, unit, phase = game.quantized(raw, self.tempo, cells, offset=self.offset)
         self._log_line(f"grid {unit * 1000:.1f} ms, phase {phase * 1000:.1f} ms, offset {self.offset * 1000:.1f} ms")
@@ -300,7 +300,7 @@ class TranscriptionDialog(QDialog):
         """A killed download leaves its archive in the model directory; it is worth no keeping."""
         if not self._downloading:
             return
-        from namioto import game
+        from namioto.analysis import game
 
         for stale in game.models_root().glob("tmp*"):
             if stale.is_dir():

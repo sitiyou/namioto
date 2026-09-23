@@ -11,7 +11,7 @@ import zipfile
 import numpy as np
 import pytest
 
-from namioto.game import (
+from namioto.analysis.game import (
     MODEL_FILES,
     OnnxBackend,
     asset_url,
@@ -119,7 +119,7 @@ def test_the_backend_hands_its_provider_to_every_session(tmp_path, monkeypatch) 
         def __init__(self, path, providers=None, **options):
             seen.append(providers)
 
-    monkeypatch.setattr("namioto.model_store.ort.InferenceSession", Session)
+    monkeypatch.setattr("namioto.analysis.model_store.ort.InferenceSession", Session)
     backend = OnnxBackend(tmp_path, provider="cuda")
 
     assert backend.provider == "cuda"
@@ -242,12 +242,12 @@ def test_the_cli_reports_a_model_it_cannot_get(capsys, monkeypatch) -> None:
     def failing(*args, **kwargs):
         raise FileNotFoundError("no small model in /nowhere")
 
-    monkeypatch.setattr("namioto.game.resolve_model", failing)
+    monkeypatch.setattr("namioto.analysis.game.resolve_model", failing)
     assert main(["song.wav"]) == 2
     assert "no small model in /nowhere" in capsys.readouterr().err
 
 
 def test_the_cli_can_only_fetch_a_model(capsys, monkeypatch) -> None:
-    monkeypatch.setattr("namioto.game.resolve_model", lambda *args, **kwargs: pathlib.Path("/models/small"))
+    monkeypatch.setattr("namioto.analysis.game.resolve_model", lambda *args, **kwargs: pathlib.Path("/models/small"))
     assert main([]) == 0
     assert "small model in /models/small" in capsys.readouterr().out

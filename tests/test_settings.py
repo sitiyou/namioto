@@ -10,7 +10,7 @@ import platformdirs
 import pytest
 
 from namioto import settings as store
-from namioto.game import models_root
+from namioto.analysis.game import models_root
 
 
 @pytest.fixture

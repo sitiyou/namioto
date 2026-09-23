@@ -19,9 +19,9 @@ from dataclasses import dataclass, field, make_dataclass
 from pathlib import Path
 from typing import Any
 
-from namioto.bpm import ALGORITHMS
+from namioto.analysis.bpm import ALGORITHMS
+from namioto.analysis.spectrum import CHANNEL_MODES
 from namioto.i18n import LANGUAGE_CODES, LANGUAGE_LABELS, SYSTEM
-from namioto.spectrum import CHANNEL_MODES
 from namioto.utils import config_dir, write_text
 
 VERSION = 3

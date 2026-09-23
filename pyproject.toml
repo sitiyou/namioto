@@ -21,12 +21,12 @@ dependencies = [
 
 [project.scripts]
 namioto = "namioto.ui.app:main"
-namioto-tempo = "namioto.beats:main"
-namioto-wavetone = "namioto.wavetone:main"
-namioto-spectrum = "namioto.spectrum:main"
-namioto-tempocnn = "namioto.tempo:main"
-namioto-game = "namioto.game:main"
-namioto-align = "namioto.align:main"
+namioto-tempo = "namioto.analysis.beats:main"
+namioto-wavetone = "namioto.analysis.wavetone:main"
+namioto-spectrum = "namioto.analysis.spectrum:main"
+namioto-tempocnn = "namioto.analysis.tempo:main"
+namioto-game = "namioto.analysis.game:main"
+namioto-align = "namioto.analysis.align:main"
 
 [dependency-groups]
 dev = ["pytest>=8"]

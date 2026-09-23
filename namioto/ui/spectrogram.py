@@ -10,7 +10,7 @@ import numpy as np
 from PyQt6.QtCore import pyqtSignal
 from PyQt6.QtGui import QImage
 
-from namioto.spectrum import NoteSpectrum, analyse
+from namioto.analysis.spectrum import NoteSpectrum, analyse
 from namioto.ui.loading import LoadingThread
 
 LUT_SIZE = 384

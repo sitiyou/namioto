@@ -9,7 +9,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QIcon, QPalette
 from PyQt6.QtWidgets import QApplication
 
-from namioto.spectrum import NOTE_COUNT, NoteSpectrum
+from namioto.analysis.spectrum import NOTE_COUNT, NoteSpectrum
 from namioto.ui import icons, theme
 from namioto.ui.app import MainWindow
 from namioto.ui.roll import RULER_HEIGHT, PianoKeyboard, PianoRollView, TimelineRuler

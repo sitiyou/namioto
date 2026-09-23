@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 import soundfile
 
-from namioto.beats import SAMPLE_RATE
-from namioto.wavetone import FRAME, estimate_array, main, volume_change
+from namioto.analysis.beats import SAMPLE_RATE
+from namioto.analysis.wavetone import FRAME, estimate_array, main, volume_change
 
 
 def click_track(bpm: float, seconds: float = 90.0, jitter: float = 0.0, missing: float = 0.0, seed: int = 1):

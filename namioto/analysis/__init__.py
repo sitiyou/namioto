@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: AGPL-3.0-only
+"""Audio analysis and model inference, each module also a CLI.
+
+Deliberately imports nothing: `namioto.settings` reads `bpm` and `spectrum` for its defaults while
+`align` and `transcription` read `settings` back, so re-exporting here would close the loop.
+"""

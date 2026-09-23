@@ -9,8 +9,8 @@ import queue
 
 import pytest
 
-import namioto.game as game
-from namioto import transcription
+import namioto.analysis.game as game
+from namioto.analysis import transcription
 
 AUDIO = "/tmp/song.wav"
 

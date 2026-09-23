@@ -34,8 +34,8 @@ from typing import Any, Protocol
 import librosa
 import numpy as np
 
-from namioto import model_store
 from namioto import settings as store
+from namioto.analysis import model_store
 from namioto.settings import Field
 from namioto.utils import config_dir, data_dir, file_stamp, resolved
 

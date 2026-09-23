@@ -26,12 +26,12 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from namioto.analysis.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.channels import Channel, free_channel
 from namioto.document import MIN_DURATION, PITCH_COUNT, PITCH_MAX, PITCH_MIN, Document, Note
 from namioto.i18n import tr
 from namioto.interaction import Interaction, Tool
 from namioto.karaoke.timeline import MoraLine
-from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.ui import theme
 from namioto.ui.spectrogram import SpectrumImage
 from namioto.ui.strips import CLICK_SLOP_PX, _ViewportStrip, mora_edge, mora_room

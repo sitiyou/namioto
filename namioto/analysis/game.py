@@ -28,7 +28,7 @@ try:
 except ImportError:  # the extractor itself only needs numpy; the file loader and pitch names do not
     librosa = None
 
-from namioto import model_store
+from namioto.analysis import model_store
 
 MODEL_SIZES = ("small", "medium", "large")
 # the package also holds `dur2bd`, which the run has no use for: see `extract`

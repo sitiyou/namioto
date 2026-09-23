@@ -2,7 +2,7 @@
 """The `.krc` as a timeline: one mora per unit, each carrying the one token the aligner reads.
 
 `mora_lines` turns the parsed lyrics into rows of morae for the strip, and `align_tokens` flattens
-them into the single token stream `namioto.align` reads. A token here is a per-mora refinement of
+them into the single token stream `namioto.analysis.align` reads. A token here is a per-mora refinement of
 `namioto.utils.kana_tokens`: the characters are the same and in the same order, so the forced
 alignment is unchanged, but a long vowel or a sokuon gets a token of its own and so a time of its
 own. A kanji the `.krc` never gave a ruby raises, because there is no sound to align it to.

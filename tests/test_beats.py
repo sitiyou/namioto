@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 import soundfile
 
-from namioto.beats import SAMPLE_RATE, estimate_array, fit_beats, main, refine_grid
+from namioto.analysis.beats import SAMPLE_RATE, estimate_array, fit_beats, main, refine_grid
 
 pytestmark = pytest.mark.slow
 

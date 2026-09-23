@@ -5,7 +5,8 @@ import json
 import numpy as np
 import pytest
 
-from namioto import align, model_store, utils
+from namioto import utils
+from namioto.analysis import align, model_store
 
 
 @pytest.fixture(autouse=True)

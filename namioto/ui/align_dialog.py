@@ -3,7 +3,7 @@
 
 The run is a `LoadingThread` of its own (`Aligner`), because the model is an ONNX graph and the
 audio is read once; the window only starts it, shows the progress, and shows the failures
-`namioto.align` reports. The whole stream is aligned in one pass, the way FA-Kara does it. Its
+`namioto.analysis.align` reports. The whole stream is aligned in one pass, the way FA-Kara does it. Its
 choices are `align.PARAMETERS`, remembered between runs in the file `align.parameter_path()` names.
 """
 
@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from namioto import align
+from namioto.analysis import align
 from namioto.i18n import tr
 from namioto.karaoke import align_tokens, mora_lines, snap_to_beats, split
 from namioto.settings import Field

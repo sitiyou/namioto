@@ -7,7 +7,7 @@ import zipfile
 
 import pytest
 
-from namioto import model_store
+from namioto.analysis import model_store
 
 
 def test_each_family_keeps_the_directory_it_already_uses(tmp_path, monkeypatch) -> None:

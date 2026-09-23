@@ -38,13 +38,14 @@ from PyQt6.QtWidgets import (
     QToolButton,
 )
 
-from namioto import align, lyrics, midi, project, transcription
+from namioto import lyrics, midi, project
 from namioto import settings as store
-from namioto.bpm import BpmEstimate
+from namioto.analysis import align, transcription
+from namioto.analysis.bpm import BpmEstimate
+from namioto.analysis.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.channels import Channel
 from namioto.interaction import Interaction, Tool
 from namioto.karaoke import mora_lines, text_key
-from namioto.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner
 from namioto.ui.app import MainWindow, TempoLoader

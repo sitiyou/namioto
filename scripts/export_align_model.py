@@ -25,7 +25,7 @@ import pathlib
 import sys
 import tempfile
 
-import namioto.align
+from namioto.analysis import align
 
 HF_MODELS = {"yohane": "NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn"}
 SECONDS = 16
@@ -34,8 +34,8 @@ OPSET = 18
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--model", choices=namioto.align.MODELS, default=namioto.align.DEFAULT_MODEL)
-    parser.add_argument("--language", choices=namioto.align.LANGUAGES, default="ja")
+    parser.add_argument("--model", choices=align.MODELS, default=align.DEFAULT_MODEL)
+    parser.add_argument("--language", choices=align.LANGUAGES, default="ja")
     parser.add_argument(
         "--hf-model", help=f"a HuggingFace model id for --model yohane (default: {HF_MODELS['yohane']})"
     )
@@ -53,7 +53,7 @@ def export(module, destination: pathlib.Path) -> None:
         with torch.inference_mode():
             torch.onnx.export(
                 module,
-                (torch.randn(1, SECONDS * namioto.align.SAMPLE_RATE),),
+                (torch.randn(1, SECONDS * align.SAMPLE_RATE),),
                 source,
                 input_names=["input_values"],
                 output_names=["logits"],
@@ -119,16 +119,16 @@ def export_yohane(destination: pathlib.Path, name: str) -> dict[str, int]:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
-    destination = args.out or namioto.align.model_dir(args.model, args.language)
+    destination = args.out or align.model_dir(args.model, args.language)
     destination.mkdir(parents=True, exist_ok=True)
     if args.model == "yohane":
-        vocab = export_yohane(destination / namioto.align.MODEL_FILE, args.hf_model or HF_MODELS["yohane"])
+        vocab = export_yohane(destination / align.MODEL_FILE, args.hf_model or HF_MODELS["yohane"])
     else:
-        vocab = export_mms(destination / namioto.align.MODEL_FILE)
-    (destination / namioto.align.VOCAB_FILE).write_text(
+        vocab = export_mms(destination / align.MODEL_FILE)
+    (destination / align.VOCAB_FILE).write_text(
         json.dumps(vocab, ensure_ascii=False, indent=1), encoding="utf-8"
     )
-    print(f"wrote {destination / namioto.align.MODEL_FILE} and {destination / namioto.align.VOCAB_FILE}")
+    print(f"wrote {destination / align.MODEL_FILE} and {destination / align.VOCAB_FILE}")
     return 0
 
 

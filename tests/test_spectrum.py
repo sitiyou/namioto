@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 import soundfile
 
-from namioto.spectrum import (
+from namioto.analysis.spectrum import (
     A4_INDEX,
     NOTE_COUNT,
     NoteSpectrum,

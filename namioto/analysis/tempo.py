@@ -18,7 +18,7 @@ import librosa
 import numpy as np
 import onnxruntime as ort
 
-from namioto import model_store
+from namioto.analysis import model_store
 
 SAMPLE_RATE = 11025
 N_FFT = 1024

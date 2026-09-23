@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 import soundfile
 
-from namioto import bpm
-from namioto.beats import SAMPLE_RATE
+from namioto.analysis import bpm
+from namioto.analysis.beats import SAMPLE_RATE
 
 
 def click_track(bpm_value: float, seconds: float = 30.0) -> np.ndarray:

@@ -12,8 +12,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from namioto import beats, wavetone
-from namioto.beats import WINDOW_HOP_SECONDS, WINDOW_SECONDS
+from namioto.analysis import beats, wavetone
+from namioto.analysis.beats import WINDOW_HOP_SECONDS, WINDOW_SECONDS
 
 ALGORITHMS = ("wavetone", "librosa", "tempocnn")
 SOURCES = {
@@ -59,7 +59,7 @@ def estimate(
             residual=result.residual,
         )
     if algorithm == "tempocnn":
-        from namioto import tempo
+        from namioto.analysis import tempo
 
         result = tempo.estimate(path)
         agree = sum(1 for local in result.local if local.bpm == round(result.bpm))

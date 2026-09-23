@@ -33,14 +33,15 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from namioto import bpm, i18n, lyrics, midi, project
+from namioto import i18n, lyrics, midi, project
 from namioto import settings as store
+from namioto.analysis import bpm
+from namioto.analysis.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
 from namioto.channels import set_field as channel_set_field
 from namioto.karaoke import KrcError, conflicts, group_morae, mora_lines, note_counts, text_key, with_counts
 from namioto.playback import note_frequency
-from namioto.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog
 from namioto.ui.audio import open_player

@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """GAME transcription as the editor uses it: the run's parameters, their store, and the child entry.
 
-Qt-free on purpose, and free of `namioto.game` too: importing that would pull `onnxruntime` into the
+Qt-free on purpose, and free of `namioto.analysis.game` too: importing that would pull `onnxruntime` into the
 GUI's startup path. `namioto.ui.transcription_dialog` builds its form from `PARAMETERS`, and
 `transcribe` is the module-level function a spawned process runs, so a crash cannot touch the GUI.
 """
@@ -246,7 +246,7 @@ def transcribe(path: str, parameters: dict, queue) -> None:
     """
     values = coerce_parameters(parameters)
     try:
-        from namioto import game
+        from namioto.analysis import game
 
         queue.put(("log", f"GAME model {values['size']}"))
         model = game.resolve_model(

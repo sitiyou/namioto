@@ -47,7 +47,7 @@ def synthetic(seconds: float, stereo: bool) -> np.ndarray:
 
 
 def run_case(path: str, mode: str, t_num: float, fft_points: int) -> dict:
-    from namioto.spectrum import analyse
+    from namioto.analysis.spectrum import analyse
 
     timings: dict = {}
     before = rss_mb()

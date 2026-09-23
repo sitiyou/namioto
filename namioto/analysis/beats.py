@@ -2,7 +2,7 @@
 """Tempo (BPM) estimation by beat tracking: librosa's dynamic-programming tracker, a least-squares
 fit over the beats it finds, and a grid refit that turns the fit into sub-BPM precision.
 
-Kept alongside it, as the runner-up, is the TempoCNN implementation in `namioto.tempo`.
+Kept alongside it, as the runner-up, is the TempoCNN implementation in `namioto.analysis.tempo`.
 """
 
 from __future__ import annotations
