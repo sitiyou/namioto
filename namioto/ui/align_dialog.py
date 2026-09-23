@@ -55,7 +55,7 @@ class Aligner(LoadingThread):
         audio = align.load_audio(self.path)
         segment = align.Segment(0.0, len(audio) / align.SAMPLE_RATE, tuple(align_tokens(lines)))
         found = align.align([segment], backend, dictionary, audio, blank_id=blank_id, progress=self.progress.emit)[0]
-        rows = split(found.tokens, lines)
+        rows = align.correct_times(split(found.tokens, lines), audio)
         problems = self._problems(found, lines)
         with suppress(OSError):  # the cache is disposable, and the alignment itself already came back
             align.save_alignment(self.path, self.model, self.provider, self.text, rows, problems)

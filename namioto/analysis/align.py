@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import pathlib
 import sys
 import time
@@ -50,6 +51,13 @@ MIN_SAMPLES = 400
 # fast line; a single close pair is a zero-mora symbol or a punctuation mark and means nothing
 COLLAPSE_SECONDS = 0.04
 COLLAPSE_RUN = 3
+# the energy windows the voice detector reads: a short one finds the tail a mora ends in, a wide
+# one the stretch a line's head sits in; a frame counts as voice above a fraction of the loud
+# percentile
+TAIL_FRAME_SECONDS = 0.02
+HEAD_FRAME_SECONDS = 0.8
+SILENCE_PERCENTILE = 10
+SILENCE_RATIO = 0.1
 # a line whose median error against reference times is past this is worth running again, not keeping
 DIVERGE_SECONDS = 0.1
 MODEL_FILE = "model.onnx"
@@ -157,7 +165,7 @@ def load_audio(path: str | pathlib.Path) -> np.ndarray:
 # An alignment is a derived result, not a preference: the store is a cache the next run may re-make
 # from the model, so a file that is missing or unreadable simply means there is nothing to reuse.
 ALIGNMENTS_DIR = "alignments"
-ALIGNMENT_STORE_VERSION = 1
+ALIGNMENT_STORE_VERSION = 2
 
 
 def parameter_path() -> pathlib.Path:
@@ -443,6 +451,104 @@ def problems(segment: AlignedSegment, reference: Sequence[float | None] | None =
         if errors and float(np.median(np.abs(errors))) > DIVERGE_SECONDS:
             found.append("diverged")
     return tuple(found)
+
+
+def voice_segments(audio: np.ndarray, frame_seconds: float = TAIL_FRAME_SECONDS) -> list[tuple[float, float]]:
+    """Where the voice is: runs of frames whose energy is above a fraction of the loud percentile.
+
+    A port of FA-Kara's `non_silent_recog`, reading the same mono 16 kHz audio the aligner takes.
+    Frames overlap by half, and a run is padded a quarter frame on either side.
+    """
+    frame = max(1, int(SAMPLE_RATE * frame_seconds))
+    hop = max(1, frame // 2)
+    energy = librosa.feature.rms(y=audio, frame_length=frame, hop_length=hop)[0]
+    if energy.size == 0:
+        return []
+    threshold = float(np.percentile(energy, 100 - SILENCE_PERCENTILE)) * SILENCE_RATIO
+    times = librosa.frames_to_time(np.arange(energy.size), sr=SAMPLE_RATE, hop_length=hop)
+    segments = []
+    start = None
+    for moment, active in zip(times, energy > threshold, strict=True):
+        if active and start is None:
+            start = max(float(moment) - frame_seconds / 4, 0.0)
+        elif not active and start is not None:
+            segments.append((start, float(moment) + frame_seconds / 4))
+            start = None
+    if start is not None:
+        segments.append((start, float(times[-1])))
+    return segments
+
+
+def correct_times(
+    rows: list[list[tuple[float | None, float | None]]], audio: np.ndarray
+) -> list[list[tuple[float | None, float | None]]]:
+    """A line's head and ends take the voice they were aligned against, the way FA-Kara fixes them.
+
+    A line's last mora reaches the end of the voiced stretch it sits in, or the next line's onset
+    when the voice runs on; its first mora moves to the onset of the stretch that holds the line's
+    end. This is FA-Kara's `tail_correct=3`/`head_correct=1` defaults for the MMS model, on the
+    lines `split` hands back, so a rest still stays a rest. A line with nothing aligned is left
+    alone.
+    """
+    rows = [list(row) for row in rows]
+    _correct_heads(rows, voice_segments(audio, HEAD_FRAME_SECONDS))
+    _correct_tails(rows, voice_segments(audio))
+    return rows
+
+
+def _correct_heads(rows: list[list], segments: Sequence[tuple[float, float]]) -> None:
+    """A line that no single stretch covers starts where the stretch holding its end starts."""
+    for row in rows:
+        first, last = _first_aligned(row), _last_aligned(row)
+        if first is None or last is None:
+            continue
+        start, end = row[first][0], row[last][1]
+        if start is None or end is None or any(begin <= start and finish >= end for begin, finish in segments):
+            continue
+        onset = next((begin for begin, finish in segments if begin <= end <= finish), None)
+        if onset is not None:
+            row[first] = (min(row[first][1], onset), row[first][1])
+
+
+def _correct_tails(rows: list[list], segments: Sequence[tuple[float, float]]) -> None:
+    """A line's last mora reaches the voice's end, or the next line's onset when it runs on."""
+    for index, row in enumerate(rows):
+        last = _last_aligned(row)
+        if last is None:
+            continue
+        start, end = row[last]
+        if end is None:
+            continue
+        filled = _tail_end(segments, end, _next_onset(rows, index))
+        if filled > end:
+            row[last] = (start, filled)
+
+
+def _first_aligned(row: list) -> int | None:
+    return next((index for index, (start, _end) in enumerate(row) if start is not None), None)
+
+
+def _last_aligned(row: list) -> int | None:
+    return next((index for index in range(len(row) - 1, -1, -1) if row[index][0] is not None), None)
+
+
+def _next_onset(rows: list[list], index: int) -> float:
+    """The first aligned start after line `index`, the next sung token FA-Kara reaches."""
+    for row in rows[index + 1 :]:
+        start = next((start for start, _end in row if start is not None), None)
+        if start is not None:
+            return start
+    return math.inf
+
+
+def _tail_end(segments: Sequence[tuple[float, float]], end: float, next_onset: float) -> float:
+    """Where a mora's voice stops: the stretch's end, or the next onset when the voice runs on."""
+    for begin, finish in segments:
+        if begin <= end <= finish:
+            if finish <= next_onset:
+                return finish
+            return max(next_onset - FRAME_SECONDS, end)
+    return end
 
 
 def read_segments(path: str | pathlib.Path) -> list[Segment]:

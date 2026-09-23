@@ -146,6 +146,48 @@ def test_problems_names_the_failure_shapes():
     assert align.problems(segment(0.0, 0.5), reference=[0.01, 0.51]) == ()
 
 
+def test_voice_segments_finds_the_stretch_that_is_sounding():
+    audio = np.zeros(align.SAMPLE_RATE * 2, dtype=np.float32)
+    audio[align.SAMPLE_RATE // 2 : align.SAMPLE_RATE * 3 // 2] = 0.5
+    (only,) = align.voice_segments(audio)
+    assert only[0] == pytest.approx(0.5, abs=0.05)
+    assert only[1] == pytest.approx(1.5, abs=0.05)
+
+
+def test_voice_segments_finds_nothing_in_silence():
+    assert align.voice_segments(np.zeros(align.SAMPLE_RATE, dtype=np.float32)) == []
+
+
+def test_correct_times_fills_a_tail_up_to_the_next_onset(monkeypatch):
+    monkeypatch.setattr(align, "voice_segments", lambda audio, frame_seconds=align.TAIL_FRAME_SECONDS: [(0.5, 1.5)])
+    rows = [[(0.6, 0.8)], [(1.1, 1.4)]]
+    got = align.correct_times(rows, np.zeros(1))
+    assert got[0] == [(0.6, pytest.approx(1.08))]  # the voice runs on, so it stops a frame before
+    assert got[1] == [(1.1, 1.5)]  # nothing follows, so it reaches the stretch's end
+
+
+def test_correct_times_moves_a_head_that_straddles_a_rest_to_the_stretch_of_its_end(monkeypatch):
+    monkeypatch.setattr(
+        align, "voice_segments", lambda audio, frame_seconds=align.TAIL_FRAME_SECONDS: [(0.4, 0.9), (1.2, 2.0)]
+    )
+    rows = [[(0.5, 0.8), (1.3, 1.6)]]
+    got = align.correct_times(rows, np.zeros(1))
+    assert got[0][0][0] == pytest.approx(0.8)  # no one stretch holds the line, so the head takes its own end
+    assert got[0][1][1] == pytest.approx(2.0)  # the last mora reaches the stretch's end
+
+
+def test_correct_times_leaves_a_line_inside_one_stretch_alone(monkeypatch):
+    monkeypatch.setattr(align, "voice_segments", lambda audio, frame_seconds=align.TAIL_FRAME_SECONDS: [(0.0, 1.1)])
+    rows = [[(0.5, 0.8), (0.8, 1.1)]]
+    assert align.correct_times(rows, np.zeros(1)) == [[(0.5, 0.8), (0.8, 1.1)]]
+
+
+def test_correct_times_leaves_an_unaligned_line_alone(monkeypatch):
+    monkeypatch.setattr(align, "voice_segments", lambda audio, frame_seconds=align.TAIL_FRAME_SECONDS: [(0.0, 1.0)])
+    rows = [[(None, None)], [(0.5, 0.8)]]
+    assert align.correct_times(rows, np.zeros(1))[0] == [(None, None)]
+
+
 def test_load_dictionary_lower_cases_and_finds_the_blank(tmp_path):
     path = tmp_path / "vocab.json"
     path.write_text(json.dumps({"[PAD]": 0, "A": 1, "あ": 2}), encoding="utf-8")
