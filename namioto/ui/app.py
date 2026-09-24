@@ -330,6 +330,7 @@ class MainWindow(QMainWindow):
             ("Ctrl+Shift+S", self._on_save_as),
             ("Ctrl+C", self.view.copy_selection),
             ("Ctrl+V", self.view.paste_notes),
+            ("Ctrl+D", self.view.delete_selection),
         ):
             QShortcut(QKeySequence(keys), self).activated.connect(slot)
         for standard, slot in (
@@ -1392,7 +1393,7 @@ class MainWindow(QMainWindow):
                 "pen: drag an empty row to draw  |  select: drag a box, ctrl-click to add  |  "
                 "shift drag a note: trim its start (left half) or end (right half)  |  "
                 "right click: move to a channel  |  "
-                "ctrl C: copy the selection, ctrl V: paste it at the playhead  |  "
+                "ctrl C: copy the selection, ctrl V: paste it at the playhead, ctrl D: delete it  |  "
                 "ctrl Z: undo, ctrl shift Z: redo  |  "
                 "middle drag: pan  |  ctrl wheel: zoom x, ctrl shift wheel: zoom y  |  gear: settings"
             )

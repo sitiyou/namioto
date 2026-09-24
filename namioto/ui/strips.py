@@ -20,12 +20,13 @@ from PyQt6.QtWidgets import QMenu, QWidget
 from namioto.i18n import tr
 from namioto.karaoke.timeline import Mora, mora_ok
 from namioto.ui import theme
+from namioto.ui.blocks import CLICK_SLOP_PX, Press, block_part
 
 if TYPE_CHECKING:
     from namioto.ui.roll import PianoRollView
 
-CLICK_SLOP_PX = 4
 MORA_HEIGHT = 44
+MORA_COLLAPSE_PX = MORA_HEIGHT * 2  # how far up or down a body drag must go to take the length off
 MORA_GRAB_PX = 6
 MORA_MIN_PX = 6
 MORA_MARGIN = 5
@@ -73,9 +74,10 @@ class MoraStrip(_ViewportStrip):
     not. Its body can be dragged to move it - every block the selection holds, when it holds one -
     and either edge trimmed, on the same snap grid the notes are trimmed on; the line keeps its order
     and never overlaps, so a block that reaches a neighbour takes the room from it rather than
-    crossing it. A click takes one block, ctrl a second, and shift everything from the last click to
-    the one under the pointer - the lyrics reading as one run of morae, line after line - and a drag
-    carries the whole of that selection. Dragged up or down, a block gives up its length altogether
+    crossing it. A click takes one block and ctrl a second; shift drags a block's nearer edge the way
+    it does a note, while a shift click that never drags takes everything from the last click to the
+    one under the pointer - the lyrics reading as one run of morae, line after line - and a drag
+    carries the whole of that selection. A body dragged up or down gives up its length altogether
     and stops being drawn: a mora nothing is sung on. The menu that opens over the block it follows
     puts it back, and the menu over a run of selected blocks folds that run into a single word.
     """
@@ -86,15 +88,16 @@ class MoraStrip(_ViewportStrip):
         super().__init__(view)
         self.setFixedHeight(MORA_HEIGHT)
         self.setMouseTracking(True)  # the cursor is what says a drag would move a block or resize it
-        self._drag: tuple[int, int, str, float, float, float] | None = None
+        self._drag: tuple[int, int, str, float, float] | None = None
         self._selected: set[tuple[int, int]] = set()
-        self._press_block: tuple[int, int] | None = None  # what a press landed on, while it stays a click
+        self._press: Press | None = None  # what a press landed on, while it stays a click
+        self._origin = QPointF()  # where the drag in hand began
         self._collapsed = False  # whether the drag in hand has taken the length off what it holds
+        self._trimming = False  # whether the drag in hand has committed to the time axis
         self._anchor: tuple[int, int] | None = None  # where a shift click counts from
+        self._shift_anchor: tuple[int, int] | None = None  # the anchor a shift click extends from
+        self._shift = False  # whether the press in hand holds shift
         self._rows: dict[int, tuple] = {}  # the lines as the drag found them, so a move is timed from those
-        self._press = QPointF()
-        self._applied = 0.0
-        self._hidden = False
         self._ok: list[list[bool]] | None = None
         view.view_changed.connect(self.update)
         view.lyrics_changed.connect(self._invalidate)
@@ -136,52 +139,73 @@ class MoraStrip(_ViewportStrip):
     def mousePressEvent(self, event) -> None:
         if event.button() != Qt.MouseButton.LeftButton or not self.view.lyric_times:
             return
-        self._press_block = None
+        self._press = None
         found = self._at(event.position().x())
         if found is None:
             self._select(set())
             self._anchor = None
             return
-        row, column, mode = found
+        row, column, part = found
         start, end = self.view.lyric_times[row][column]
         if start is None or end is None:
             return
         modifiers = event.modifiers()
-        if modifiers & Qt.KeyboardModifier.ShiftModifier and self._anchor is not None:
-            self._select(self._between(self._anchor, (row, column)))
+        shift = bool(modifiers & Qt.KeyboardModifier.ShiftModifier)
+        press = None
+        if shift:
+            # Shift trims the block from its nearer edge, the way a note is trimmed; a click that
+            # never drags extends the selection to it instead.
+            mode = "left" if event.position().x() < self._x(start + (end - start) / 2) else "right"
+            self._select({(row, column)})
+            self._shift_anchor = self._anchor
+            press = Press((row, column), event.position())
         elif modifiers & Qt.KeyboardModifier.ControlModifier:
+            mode = part
             self._select(self._selected ^ {(row, column)})
             self._anchor = (row, column)
         elif (row, column) not in self._selected:
+            mode = part
             self._select({(row, column)})
             self._anchor = (row, column)
         else:
             # the press keeps the selection a drag would carry; if it stays a click, the release
             # narrows it to this one block
+            mode = part
             self._anchor = (row, column)
-            self._press_block = (row, column)
+            press = Press((row, column), event.position())
+        self._shift = shift
+        self._press = press
+        self._origin = event.position()
         if (row, column) not in self._selected:
             return  # a ctrl click that took the block out of the selection has nothing to drag
-        self._press = event.position()
         self._collapsed = False
+        self._trimming = False
         self._rows = {selected_row: self.view.lyric_times[selected_row] for selected_row, _column in self._selected}
         self._drag = (row, column, mode, start, end)
         self.view._begin_gesture("Trim mora" if mode != "move" else "Move mora")
 
     def mouseMoveEvent(self, event) -> None:
         if self._drag is None:
-            self._set_cursor(self._at(event.position().x()))
+            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+            self._set_cursor(self._at(event.position().x()), shift)
             return
-        if self._press_block is not None and (event.position() - self._press).manhattanLength() > CLICK_SLOP_PX:
-            self._press_block = None  # the press turned into a drag, so the release is not a click
-        if abs(event.position().y() - self._press.y()) > MORA_HEIGHT / 4:
-            self._take_the_length_off()  # up or down is what says the mora is sung nowhere
-            return
-        if self._collapsed:
-            self._put_the_length_back()  # the drag came back up: the line is as the press found it
+        if self._press is not None and not self._press.follow(event.position()):
+            return  # the press has not moved past the slop yet, so it is still a click
         row, column, mode, start, end = self._drag
-        seconds = self._snap(self.view.seconds_at_viewport_x(event.position().x() - self.origin().x()))
-        minimum = self.view._cell_beats() * self.view.seconds_per_beat
+        if mode == "move":
+            if abs(event.position().y() - self._origin.y()) > MORA_COLLAPSE_PX:
+                self._take_the_length_off()  # up or down is what says the mora is sung nowhere
+                return
+            if self._collapsed:
+                self._put_the_length_back()  # the drag came back up: the line is as the press found it
+        elif not self._trimming:
+            # a trim has to start along the time axis, or an up or down drag would resize the block;
+            # once started it keeps following the pointer, so a drag back home restores the line
+            if abs(event.position().x() - self._origin.x()) <= CLICK_SLOP_PX:
+                return
+            self._trimming = True
+        seconds = self.view.snap_seconds(self.view.seconds_at_viewport_x(event.position().x() - self.origin().x()))
+        minimum = self.view.cell_seconds()
         if mode == "left":
             edge = min(seconds, end - minimum)
             self.view.set_mora_span(row, column, edge, end, "left", base=self._rows[row])
@@ -191,15 +215,28 @@ class MoraStrip(_ViewportStrip):
         else:
             travelled = self.view.seconds_at_viewport_x(
                 event.position().x() - self.origin().x()
-            ) - self.view.seconds_at_viewport_x(self._press.x() - self.origin().x())
-            self._move_selection(self._snap_move(travelled))
+            ) - self.view.seconds_at_viewport_x(self._origin.x() - self.origin().x())
+            self._move_selection(self.view.snap_movement_seconds(travelled))
 
     def mouseReleaseEvent(self, event) -> None:
         if self._drag is None:
             return
-        if self._press_block is not None and len(self._selected) > 1:
-            self._select({self._press_block})  # the press stayed a click, and a click picks the one
+        if self._press is not None and not self._press.dragged:
+            block = self._press.block
+            if self._shift:
+                # a shift click that never dragged extends the selection from the last one
+                if self._shift_anchor is not None:
+                    self._select(self._between(self._shift_anchor, block))
+                    self._anchor = self._shift_anchor
+                else:
+                    self._anchor = block
+            elif len(self._selected) > 1:
+                self._select({block})  # the press stayed a click, and a click picks the one
         self._drag = None
+        self._press = None
+        self._shift = False
+        self._shift_anchor = None
+        self._trimming = False
         self.view._commit_gesture()
 
     def contextMenuEvent(self, event) -> None:
@@ -210,7 +247,7 @@ class MoraStrip(_ViewportStrip):
         if action is None:
             return
         kind, row, first, last = action.data()
-        if kind == "group":
+        if kind in ("group", "merge"):
             self.mora_group_requested.emit(row, first, last)
             return
         self.view._begin_gesture("Restore mora")
@@ -218,8 +255,9 @@ class MoraStrip(_ViewportStrip):
         self.view._commit_gesture()
 
     def strip_menu(self, x: float) -> QMenu | None:
-        """What a right click offers: the selection folded into one word, and the morae the block
-        under `x` follows put back onto the line; nothing at all when it has neither to offer."""
+        """What a right click offers: the selection folded into one word, and the morae of no length
+        before the block under `x` put back onto the line; nothing at all when it has neither to
+        offer."""
         menu = QMenu(self)
         run = self._selected_run()
         if run is not None:
@@ -230,12 +268,25 @@ class MoraStrip(_ViewportStrip):
             hidden = []
             while column - len(hidden) > 0 and self._is_hidden(row, column - len(hidden) - 1):
                 hidden.append(column - len(hidden) - 1)
-            if hidden and not menu.isEmpty():
+            entries = [entry for index in reversed(hidden) if (entry := self._hidden_entry(row, index)) is not None]
+            if entries and not menu.isEmpty():
                 menu.addSeparator()
-            for index in reversed(hidden):
-                label = self.view.lyric_lines[row].morae[index].label
-                menu.addAction(tr("Restore {label}", label=label)).setData(("restore", row, index, index))
+            for label, data in entries:
+                menu.addAction(label).setData(data)
         return None if menu.isEmpty() else menu
+
+    def _hidden_entry(self, row: int, index: int) -> tuple[str, tuple] | None:
+        """What the menu offers for a mora of no length: put it back when it has room in front,
+        fold it into the note before it when it has none."""
+        label = self.view.lyric_lines[row].morae[index].label
+        spans = self.view.lyric_times[row]
+        low, _high = mora_room(spans, index, index)
+        if spans[index][0] - low >= self.view.cell_seconds():
+            return tr("Restore {label}", label=label), ("restore", row, index, index)
+        before = mora_edge(spans, index, -1)
+        if before is None:
+            return None  # nothing before it to fold into, and it cannot stand on its own
+        return tr("Merge {label} into the previous note", label=label), ("merge", row, before, index)
 
     def _selected_run(self) -> tuple[int, int, int] | None:
         """The selection as one line's run of morae, when that is what it is and it holds two."""
@@ -331,20 +382,20 @@ class MoraStrip(_ViewportStrip):
                     continue
                 x0 = self._x(start)
                 x1 = max(self._x(end), x0 + MORA_MIN_PX)
-                if abs(x - x0) <= MORA_GRAB_PX:
-                    return (row, column, "left")
-                if abs(x - x1) <= MORA_GRAB_PX:
-                    return (row, column, "right")
-                if x0 < x < x1:
-                    return (row, column, "move")
+                if x0 - MORA_GRAB_PX <= x <= x1 + MORA_GRAB_PX:
+                    return (row, column, block_part(x, x0, x1, MORA_GRAB_PX))
         return None
 
-    def _set_cursor(self, found: tuple[int, int, str] | None) -> None:
-        """The roll's own pair: a hand where a drag would move the block, an arrow where it resizes."""
+    def _set_cursor(self, found: tuple[int, int, str] | None, shift: bool = False) -> None:
+        """The roll's own pair: a hand where a drag would move the block, an arrow where it resizes.
+
+        Shift turns the whole block into a resize handle, the way it does a note.
+        """
         shape = Qt.CursorShape.ArrowCursor
         label = ""
         if found is not None:
-            shape = Qt.CursorShape.OpenHandCursor if found[2] == "move" else Qt.CursorShape.SizeHorCursor
+            resizing = found[2] != "move" or shift
+            shape = Qt.CursorShape.SizeHorCursor if resizing else Qt.CursorShape.OpenHandCursor
             label = self.view.lyric_lines[found[0]].morae[found[1]].label  # a narrow block still names itself
         self.setCursor(shape)
         self.setToolTip(label)
@@ -396,13 +447,3 @@ class MoraStrip(_ViewportStrip):
         if self._anchor is not None and self._anchor not in known:
             self._anchor = None
         self.update()
-
-    def _snap(self, seconds: float) -> float:
-        """The same grid the notes snap to, in seconds, so a block lands on the note cells."""
-        per_beat = self.view.seconds_per_beat
-        return self.view._snap_beats(seconds / per_beat) * per_beat
-
-    def _snap_move(self, seconds: float) -> float:
-        """A movement rather than a place on the grid: whole cells, so a block keeps its offset."""
-        per_beat = self.view.seconds_per_beat
-        return round(seconds / per_beat / self.view.snap) * self.view.snap * per_beat

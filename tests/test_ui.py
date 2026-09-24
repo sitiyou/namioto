@@ -68,7 +68,7 @@ from namioto.ui.roll import (
 )
 from namioto.ui.settings_dialog import SettingsDialog, field_editor
 from namioto.ui.spectrogram import SpectrumImage, SpectrumLoader
-from namioto.ui.strips import MORA_HEIGHT
+from namioto.ui.strips import MORA_COLLAPSE_PX, MORA_HEIGHT
 from namioto.ui.transcription_dialog import TranscriptionDialog
 
 DEMO_NOTES = (
@@ -1510,6 +1510,23 @@ def test_deleting_the_selection_is_one_undo_step(window) -> None:
     assert window.view.undo_stack.count() == 1
     window.view.undo()
     assert [note.pitch for note in window.view.notes()] == [60, 62]
+    window.view.clear_notes()
+
+
+def test_ctrl_d_deletes_the_selection(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.undo_stack.clear()
+    draw_note(window, QPointF(2.0, 40.0), QPointF(3.0, 40.0))
+    assert len(window.view.notes()) == 1
+
+    QApplication.setActiveWindow(window)  # an offscreen window is never active on its own
+    QTest.keyClick(window, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
+    assert window.view.notes() == []
+
+    window.view.undo()
+    assert len(window.view.notes()) == 1
     window.view.clear_notes()
 
 
@@ -4127,8 +4144,8 @@ def test_a_mora_dragged_up_or_down_loses_its_length_and_stops_showing(window) ->
     body = window.mora_strip._x(0.5)
 
     mora_mouse(window, QEvent.Type.MouseButtonPress, body)
-    mora_mouse(window, QEvent.Type.MouseMove, body, MORA_HEIGHT + 20)  # straight down
-    mora_mouse(window, QEvent.Type.MouseButtonRelease, body, MORA_HEIGHT + 20)
+    mora_mouse(window, QEvent.Type.MouseMove, body, MORA_COLLAPSE_PX + MORA_HEIGHT)  # straight down
+    mora_mouse(window, QEvent.Type.MouseButtonRelease, body, MORA_COLLAPSE_PX + MORA_HEIGHT)
     # no length at all, and the point it is left with rides on the block after it
     assert window.view.lyric_times[0] == ((1.0, 1.0), (1.0, 2.0))
     assert window.mora_strip._at(window.mora_strip._x(0.5)) is None  # nothing is drawn for it
@@ -4167,33 +4184,27 @@ def test_the_strip_menu_gives_a_hidden_mora_the_free_room_in_front_of_it(window,
     window.mora_strip.setVisible(False)
 
 
-def test_the_strip_menu_takes_the_room_out_of_the_block_a_mora_follows(window, monkeypatch) -> None:
+def test_a_mora_with_no_room_in_front_merges_into_the_previous_note(window, monkeypatch) -> None:
     window.view.set_playhead(None)
     window.view.load_lyrics(mora_lines("あいう"), [[(0.0, 1.0), (1.0, 1.0), (1.0, 2.0)]])
     window.mora_strip.setVisible(True)
     QApplication.processEvents()
+    strip = window.mora_strip
 
-    strip_menu(window, monkeypatch, window.mora_strip._x(1.5), ("restore", 0, 1, 1))
-    # nothing is free in front of it, so the block it follows gives up a cell of its own
-    assert window.view.lyric_times[0] == ((0.0, 1.0), (1.0, 1.25), (1.25, 2.0))
+    # い has nothing in front of it, so the menu folds it into あ rather than taking from う
+    menu = strip.strip_menu(strip._x(1.5))
+    data = [action.data() for action in menu.actions() if action.data() is not None]
+    assert data == [("merge", 0, 0, 1)]
+    menu.deleteLater()
 
-    window.view.undo()
-    assert window.view.lyric_times[0] == ((0.0, 1.0), (1.0, 1.0), (1.0, 2.0))
-    window.view.load_lyrics((), ())
-    window.mora_strip.setVisible(False)
-
-
-def test_a_block_with_only_a_cell_left_hides_when_a_mora_takes_it(window, monkeypatch) -> None:
-    window.view.set_playhead(None)
-    window.view.load_lyrics(mora_lines("あいう"), [[(0.0, 1.0), (1.0, 1.0), (1.0, 1.25)]])
-    window.mora_strip.setVisible(True)
-    QApplication.processEvents()
-
-    strip_menu(window, monkeypatch, window.mora_strip._x(1.1), ("restore", 0, 1, 1))
-    assert window.view.lyric_times[0] == ((0.0, 1.0), (1.0, 1.25), (1.25, 1.25))
+    asked: list[tuple[int, int, int]] = []
+    strip.mora_group_requested.connect(lambda row, first, last: asked.append((row, first, last)))
+    strip_menu(window, monkeypatch, strip._x(1.5), ("merge", 0, 0, 1))
+    assert asked == [(0, 0, 1)]
+    assert window.view.lyric_times[0] == ((0.0, 1.0), (1.0, 1.0), (1.0, 2.0))  # the fold owns the change
 
     window.view.load_lyrics((), ())
-    window.mora_strip.setVisible(False)
+    strip.setVisible(False)
 
 
 def test_the_selection_is_marked_and_drags_as_one_run(window) -> None:
@@ -4252,6 +4263,33 @@ def test_shift_clicking_takes_every_mora_between_the_two(window) -> None:
 
     window.view.undo()
     assert window.view.lyric_times[1] == ((5.0, 6.0), (6.0, 7.0))
+    window.view.load_lyrics((), ())
+    strip.setVisible(False)
+
+
+def test_shift_dragging_a_mora_resizes_the_edge_under_the_pointer(window) -> None:
+    window.view.set_playhead(None)
+    window.view.load_lyrics(mora_lines("あいう"), [[(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]])
+    window.mora_strip.setVisible(True)
+    QApplication.processEvents()
+    strip = window.mora_strip
+    shift = Qt.KeyboardModifier.ShiftModifier
+
+    # the right half of the first block: its far edge, the way a note's nearer half trims
+    mora_mouse(window, QEvent.Type.MouseButtonPress, strip._x(0.9), MORA_HEIGHT / 2, shift)
+    mora_mouse(window, QEvent.Type.MouseMove, strip._x(1.5), MORA_HEIGHT / 2, shift)
+    mora_mouse(window, QEvent.Type.MouseButtonRelease, strip._x(1.5), MORA_HEIGHT / 2, shift)
+    assert window.view.lyric_times[0] == ((0.0, 1.5), (1.5, 2.0), (2.0, 3.0))
+    assert strip._selected == {(0, 0)}  # a drag trims; it does not extend the selection
+
+    # the left half of the next block: its near edge, taking room from the block before it
+    mora_mouse(window, QEvent.Type.MouseButtonPress, strip._x(1.6), MORA_HEIGHT / 2, shift)
+    mora_mouse(window, QEvent.Type.MouseMove, strip._x(1.25), MORA_HEIGHT / 2, shift)
+    mora_mouse(window, QEvent.Type.MouseButtonRelease, strip._x(1.25), MORA_HEIGHT / 2, shift)
+    assert window.view.lyric_times[0] == ((0.0, 1.25), (1.25, 2.0), (2.0, 3.0))
+
+    window.view.undo()
+    assert window.view.lyric_times[0] == ((0.0, 1.5), (1.5, 2.0), (2.0, 3.0))
     window.view.load_lyrics((), ())
     strip.setVisible(False)
 
@@ -4323,6 +4361,16 @@ def test_restoring_a_mora_reaches_past_the_ones_with_no_length(window) -> None:
 
     window.view.load_lyrics((), ())
     window.mora_strip.setVisible(False)
+
+
+def test_a_mora_with_no_room_in_front_cannot_be_restored(window) -> None:
+    window.view.set_playhead(None)
+    window.view.load_lyrics(mora_lines("あい"), [[(0.0, 1.0), (1.0, 1.0)]])
+
+    assert window.view.restore_mora(0, 1) is False
+    assert window.view.lyric_times[0] == ((0.0, 1.0), (1.0, 1.0))
+
+    window.view.load_lyrics((), ())
 
 
 def test_clicking_a_selected_block_leaves_only_it_selected(window) -> None:
@@ -4430,7 +4478,7 @@ def test_a_vertical_drag_that_comes_back_leaves_the_line_as_it_was(window) -> No
     body = strip._x(0.5)
 
     mora_mouse(window, QEvent.Type.MouseButtonPress, body)
-    mora_mouse(window, QEvent.Type.MouseMove, body, MORA_HEIGHT + 20)  # down: no length at all
+    mora_mouse(window, QEvent.Type.MouseMove, body, MORA_COLLAPSE_PX + MORA_HEIGHT)  # down: no length at all
     assert window.view.lyric_times[0][0] == (1.0, 1.0)
     mora_mouse(window, QEvent.Type.MouseMove, body)  # and back up: the length comes back
     mora_mouse(window, QEvent.Type.MouseButtonRelease, body)
@@ -4450,6 +4498,11 @@ def test_hovering_a_mora_shows_the_cursor_a_note_would_show(window) -> None:
 
     mora_mouse(window, QEvent.Type.MouseMove, window.mora_strip._x(1.5))  # the middle: a drag moves it
     assert window.mora_strip.cursor().shape() == Qt.CursorShape.OpenHandCursor
+    # shift makes the whole block a resize handle, the way it does a note
+    mora_mouse(
+        window, QEvent.Type.MouseMove, window.mora_strip._x(1.5), MORA_HEIGHT / 2, Qt.KeyboardModifier.ShiftModifier
+    )
+    assert window.mora_strip.cursor().shape() == Qt.CursorShape.SizeHorCursor
     mora_mouse(window, QEvent.Type.MouseMove, window.mora_strip._x(2.0))  # the edge: a drag resizes it
     assert window.mora_strip.cursor().shape() == Qt.CursorShape.SizeHorCursor
     mora_mouse(window, QEvent.Type.MouseMove, window.mora_strip._x(8.0))  # nothing there
@@ -4492,6 +4545,25 @@ def test_trimming_a_mora_stops_at_the_minimum_length(window) -> None:
     window.view.undo()
     window.view.load_lyrics((), ())
     window.mora_strip.setVisible(False)
+
+
+def test_a_vertical_drag_on_a_mora_edge_leaves_the_line_alone(window) -> None:
+    window.view.set_playhead(None)
+    window.view.load_lyrics(mora_lines("あい"), [[(0.0, 1.0), (1.0, 2.0)]])
+    window.mora_strip.setVisible(True)
+    QApplication.processEvents()
+    strip = window.mora_strip
+    before = window.view.undo_stack.count()
+
+    right = strip._x(2.0)
+    mora_mouse(window, QEvent.Type.MouseButtonPress, right)
+    mora_mouse(window, QEvent.Type.MouseMove, right, MORA_COLLAPSE_PX + MORA_HEIGHT)  # straight down, on the edge
+    mora_mouse(window, QEvent.Type.MouseButtonRelease, right, MORA_COLLAPSE_PX + MORA_HEIGHT)
+    assert window.view.lyric_times[0] == ((0.0, 1.0), (1.0, 2.0))  # a trim does not follow the row
+    assert window.view.undo_stack.count() == before
+
+    window.view.load_lyrics((), ())
+    strip.setVisible(False)
 
 
 def test_a_narrow_mora_still_names_itself(window) -> None:

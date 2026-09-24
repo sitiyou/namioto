@@ -33,8 +33,9 @@ from namioto.i18n import tr
 from namioto.interaction import Interaction, Tool
 from namioto.karaoke.timeline import MoraLine
 from namioto.ui import theme
+from namioto.ui.blocks import CLICK_SLOP_PX, Press, block_part
 from namioto.ui.spectrogram import SpectrumImage
-from namioto.ui.strips import CLICK_SLOP_PX, _ViewportStrip, mora_edge, mora_room
+from namioto.ui.strips import _ViewportStrip, mora_edge, mora_room
 from namioto.ui.text import format_time, note_name
 
 LENGTH_BEATS = 64
@@ -253,8 +254,7 @@ class PianoRollView(QGraphicsView):
         self._mode: str | None = None
         self._anchor = QPointF()
         self._press_pos = QPoint()
-        self._press_item: NoteItem | None = None  # the note a press landed on, while it stays a click
-        self._press_at = QPoint()
+        self._press: Press | None = None  # the note a press landed on, while it stays a click
         self._trim_edge = ""
         self._grab_note: NoteItem | None = None
         self._snapshot: dict[NoteItem, tuple[float, int, float]] = {}
@@ -447,11 +447,10 @@ class PianoRollView(QGraphicsView):
         return True
 
     def restore_mora(self, row: int, column: int) -> bool:
-        """Give a mora of no length the shortest one can be, and say whether it got one.
+        """Give a mora of no length a cell out of the room in front of it, and say whether it had any.
 
-        The room in front of it comes first; with none there, the cell is taken out of the block it
-        follows, which gives up that much and, when it had only a cell to start with, is left with
-        no length at all - a mora nothing is sung on, and a block nothing is drawn for.
+        Without that room the mora cannot stand on its own, and the strip folds it into the note
+        before it instead (`karaoke.group_morae`), which hands it that note's span.
         """
         if not 0 <= row < len(self._lyric_times):
             return False
@@ -461,12 +460,10 @@ class PianoRollView(QGraphicsView):
         start, end = spans[column]
         if start is None or end is None or end > start:
             return False
-        minimum = self._cell_beats() * self.seconds_per_beat
         low, _high = mora_room(spans, column, column)
-        if start - low >= minimum:
-            self.set_mora_span(row, column, start - minimum, start)
-        else:
-            self.set_mora_span(row, column, start, start + minimum, "right")
+        if start - low < self.cell_seconds():
+            return False
+        self.set_mora_span(row, column, start - self.cell_seconds(), start)
         return True
 
     def _store_morae(self, row: int, spans: list) -> None:
@@ -726,6 +723,20 @@ class PianoRollView(QGraphicsView):
 
     def selected_notes(self) -> list[NoteItem]:
         return [note for note in self.notes() if note.isSelected()]
+
+    def delete_selection(self) -> bool:
+        """Remove the selected notes as one step; nothing outside edit mode."""
+        if not self.edit_mode:
+            return False
+        selection = self.selected_notes()
+        with self._edit("Delete notes"):
+            for item in selection:
+                self.document.remove_note(item.note)
+                self._drop_item(item)
+            if selection:
+                self.notes_changed.emit()
+                self.view_changed.emit()
+        return bool(selection)
 
     def copy_selection(self) -> bool:
         """Take the selected notes as one block, timed from the earliest of them."""
@@ -1054,6 +1065,24 @@ class PianoRollView(QGraphicsView):
         offset = self.offset_beats
         return round((x - offset) / self.snap) * self.snap + offset
 
+    def snap_movement_beats(self, x: float) -> float:
+        """Whole snap cells: a movement keeps the offset a block already had on the grid."""
+        return round(x / self.snap) * self.snap
+
+    def snap_seconds(self, seconds: float) -> float:
+        """A place on the note grid, in seconds, so an edge lands on a line."""
+        per_beat = self.seconds_per_beat
+        return self._snap_beats(seconds / per_beat) * per_beat
+
+    def snap_movement_seconds(self, seconds: float) -> float:
+        """A movement in whole snap cells, in seconds, so a block keeps the offset it had."""
+        per_beat = self.seconds_per_beat
+        return self.snap_movement_beats(seconds / per_beat) * per_beat
+
+    def cell_seconds(self) -> float:
+        """One snap cell in seconds, never shorter than a note can be."""
+        return self._cell_beats() * self.seconds_per_beat
+
     def _snap_floor_beats(self, x: float) -> float:
         offset = self.offset_beats
         return math.floor((x - offset) / self.snap) * self.snap + offset
@@ -1140,7 +1169,7 @@ class PianoRollView(QGraphicsView):
             return
 
         note = self._note_at(scene_pos)
-        self._press_item = None  # set again below when the press lands on a note that is selected
+        self._press = None  # set again below when the press lands on a note that is selected
         modifier = event.modifiers()
         ctrl = bool(modifier & Qt.KeyboardModifier.ControlModifier)
         shift = bool(modifier & Qt.KeyboardModifier.ShiftModifier)
@@ -1193,8 +1222,7 @@ class PianoRollView(QGraphicsView):
         else:
             # the press keeps the selection a drag would carry; if it stays a click, the release
             # narrows it to this one note
-            self._press_item = note
-            self._press_at = pos
+            self._press = Press(note, event.position())
             for item in self.selected_notes():
                 if item.channel != note.channel:
                     item.setSelected(False)
@@ -1202,11 +1230,11 @@ class PianoRollView(QGraphicsView):
             return
 
         self._grab_note = note
-        edge = self.GRAB_PX / self._zoom_x
         # a press on either edge changes the duration: the left one moves the start, the right one the end
-        if scene_pos.x() >= note.end - edge:
+        part = block_part(scene_pos.x(), note.start, note.end, self.GRAB_PX / self._zoom_x)
+        if part == "right":
             self._mode, self._trim_edge = "trim", "end"
-        elif scene_pos.x() <= note.start + edge:
+        elif part == "left":
             self._mode, self._trim_edge = "trim", "start"
         else:
             self._mode = "move"
@@ -1216,8 +1244,8 @@ class PianoRollView(QGraphicsView):
     def mouseMoveEvent(self, event) -> None:
         pos = event.position().toPoint()
         scene_pos = self.mapToScene(pos)
-        if self._press_item is not None and (pos - self._press_at).manhattanLength() > CLICK_SLOP_PX:
-            self._press_item = None  # the press turned into a drag, so the release is not a click
+        if self._press is not None:
+            self._press.follow(event.position())  # past the slop, the release stops being a click
         self.set_hover_pitch(self.pitch_at(scene_pos.y()))
 
         if self._mode is not None and self._mode != "pan":
@@ -1225,14 +1253,13 @@ class PianoRollView(QGraphicsView):
 
         if self._mode is None:
             note = self._note_at(scene_pos) if self.edit_mode else None
-            shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
-            edge = self.GRAB_PX / self._zoom_x
-            if note is not None and (shift or scene_pos.x() >= note.end - edge or scene_pos.x() <= note.start + edge):
-                self.viewport().setCursor(Qt.CursorShape.SizeHorCursor)
-            elif note is not None:
-                self.viewport().setCursor(Qt.CursorShape.OpenHandCursor)
-            else:
+            if note is None:
                 self.viewport().unsetCursor()
+            else:
+                shift = bool(event.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+                part = block_part(scene_pos.x(), note.start, note.end, self.GRAB_PX / self._zoom_x)
+                shape = Qt.CursorShape.SizeHorCursor if shift or part != "move" else Qt.CursorShape.OpenHandCursor
+                self.viewport().setCursor(shape)
             return
 
         if self._mode == "pan":
@@ -1282,7 +1309,7 @@ class PianoRollView(QGraphicsView):
         # the movement is what snaps, not the note's place on the grid: the step is always a whole
         # cell, after the same half cell of dragging, and a note sits off the grid stays off it
         moved = scene_pos.x() - self._anchor.x()
-        delta_x = round(moved / self.snap) * self.snap
+        delta_x = self.snap_movement_beats(moved)
         delta_row = round(scene_pos.y() - self._anchor.y())
         for note, (start, pitch, _duration) in self._snapshot.items():
             note.set_range(start + delta_x, pitch - delta_row)
@@ -1299,11 +1326,11 @@ class PianoRollView(QGraphicsView):
 
     def mouseReleaseEvent(self, event) -> None:
         self._commit_gesture()
-        if self._press_item is not None:
+        if self._press is not None and not self._press.dragged:
             # the press stayed a click, and a click is what picks the one note out of the selection
             self._clear_selection()
-            self._press_item.setSelected(True)
-            self._press_item = None
+            self._press.block.setSelected(True)
+        self._press = None
         if self._rubber.isVisible():
             self._rubber.hide()
         self._mode = None
@@ -1357,14 +1384,7 @@ class PianoRollView(QGraphicsView):
         ):
             return
         if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            selection = self.selected_notes()
-            with self._edit("Delete notes"):
-                for item in selection:
-                    self.document.remove_note(item.note)
-                    self._drop_item(item)
-                if selection:
-                    self.notes_changed.emit()
-                    self.view_changed.emit()
+            self.delete_selection()
             return
         if key == Qt.Key.Key_A and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             for note in self.notes():
