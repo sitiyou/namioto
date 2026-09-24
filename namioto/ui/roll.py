@@ -3,10 +3,9 @@
 the ruler and keyboard round it. The lyrics strip lives in `namioto.ui.strips`.
 
 `PianoRollView` is the editor: it owns the document, the channels, the morae and their times, and
-the undo stack of whole-document snapshots, and it is where a gesture is begun and committed and a
-mora's span is worked out (`mora_edge`/`mora_room`). The ruler and the keyboard are the strips that
-stay here; all three share `strips._ViewportStrip`, and read the view's scroll position rather than
-keeping one of their own.
+the undo stack of whole-document snapshots, and it is where a gesture is begun and committed. The
+ruler and the keyboard are the strips that stay here; all three share `strips._ViewportStrip`, and
+read the view's scroll position rather than keeping one of their own.
 """
 
 from __future__ import annotations
@@ -35,7 +34,7 @@ from namioto.karaoke.timeline import MoraLine
 from namioto.ui import theme
 from namioto.ui.blocks import CLICK_SLOP_PX, Press, block_part
 from namioto.ui.spectrogram import SpectrumImage
-from namioto.ui.strips import _ViewportStrip, mora_edge, mora_room
+from namioto.ui.strips import _ViewportStrip
 from namioto.ui.text import format_time, note_name
 
 LENGTH_BEATS = 64
@@ -269,6 +268,8 @@ class PianoRollView(QGraphicsView):
         self._history_depth = 0
         self._lines: tuple[MoraLine, ...] = ()
         self._lyric_times: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
+        self._lyric_red: tuple[tuple[bool, ...], ...] = ()
+        self._lyric_raw: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self.viewport().setMouseTracking(True)  # the row under the mouse is highlighted
@@ -366,117 +367,38 @@ class PianoRollView(QGraphicsView):
     def lyric_times(self) -> tuple[tuple[tuple[float | None, float | None], ...], ...]:
         return self._lyric_times
 
+    @property
+    def lyric_red(self) -> tuple[tuple[bool, ...], ...]:
+        """Whether the mapping doubts each mora, laid out as `lyric_times` is."""
+        return self._lyric_red
+
+    @property
+    def lyric_raw(self) -> tuple[tuple[tuple[float | None, float | None], ...], ...]:
+        """The aligned times the mapping was made from, which is what a project keeps."""
+        return self._lyric_raw
+
     def set_lyrics(self, lines, times) -> None:
         """Take a whole aligned `.krc` over: every line's morae and their times, as one step."""
         with self._edit("Align lyrics"):
             self.load_lyrics(lines, times)
 
-    def load_lyrics(self, lines, times) -> None:
-        """The lyrics a `.krc` or a project brings in, with no undo step of their own."""
+    def load_lyrics(self, lines, times, red=None, raw=None) -> None:
+        """The lyrics a `.krc` or a project brings in, with no undo step of their own.
+
+        `times` are the spans the strip draws, `red` the morae the mapping doubts and `raw` the
+        aligned times behind them; without `red` every mora is taken as sound, and without `raw` the
+        drawn spans are the aligned times themselves.
+        """
         self._lines = tuple(lines)
         self._lyric_times = tuple(tuple(span) for span in times)
+        self._lyric_raw = tuple(tuple(span) for span in (times if raw is None else raw))
+        self._lyric_red = (
+            tuple(tuple(bool(flag) for flag in row) for row in red)
+            if red is not None
+            else tuple(tuple(False for _span in row) for row in times)
+        )
         self.lyrics_changed.emit()
         self.view_changed.emit()
-
-    def set_mora_span(self, row: int, column: int, start: float, end: float, mode: str = "move", base=None) -> None:
-        """Put one mora's block between `start` and `end`, the way a note is moved or trimmed.
-
-        The morae of a line keep the order they were read in and never overlap, so a block stops at
-        a neighbour's far edge rather than crossing it. `mode` names what the pointer holds: a
-        trimmed edge takes room from the neighbour it reaches, that neighbour's near edge giving way
-        and the rest of the line staying where it was, while a block dragged by its middle keeps its
-        length and needs the room to be free - it stays put when it is not.
-
-        `base` is the line as a drag found it; every move of that drag is worked out from there, so
-        dragging back to where it started leaves the line exactly as it was.
-        """
-        if not 0 <= row < len(self._lyric_times):
-            return
-        spans = list(self._lyric_times[row] if base is None else base)
-        if not 0 <= column < len(spans):
-            return
-        if start is None or end is None:
-            return
-        start, end = max(0.0, start), max(start, end)
-        previous, following = mora_edge(spans, column, -1), mora_edge(spans, column, 1)
-        if mode == "move":
-            length = end - start
-            low, high = mora_room(spans, column, column)
-            if length > high - low:
-                return
-            start = min(max(start, low), high - length)
-            end = start + length
-        elif mode == "left" and previous is not None and start < spans[previous][1]:
-            start = max(start, spans[previous][0])
-            spans[previous] = (spans[previous][0], start)
-        elif mode == "right" and following is not None and end > spans[following][0]:
-            end = min(end, spans[following][1])
-            spans[following] = (end, spans[following][1])
-        spans[column] = (start, max(start, end))
-        self._settle_morae(spans)
-        self._store_morae(row, spans)
-
-    def move_morae(self, row: int, first: int, last: int, delta: float, base=None) -> bool:
-        """Shift the run `first..last` of a line by `delta` seconds, and say whether it moved.
-
-        The run keeps its own shape; the room it may move in is what is free around it, so a line
-        that packs its morae together lets nothing through. `base`, when a drag hands it over, is the
-        line as that drag found it, so the shift is measured from there rather than from the last
-        place the pointer was.
-        """
-        if not 0 <= row < len(self._lyric_times):
-            return False
-        spans = list(self._lyric_times[row] if base is None else base)
-        if not 0 <= first <= last < len(spans):
-            return False
-        moved = [span for span in spans[first : last + 1] if None not in span]
-        if not moved:
-            return False
-        low, high = mora_room(spans, first, last)
-        start = min(span[0] for span in moved)
-        end = max(span[1] for span in moved)
-        if end - start > high - low:
-            return False
-        delta = min(max(delta, low - start), high - end)
-        for index in range(first, last + 1):
-            if None in spans[index]:
-                continue
-            spans[index] = (spans[index][0] + delta, spans[index][1] + delta)
-        self._settle_morae(spans)
-        self._store_morae(row, spans)
-        return True
-
-    def restore_mora(self, row: int, column: int) -> bool:
-        """Give a mora of no length a cell out of the room in front of it, and say whether it had any.
-
-        Without that room the mora cannot stand on its own, and the strip folds it into the note
-        before it instead (`karaoke.group_morae`), which hands it that note's span.
-        """
-        if not 0 <= row < len(self._lyric_times):
-            return False
-        spans = list(self._lyric_times[row])
-        if not 0 <= column < len(spans):
-            return False
-        start, end = spans[column]
-        if start is None or end is None or end > start:
-            return False
-        low, _high = mora_room(spans, column, column)
-        if start - low < self.cell_seconds():
-            return False
-        self.set_mora_span(row, column, start - self.cell_seconds(), start)
-        return True
-
-    def _store_morae(self, row: int, spans: list) -> None:
-        self._lyric_times = self._lyric_times[:row] + (tuple(spans),) + self._lyric_times[row + 1 :]
-        self.lyrics_changed.emit()
-
-    def _settle_morae(self, spans: list) -> None:
-        """A mora of no length is a point on the line, and the point rides on the mora after it."""
-        for index in range(len(spans) - 2, -1, -1):
-            start, end = spans[index]
-            after = spans[index + 1][0]
-            if start is not None and start == end and after is not None:
-                spans[index] = (after, after)
 
     def note_seconds(self) -> list[tuple[float, float]]:
         per_beat = self.seconds_per_beat
@@ -1068,20 +990,6 @@ class PianoRollView(QGraphicsView):
     def snap_movement_beats(self, x: float) -> float:
         """Whole snap cells: a movement keeps the offset a block already had on the grid."""
         return round(x / self.snap) * self.snap
-
-    def snap_seconds(self, seconds: float) -> float:
-        """A place on the note grid, in seconds, so an edge lands on a line."""
-        per_beat = self.seconds_per_beat
-        return self._snap_beats(seconds / per_beat) * per_beat
-
-    def snap_movement_seconds(self, seconds: float) -> float:
-        """A movement in whole snap cells, in seconds, so a block keeps the offset it had."""
-        per_beat = self.seconds_per_beat
-        return self.snap_movement_beats(seconds / per_beat) * per_beat
-
-    def cell_seconds(self) -> float:
-        """One snap cell in seconds, never shorter than a note can be."""
-        return self._cell_beats() * self.seconds_per_beat
 
     def _snap_floor_beats(self, x: float) -> float:
         offset = self.offset_beats

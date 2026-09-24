@@ -182,6 +182,9 @@ def load_audio(path: str | pathlib.Path) -> np.ndarray:
 # from the model, so a file that is missing or unreadable simply means there is nothing to reuse.
 ALIGNMENTS_DIR = "alignments"
 ALIGNMENT_STORE_VERSION = 2
+# the model's own pass over the audio depends on the audio alone, so it is cached apart from the
+# lyrics: a changed text re-runs only the cheap CTC search, not the wav2vec2 encoder
+EMISSIONS_DIR = "emissions"
 
 
 def parameter_path() -> pathlib.Path:
@@ -290,6 +293,53 @@ def save_alignment(
     return target
 
 
+def emissions_root() -> pathlib.Path:
+    """Where a cached model pass lives: the platform's data directory, beside the alignments."""
+    return data_dir(EMISSIONS_DIR)
+
+
+def _emissions_path(key: str) -> pathlib.Path:
+    return emissions_root() / f"{key}.npy"
+
+
+def emissions_key(audio: str | pathlib.Path, model: str, provider: str, chunk: bool = True) -> str:
+    """What makes two model passes the same: the audio, the model, where it runs and chunking.
+
+    The lyrics are not part of it, and neither are the tempo and the grid offset: the model never
+    sees them, so a changed `.krc` reuses the pass and only the search runs again.
+    """
+    identity = {
+        "audio": list(file_stamp(audio)),
+        "model": model,
+        "provider": provider,
+        "chunk": chunk,
+    }
+    return hashlib.sha1(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
+
+
+def load_emissions(audio: str | pathlib.Path, model: str, provider: str, chunk: bool = True) -> np.ndarray | None:
+    """The model's log-softmax pass over the whole audio, or None when it was never kept."""
+    try:
+        return np.load(_emissions_path(emissions_key(audio, model, provider, chunk)))
+    except (OSError, ValueError):
+        return None
+
+
+def save_emissions(
+    audio: str | pathlib.Path, model: str, provider: str, chunk: bool, emission: np.ndarray
+) -> pathlib.Path:
+    """Keep the pass so a changed lyric re-runs only the search, not the model."""
+    target = _emissions_path(emissions_key(audio, model, provider, chunk))
+    target.parent.mkdir(parents=True, exist_ok=True)
+    np.save(target, np.asarray(emission, dtype=np.float32))
+    return target
+
+
+def has_emissions(audio: str | pathlib.Path, model: str, provider: str, chunk: bool = True) -> bool:
+    """Whether a pass with these inputs was kept, without reading it back."""
+    return _emissions_path(emissions_key(audio, model, provider, chunk)).exists()
+
+
 class Backend(Protocol):
     """What alignment needs of a CTC model: one window in, `[frames, vocabulary]` out."""
 
@@ -359,6 +409,14 @@ class ChunkedBackend:
 def log_softmax(values: np.ndarray) -> np.ndarray:
     shifted = values - values.max(axis=-1, keepdims=True)
     return shifted - np.log(np.exp(shifted).sum(axis=-1, keepdims=True))
+
+
+def whole_emissions(backend: Backend, audio: np.ndarray) -> np.ndarray:
+    """The model's log-softmax pass over the whole audio, which the lyrics never enter."""
+    values = np.asarray(audio, dtype=np.float32)
+    if values.size < MIN_SAMPLES:
+        values = np.pad(values, (0, MIN_SAMPLES - values.size))
+    return log_softmax(backend.logits(values))
 
 
 def forced_align(
@@ -447,6 +505,13 @@ def align(
     return aligned
 
 
+def align_whole(
+    segment: Segment, emission: np.ndarray, dictionary: Mapping[str, int], *, blank_id: int = 0
+) -> AlignedSegment:
+    """Align a segment that is the whole audio, from the model's already-computed pass over it."""
+    return _align_emission(segment, emission, 0.0, dictionary, blank_id)
+
+
 def _align_one(
     segment: Segment,
     backend: Backend,
@@ -454,34 +519,45 @@ def _align_one(
     audio: np.ndarray,
     blank_id: int,
 ) -> AlignedSegment:
+    if not any(len(token) for token in segment.tokens):
+        return AlignedSegment(segment.start, segment.end, tuple(Token(text) for text in segment.tokens))
+    waveform, offset = _window(segment, audio)
+    if waveform is None:
+        return AlignedSegment(segment.start, segment.end, tuple(Token(text) for text in segment.tokens))
+    return _align_emission(segment, log_softmax(backend.logits(waveform)), offset, dictionary, blank_id)
+
+
+def _align_emission(
+    segment: Segment,
+    emission: np.ndarray,
+    offset: float,
+    dictionary: Mapping[str, int],
+    blank_id: int,
+) -> AlignedSegment:
     lengths = [len(token) for token in segment.tokens]
     codes = [dictionary.get(char.lower(), -1) for token in segment.tokens for char in token]
     tokens: list[Token] = [Token(text) for text in segment.tokens]
-    if any(length for length in lengths):
-        waveform, offset = _window(segment, audio)
-        if waveform is not None:
-            emission = log_softmax(backend.logits(waveform))
-            unknown = [code < 0 or code == blank_id for code in codes]
-            if any(unknown):
-                non_blank = np.ones(emission.shape[1], dtype=bool)
-                non_blank[blank_id] = False
-                emission = np.concatenate([emission, emission[:, non_blank].max(axis=1)[:, None]], axis=1)
-                wildcard = emission.shape[1] - 1
-                codes = [wildcard if missing else code for code, missing in zip(codes, unknown, strict=True)]
-            found = forced_align(emission, codes, blank_id)
-            if found is not None:
-                spans = merge_tokens(found[0], found[1], blank_id)
-                if len(spans) == len(codes):
-                    at = 0
-                    for index, length in enumerate(lengths):
-                        chunk = spans[at : at + length]
-                        at += length
-                        if not chunk:
-                            continue
-                        start = chunk[0][1] * FRAME_SECONDS + offset
-                        end = chunk[-1][2] * FRAME_SECONDS + offset
-                        score = float(np.exp(sum(span[3] for span in chunk) / len(chunk)))
-                        tokens[index] = Token(segment.tokens[index], round(start, 3), round(end, 3), round(score, 3))
+    unknown = [code < 0 or code == blank_id for code in codes]
+    if any(unknown):
+        non_blank = np.ones(emission.shape[1], dtype=bool)
+        non_blank[blank_id] = False
+        emission = np.concatenate([emission, emission[:, non_blank].max(axis=1)[:, None]], axis=1)
+        wildcard = emission.shape[1] - 1
+        codes = [wildcard if missing else code for code, missing in zip(codes, unknown, strict=True)]
+    found = forced_align(emission, codes, blank_id)
+    if found is not None:
+        spans = merge_tokens(found[0], found[1], blank_id)
+        if len(spans) == len(codes):
+            at = 0
+            for index, length in enumerate(lengths):
+                chunk = spans[at : at + length]
+                at += length
+                if not chunk:
+                    continue
+                start = chunk[0][1] * FRAME_SECONDS + offset
+                end = chunk[-1][2] * FRAME_SECONDS + offset
+                score = float(np.exp(sum(span[3] for span in chunk) / len(chunk)))
+                tokens[index] = Token(segment.tokens[index], round(start, 3), round(end, 3), round(score, 3))
     return AlignedSegment(segment.start, segment.end, tuple(tokens))
 
 

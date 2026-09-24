@@ -307,3 +307,28 @@ def test_resolve_model_downloads_what_is_not_installed(tmp_path, monkeypatch):
 
     assert align.resolve_model() == tmp_path
     assert asked == [("aligner", ("mms", "ja"))]
+
+
+def test_the_model_pass_is_cached_apart_from_the_lyrics():
+    emission = np.zeros((6, 3), dtype=np.float32)
+    align.save_emissions("/tmp/song.wav", "mms", "cpu", True, emission)
+
+    assert align.has_emissions("/tmp/song.wav", "mms", "cpu", True)
+    assert not align.has_emissions("/tmp/song.wav", "yohane", "cpu", True)
+    assert not align.has_emissions("/tmp/song.wav", "mms", "cuda", True)
+    assert not align.has_emissions("/tmp/song.wav", "mms", "cpu", False)
+    found = align.load_emissions("/tmp/song.wav", "mms", "cpu", True)
+    assert found is not None and found.shape == (6, 3)
+    assert align.load_emissions("/tmp/song.wav", "mms", "cpu", False) is None
+
+
+def test_align_whole_matches_a_live_pass_over_the_same_audio():
+    audio = np.zeros(align.SAMPLE_RATE, dtype=np.float32)
+    segment = align.Segment(0.0, 1.0, ("ab",))
+    emission = align.whole_emissions(FakeBackend(LOGITS), audio)
+
+    cached = align.align_whole(segment, emission, DICTIONARY)
+    live = align.align([segment], FakeBackend(LOGITS), DICTIONARY, audio)[0]
+
+    assert [token.start for token in cached.tokens] == [token.start for token in live.tokens]
+    assert [token.end for token in cached.tokens] == [token.end for token in live.tokens]

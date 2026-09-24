@@ -29,6 +29,9 @@ SMALL_KANA = frozenset("ャュョァィゥェォゃゅょぁぃぅぇぉゎヮ")
 OWN_MORA = frozenset("ーっッ")
 # how far a mora's time may sit from the note it should start and end on, one aligner frame of slack
 TOLERANCE = 0.05
+# how close the shares of a shared note must be for its morae to group, and how large each must stay
+EQUAL_BAND = 0.2
+SHARE = 0.4
 
 
 @dataclass(frozen=True)
@@ -405,3 +408,176 @@ def _onset_distance(span: tuple[float | None, float | None], note: tuple[float, 
     if low <= start <= high:
         return 0.0
     return min(abs(start - low), abs(start - high))
+
+
+@dataclass(frozen=True)
+class Placement:
+    """Where one mora sits once the notes are read: its span, the notes it covers, and its doubt.
+
+    `span` is what the strip draws - the note(s) it covers, a group's slice of a shared note, or a
+    point for a mora of no length. `notes` are the note indices it covers, `zero` a mora that fell
+    on none, and `red` one whose time the aligner cannot be trusted for.
+    """
+
+    span: tuple[float | None, float | None]
+    notes: tuple[int, ...] = ()
+    zero: bool = False
+    red: bool = False
+
+
+def map_morae(
+    lines: Sequence[MoraLine],
+    times: Sequence[Sequence[tuple[float | None, float | None]]],
+    notes: Sequence[tuple[float, float]],
+    text: str = "",
+    flagged: Sequence[bool] | None = None,
+    *,
+    aligned: bool = True,
+) -> list[list[Placement]]:
+    """Put every mora on the notes its time covers, and settle the notes its neighbours share.
+
+    With `aligned`, a mora covers every note its time overlaps; a note several morae share is
+    grouped when the shares are close and the run may be folded into one word, and otherwise all
+    but the largest share become morae of no length. A note no mora reaches is given to the one
+    before it and doubted, so every note is answered for. Without `aligned` the morae and the notes
+    are paired one for one, in reading order, until the shorter side runs out. `flagged` marks the
+    lines the aligner itself doubted, which reddens the whole line.
+    """
+    flat: list[tuple[int, int, float | None, float | None]] = []
+    for row, line in enumerate(lines):
+        for column, _mora in enumerate(line.morae):
+            present = row < len(times) and column < len(times[row])
+            span = times[row][column] if present else (None, None)
+            flat.append((row, column, span[0], span[1]))
+
+    if not aligned:
+        return _by_order(lines, notes, assign_by_order(len(flat), len(notes)))
+    if not flat or not notes:
+        return [[Placement((None, None)) for _mora in line.morae] for line in lines]
+
+    holders: list[list[int]] = [[] for _note in notes]
+    for index, (_row, _column, start, end) in enumerate(flat):
+        if start is None or end is None or end < start:
+            continue
+        for note, (low, high) in enumerate(notes):
+            if min(end, high) > max(start, low):
+                holders[note].append(index)
+
+    owner: list[list[int]] = [[] for _note in notes]
+    doubted: set[int] = set()
+    for note, sharers in enumerate(holders):
+        if not sharers:
+            continue
+        if len(sharers) == 1:
+            owner[note] = list(sharers)
+            continue
+        shares = [_share(flat, notes[note], mora) for mora in sharers]
+        if max(shares) - min(shares) <= EQUAL_BAND and min(shares) >= SHARE and _groupable(text, times, flat, sharers):
+            owner[note] = list(sharers)
+        else:
+            owner[note] = [sharers[max(range(len(sharers)), key=lambda at: shares[at])]]
+
+    for note in range(len(notes)):
+        if owner[note]:
+            continue
+        before = next((other for other in range(note - 1, -1, -1) if owner[other]), None)
+        if before is not None:
+            mora = owner[before][-1]
+        else:
+            after = next((other for other in range(note + 1, len(notes)) if owner[other]), None)
+            if after is None:
+                continue
+            mora = owner[after][0]
+        owner[note] = [mora]
+        doubted.add(mora)
+
+    covered: dict[int, list[int]] = {}
+    for note, owners in enumerate(owner):
+        for mora in owners:
+            covered.setdefault(mora, []).append(note)
+
+    pieces: dict[int, list[tuple[float, float]]] = {}
+    for note, owners in enumerate(owner):
+        if not owners:
+            continue
+        low, high = notes[note]
+        if len(owners) == 1:
+            pieces.setdefault(owners[0], []).append((low, high))
+            continue
+        shares = [_share(flat, notes[note], mora) for mora in owners]
+        total = sum(shares) or float(len(owners))
+        edge = low
+        for mora, share in zip(owners, shares, strict=True):
+            width = (high - low) * share / total
+            pieces.setdefault(mora, []).append((edge, edge + width))
+            edge += width
+
+    marked = list(flagged) if flagged is not None else []
+    found: list[list[Placement]] = []
+    index = 0
+    for row, line in enumerate(lines):
+        red_line = row < len(marked) and bool(marked[row])
+        placements = []
+        for _mora in line.morae:
+            notes_of = covered.get(index)
+            if notes_of:
+                chunks = pieces[index]
+                span = (min(chunk[0] for chunk in chunks), max(chunk[1] for chunk in chunks))
+                placements.append(Placement(span=span, notes=tuple(notes_of), red=red_line or index in doubted))
+            else:
+                point = _zero_point(flat[index][2], notes)
+                placements.append(Placement(span=(point, point), zero=True, red=red_line))
+            index += 1
+        found.append(placements)
+    return found
+
+
+def _by_order(lines: Sequence[MoraLine], notes: Sequence[tuple[float, float]], found) -> list[list[Placement]]:
+    """The morae and the notes matched in reading order, one for one, with nothing doubted."""
+    out: list[list[Placement]] = []
+    at = 0
+    for line in lines:
+        row = []
+        for _mora in line.morae:
+            index = found[at]
+            span = tuple(notes[index]) if index is not None else (None, None)
+            row.append(Placement(span=span, notes=(index,) if index is not None else ()))
+            at += 1
+        out.append(row)
+    return out
+
+
+def _share(flat: Sequence[tuple], note: tuple[float, float], index: int) -> float:
+    """A mora's share of a note, its end free to reach the next mora's start but not past the note."""
+    start, end = flat[index][2], flat[index][3]
+    low, high = note
+    if start is None or end is None or high <= low:
+        return 0.0
+    left = max(start, low)
+    following = flat[index + 1][2] if index + 1 < len(flat) else None
+    right = high if following is None else min(following, high)
+    return (max(right, left) - left) / (high - low)
+
+
+def _groupable(text: str, times, flat: Sequence[tuple], holders: Sequence[int]) -> bool:
+    """Whether a note's sharers may be folded into one word, by the same rules a group obeys."""
+    if not text:
+        return False
+    rows = {flat[index][0] for index in holders}
+    if len(rows) != 1:
+        return False
+    columns = sorted(flat[index][1] for index in holders)
+    if len(columns) < 2 or columns != list(range(columns[0], columns[-1] + 1)):
+        return False
+    try:
+        group_morae(text, times, rows.pop(), columns[0], columns[-1])
+    except KrcError:
+        return False
+    return True
+
+
+def _zero_point(start: float | None, notes: Sequence[tuple[float, float]]) -> float | None:
+    """Where a mora of no length is drawn: its own onset, else the nearest note's."""
+    if start is not None:
+        return start
+    return notes[0][0] if notes else None

@@ -14,6 +14,7 @@ from namioto.karaoke import (
     assign_by_time,
     conflicts,
     group_morae,
+    map_morae,
     mora_lines,
     mora_ok,
     note_counts,
@@ -326,3 +327,74 @@ def test_every_block_gets_a_note_and_the_match_is_monotone():
 def test_no_notes_leaves_every_block_unassigned():
     assert assign_by_time([(0.0, 1.0)], []) == [None]
     assert assign_by_time([], [(0.0, 1.0)]) == []
+
+
+def test_without_alignment_the_morae_and_notes_pair_one_for_one():
+    found = map_morae(mora_lines("あいう"), [[(None, None)] * 3], [(0.0, 1.0), (1.0, 2.0)], aligned=False)
+    assert [placement.span for placement in found[0]] == [(0.0, 1.0), (1.0, 2.0), (None, None)]
+    assert [placement.notes for placement in found[0]] == [(0,), (1,), ()]
+
+
+def test_a_mora_covers_the_note_its_time_overlaps():
+    found = map_morae(mora_lines("あい"), [[(0.0, 1.0), (1.0, 2.0)]], [(0.0, 1.0), (1.0, 2.0)], "あい")
+    assert [placement.notes for placement in found[0]] == [(0,), (1,)]
+    assert [placement.span for placement in found[0]] == [(0.0, 1.0), (1.0, 2.0)]
+    assert not any(placement.red for placement in found[0])
+
+
+def test_a_long_mora_covers_every_note_it_overlaps():
+    notes = [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]
+    found = map_morae(mora_lines("あい"), [[(0.0, 2.0), (2.0, 3.0)]], notes, "あい")
+    assert found[0][0].notes == (0, 1)
+    assert found[0][0].span == (0.0, 2.0)
+    assert not found[0][0].red
+    assert found[0][1].notes == (2,)
+
+
+def test_two_morae_that_share_a_note_equally_group_on_it():
+    times = [[(0.0, 1.0), (1.0, 2.0)]]
+    found = map_morae(mora_lines("あい"), times, [(0.0, 2.0)], "あい")
+    assert [placement.notes for placement in found[0]] == [(0,), (0,)]
+    assert [placement.span for placement in found[0]] == [(0.0, 1.0), (1.0, 2.0)]
+
+
+def test_the_smaller_share_of_a_note_falls_to_no_length():
+    times = [[(0.0, 1.8), (1.8, 2.0)]]
+    found = map_morae(mora_lines("あい"), times, [(0.0, 2.0)], "あい")
+    assert found[0][0].notes == (0,)
+    assert found[0][1].zero is True
+    assert found[0][1].span == (1.8, 1.8)
+
+
+def test_a_note_no_mora_reaches_is_given_to_the_one_before_and_doubted():
+    notes = [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]
+    found = map_morae(mora_lines("あい"), [[(0.0, 1.0), (2.0, 3.0)]], notes, "あい")
+    assert found[0][0].notes == (0, 1)
+    assert found[0][0].red is True
+    assert found[0][1].notes == (2,)
+
+
+def test_a_note_before_the_first_mora_is_given_to_it_and_doubted():
+    done = map_morae(mora_lines("あ"), [[(1.0, 2.0)]], [(0.0, 1.0), (1.0, 2.0)], "あ")
+    assert done[0][0].notes == (0, 1)
+    assert done[0][0].span == (0.0, 2.0)
+    assert done[0][0].red is True
+
+
+def test_a_note_after_the_last_mora_is_given_to_it_and_doubted():
+    done = map_morae(mora_lines("あ"), [[(0.0, 1.0)]], [(0.0, 1.0), (1.0, 2.0)], "あ")
+    assert done[0][0].notes == (0, 1)
+    assert done[0][0].span == (0.0, 2.0)
+    assert done[0][0].red is True
+
+
+def test_a_mora_that_covers_no_note_falls_to_no_length_without_doubt():
+    done = map_morae(mora_lines("あい"), [[(0.0, 1.0), (3.0, 3.5)]], [(0.0, 1.0)], "あい")
+    assert done[0][0].notes == (0,)
+    assert done[0][1].zero is True
+    assert done[0][1].red is False
+
+
+def test_a_flagged_line_is_doubted_whole():
+    done = map_morae(mora_lines("あい"), [[(0.0, 1.0), (1.0, 2.0)]], [(0.0, 1.0), (1.0, 2.0)], "あい", [True])
+    assert all(placement.red for placement in done[0])

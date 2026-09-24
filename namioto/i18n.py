@@ -110,6 +110,8 @@ CATALOGS: dict[str, dict[str, str]] = {
         "How long one request may take before it is given up on": "单个请求在被放弃前允许的时长",
         "External editor": "外部编辑器",
         "Command that opens a .krc, such as code; empty picks the platform's own": "打开 .krc 的命令，例如 code；留空则用平台自身的默认",
+        "Auto-align": "自动对齐",
+        "Re-align the lyrics when the .krc changes and the model's cached pass over the audio is there": "当 .krc 变化且模型对音频的缓存通过结果仍在时，自动重新对齐歌词",
         # field choices
         "mono": "单声道",
         "left": "左声道",
@@ -178,6 +180,7 @@ CATALOGS: dict[str, dict[str, str]] = {
         # align dialog
         "Align lyrics": "对齐歌词",
         "Align lyrics: put a time on every mora with the forced aligner": "对齐歌词：用强制对齐器给每个 mora 一个时间",
+        "Reusing the model's pass over the audio…": "复用模型对音频的通过结果…",
         "Which forced-alignment model to use": "使用哪个强制对齐模型",
         "Where the model runs": "模型运行的位置",
         "Snap the times to the beat grid, this many cells per quarter note": "把时间吸附到节拍网格，四分音符内的格数",
@@ -307,6 +310,8 @@ CATALOGS: dict[str, dict[str, str]] = {
         "Could not save: {error}": "无法保存：{error}",
         "Saved to {name}": "已保存到 {name}",
         "Lyrics reloaded from {name}": "已从 {name} 重新载入歌词",
+        "The lyrics changed — align again to move them onto the notes": "歌词已变化 — 再次对齐以把它们放到音符上",
+        "Re-aligning the lyrics…": "正在重新对齐歌词…",
         # main window
         "Namioto project (*{suffix})": "Namioto 工程 (*{suffix})",
         "Audio file ({patterns})": "音频文件（{patterns}）",

@@ -61,23 +61,31 @@ class Aligner(LoadingThread):
 
     def load(self) -> None:
         started = time.monotonic()
-        self.message.emit(tr("Loading the {model} model on {provider}\u2026", model=self.model, provider=self.provider))
-        directory = align.resolve_model(None, self.model, "ja", progress=self._downloading)
-        backend = align.OnnxBackend(directory / align.MODEL_FILE, provider=self.provider)
-        if self.chunk:
-            backend = align.ChunkedBackend(backend, progress=self.progress.emit)
-        dictionary, blank_id = align.load_dictionary(directory / align.VOCAB_FILE)
         lines = mora_lines(self.text)
         morae = sum(len(line.morae) for line in lines)
         self.message.emit(tr("Read {lines} lines, {morae} morae", lines=len(lines), morae=morae))
         audio = align.load_audio(self.path)
         seconds = len(audio) / align.SAMPLE_RATE
-        if self.chunk:
-            self.message.emit(tr("Aligning over {seconds:.1f}s of audio in chunks\u2026", seconds=seconds))
+        emission = align.load_emissions(self.path, self.model, self.provider, self.chunk)
+        directory = align.resolve_model(None, self.model, "ja", progress=self._downloading)
+        if emission is None:
+            self.message.emit(
+                tr("Loading the {model} model on {provider}\u2026", model=self.model, provider=self.provider)
+            )
+            backend = align.OnnxBackend(directory / align.MODEL_FILE, provider=self.provider)
+            if self.chunk:
+                backend = align.ChunkedBackend(backend, progress=self.progress.emit)
+                self.message.emit(tr("Aligning over {seconds:.1f}s of audio in chunks\u2026", seconds=seconds))
+            else:
+                self.message.emit(tr("Aligning over {seconds:.1f}s of audio in one pass\u2026", seconds=seconds))
+            emission = align.whole_emissions(backend, audio)
+            with suppress(OSError):
+                align.save_emissions(self.path, self.model, self.provider, self.chunk, emission)
         else:
-            self.message.emit(tr("Aligning over {seconds:.1f}s of audio in one pass\u2026", seconds=seconds))
+            self.message.emit(tr("Reusing the model's pass over the audio\u2026"))
+        dictionary, blank_id = align.load_dictionary(directory / align.VOCAB_FILE)
         segment = align.Segment(0.0, seconds, tuple(align_tokens(lines)))
-        found = align.align([segment], backend, dictionary, audio, blank_id=blank_id)[0]
+        found = align.align_whole(segment, emission, dictionary, blank_id=blank_id)
         self.message.emit(tr("Fitting the morae to the voice\u2026"))
         rows = align.correct_times(split(found.tokens, lines), audio)
         problems = self._problems(found, lines)

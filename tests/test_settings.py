@@ -225,6 +225,7 @@ def test_only_the_settings_without_a_control_keep_a_row() -> None:
         ("lyrics", "temperature"),
         ("lyrics", "timeout"),
         ("lyrics", "editor"),
+        ("lyrics", "auto_align"),
     }
     assert ("editor", "zoom_x") not in shown  # the wheel has it, so the window does not
     assert ("playback", "latency_ms") not in shown
