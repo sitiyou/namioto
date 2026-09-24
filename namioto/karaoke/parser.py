@@ -20,8 +20,8 @@ from namioto.karaoke.model import Chapter, KrcError, Line, Lyrics, Ruby, Word
 from namioto.karaoke.transforms import merge_words
 
 GRAMMAR = r"""
-start: _NEWLINE? chapter (_NEWLINE? "---" "-"* _NEWLINE?  chapter)* _NEWLINE?
-chapter: chapter_line (_NEWLINE chapter_line)*
+start: _NEWLINE? chapter (_SEP chapter)*
+chapter: chapter_line (_NEWLINE chapter_line)* _NEWLINE?
 chapter_line: line_tag? words
 line_tag: "{" INTEGER "}"
 words: (word|word_ruby|word_mora)+
@@ -38,6 +38,9 @@ WORD: /[^#\n\[\]\(\)\.\-\,{}]/
 INTEGER: /\d+/
 
 _NEWLINE: /\n+/
+# one token for a chapter break, its leading newline included, so the grammar stays LALR: split off,
+# the newline is the lookahead for both ending a chapter and continuing it
+_SEP: /\n+-{3,}-*\n*/
 
 %ignore /[\f\r\xa0]/
 %ignore COMMENT
@@ -84,7 +87,7 @@ class LyricsTransformer(Transformer):
         return Lyrics(items)
 
 
-parser = Lark(GRAMMAR, start="start")
+parser = Lark(GRAMMAR, start="start", parser="lalr")
 
 
 def parse(text: str, merge: bool = True) -> Lyrics:
