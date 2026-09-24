@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from namioto.karaoke import Ruby, Word, dumps, parse
+from namioto.karaoke import Ruby, Unit, Word, dumps, parse
 
 SAMPLE = """{2}春[はる]の(風)[かぜ]が吹[ふ]く
 hello.3 world
@@ -77,12 +77,12 @@ def test_an_override_and_a_ruby_show_up():
 
 def test_a_ruby_added_by_hand_shows_up():
     lyrics = parse("星")
-    lyrics.chapters[0].lines[0].words[0].set_ruby(Ruby([[Word("ほ"), Word("し")]]))
+    lyrics.chapters[0].lines[0].words[0].set_ruby(Ruby([[Unit(Word("ほ")), Unit(Word("し"))]]))
     assert dumps(lyrics) == "星[ほし]"
 
 
 def test_a_word_that_cannot_be_written_is_refused():
     lyrics = parse("あ")
-    lyrics.chapters[0].lines[0].words[0].text = "a#b"
+    lyrics.chapters[0].lines[0].words[0].base = Word("a#b")
     with pytest.raises(ValueError):
         dumps(lyrics)

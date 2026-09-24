@@ -16,7 +16,7 @@ from __future__ import annotations
 from lark import Lark, Transformer
 from lark.exceptions import LarkError, VisitError
 
-from namioto.karaoke.model import Chapter, KrcError, Line, Lyrics, Ruby, Word
+from namioto.karaoke.model import Chapter, Group, KrcError, Line, Lyrics, Ruby, Unit, Word
 from namioto.karaoke.transforms import merge_words
 
 GRAMMAR = r"""
@@ -56,8 +56,8 @@ class LyricsTransformer(Transformer):
     def chapter_line(self, items):
         if len(items) == 1:
             return Line(items[0])
-        track, words = items
-        return Line(words, track=track)
+        track, units = items
+        return Line(units, track=track)
 
     def words(self, items):
         return items
@@ -66,9 +66,10 @@ class LyricsTransformer(Transformer):
         return Ruby(items)
 
     def word(self, items):
-        grouped = any(item.type in ("OPEN", "CLOSE") for item in items)
-        text = "".join(str(item) for item in items if item.type not in ("OPEN", "CLOSE"))
-        return Word(text, grouped=grouped)
+        chars = [str(item) for item in items if item.type not in ("OPEN", "CLOSE")]
+        if any(item.type in ("OPEN", "CLOSE") for item in items):
+            return Unit(Group([Word(char) for char in chars], explicit=True))
+        return Unit(Word(chars[0]))
 
     def chapter(self, items):
         return Chapter(items)

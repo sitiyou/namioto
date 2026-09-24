@@ -40,7 +40,7 @@ from namioto.analysis.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
 from namioto.channels import set_field as channel_set_field
-from namioto.karaoke import KrcError, conflicts, group_morae, mora_lines, note_counts, text_key, with_counts
+from namioto.karaoke import KrcError, conflicts, group_morae, mora_lines, text_key
 from namioto.playback import note_frequency
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog
@@ -941,7 +941,6 @@ class MainWindow(QMainWindow):
         except OSError as error:
             self.statusBar().showMessage(i18n.tr("MIDI file could not be written: {error}", error=error))
             return False
-        self._write_lyrics()
         self.statusBar().showMessage(i18n.tr("Exported {name} — {notes} notes", name=Path(path).name, notes=len(notes)))
         return True
 
@@ -952,23 +951,6 @@ class MainWindow(QMainWindow):
         if not lines or not any(span[0] is not None for row in times for span in row):
             return []
         return conflicts(list(lines), [list(row) for row in times], self.view.note_seconds())
-
-    def _write_lyrics(self) -> None:
-        """Put every mora's note count back into the `.krc` as its `.N`, once the conflicts are gone."""
-        path = self.lyrics_path()
-        lines = self.view.lyric_lines
-        if path is None or not lines or not self.lyrics_text:
-            return
-        counts = note_counts(list(lines), [list(row) for row in self.view.lyric_times], self.view.note_seconds())
-        try:
-            text = with_counts(self.lyrics_text, counts)
-            if text != self.lyrics_text:
-                lyrics.save(path, text)
-        except (KrcError, OSError) as error:
-            self.statusBar().showMessage(str(error))
-            return
-        self.lyrics_text = text
-        self._lyric_key = text_key(text)
 
     def _open_transcription(self) -> None:
         """Ask GAME for the singing voice's notes, over the audio the session is already listening to."""

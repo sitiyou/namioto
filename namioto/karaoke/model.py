@@ -1,8 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""The `.krc` model: words, rubies, lines, chapters and the mora they add up to.
+"""The `.krc` model: words, groups, units, rubies, lines, chapters and the mora they add up to.
 
-A word carries its text, the ruby (`Ruby`) it may have and the `.N` that was written for it, if any.
-Mora is never stored - `Word.mora`, `Word.base_mora` and `Ruby.total_mora` are derived - so a change
+A `Word` is a single character, a `Group` is a run of them - the `(...)` the syntax writes, or the
+run a normalization pass folds together. A `Unit` is what a ruby and a `.N` attach to: a base (a
+`Word` or a `Group`) with an optional reading and an optional mora override. Lines hold units,
+chapters hold lines, and `Lyrics` holds chapters.
+
+Mora is never stored - `Unit.mora`, `Unit.base_mora` and `Ruby.total_mora` are derived - so a change
 to the text, the ruby or the override is reflected everywhere at once.
 
 Qt-free.
@@ -38,23 +42,69 @@ def calc_mora(text: str) -> int:
 
 @dataclass
 class Word:
-    """One word: its text, its ruby, the mora its `.N` forces and whether it was grouped."""
+    """One character: the atom a group is made of."""
 
-    text: str
+    char: str
+
+    @property
+    def text(self) -> str:
+        return self.char
+
+    def is_kanji(self) -> bool:
+        return bool(KANJI.match(self.char))
+
+    def is_latin(self) -> bool:
+        return bool(LATIN.fullmatch(self.char))
+
+
+@dataclass
+class Group:
+    """A run of words: the syntax's `(...)`, or what a normalization pass folds into one base.
+
+    `explicit` marks the ones the file wrote between parentheses, which `dumps` writes back; a group
+    a pass folded together is written plain whenever its text does not need the parentheses.
+    """
+
+    words: list[Word]
+    explicit: bool = False
+
+    @property
+    def text(self) -> str:
+        return "".join(word.char for word in self.words)
+
+    def is_kanji(self) -> bool:
+        return bool(self.words) and all(word.is_kanji() for word in self.words)
+
+    def is_latin(self) -> bool:
+        return bool(self.words) and all(word.is_latin() for word in self.words)
+
+
+@dataclass
+class Unit:
+    """A base with what annotates it: its reading (`Ruby`) and its `.N` (`override`)."""
+
+    base: Word | Group
     ruby: Ruby | None = None
     override: int | None = None
-    grouped: bool = False
+
+    @property
+    def text(self) -> str:
+        return self.base.text
+
+    @property
+    def grouped(self) -> bool:
+        return isinstance(self.base, Group)
 
     @property
     def base_mora(self) -> int:
-        return calc_mora(self.text) if self.ruby is None else self.ruby.total_mora(base=True)
+        return self.ruby.total_mora(base=True) if self.ruby is not None else calc_mora(self.text)
 
     @property
     def natural_mora(self) -> int:
         """The mora the text or the ruby gives, before a written `.N`, a Latin run counting one."""
         if self.ruby is not None:
             return self.ruby.total_mora()
-        return 1 if self.is_latin() else calc_mora(self.text)
+        return 1 if self.base.is_latin() else calc_mora(self.text)
 
     @property
     def mora(self) -> int:
@@ -64,8 +114,14 @@ class Word:
     def is_ruby_mora(self) -> bool:
         return self.ruby is not None and self.override is None
 
+    def is_kanji(self) -> bool:
+        return self.base.is_kanji()
+
+    def is_latin(self) -> bool:
+        return self.base.is_latin()
+
     def set_ruby(self, ruby: Ruby) -> None:
-        if any(word.ruby is not None for part in ruby.parts for word in part):
+        if any(unit.ruby is not None for part in ruby.parts for unit in part):
             raise KrcError("a ruby may not carry a ruby of its own")
         self.ruby = ruby
 
@@ -75,12 +131,6 @@ class Word:
         if self.base_mora == mora:
             warnings.warn(f"overriding mora to the same value {mora} for word '{self.text}'", stacklevel=2)
         self.override = mora
-
-    def is_kanji(self) -> bool:
-        return bool(KANJI.match(self.text))
-
-    def is_latin(self) -> bool:
-        return bool(LATIN.fullmatch(self.text))
 
     def __str__(self) -> str:
         text = self.text
@@ -93,29 +143,37 @@ class Word:
 
 @dataclass
 class Ruby:
-    """The ruby of a word: its comma-separated parts, each a run of words."""
+    """The ruby of a unit: its comma-separated parts, each a run of units."""
 
-    parts: list[list[Word]]
+    parts: list[list[Unit]]
 
     def total_mora(self, base: bool = False) -> int:
-        return sum(word.base_mora if base else word.mora for part in self.parts for word in part)
+        return sum(unit.base_mora if base else unit.mora for part in self.parts for unit in part)
 
     def __str__(self) -> str:
-        return "".join(str(word) for part in self.parts for word in part)
+        return "".join(str(unit) for part in self.parts for unit in part)
 
 
 @dataclass
 class Line:
-    """One line of words, with the track it is sung on."""
+    """One line of units, with the track it is sung on."""
 
-    words: list[Word]
+    units: list[Unit]
     track: int = 1
 
+    @property
+    def words(self) -> list[Unit]:
+        return self.units
+
+    @words.setter
+    def words(self, units: list[Unit]) -> None:
+        self.units = units
+
     def total_mora(self, base: bool = False) -> int:
-        return sum(word.base_mora if base else word.mora for word in self.words)
+        return sum(unit.base_mora if base else unit.mora for unit in self.units)
 
     def __str__(self) -> str:
-        text = "".join(str(word) for word in self.words)
+        text = "".join(str(unit) for unit in self.units)
         return f"{text} | {self.total_mora()}"
 
 
@@ -142,8 +200,8 @@ class Lyrics:
 def validate(lyrics: Lyrics) -> None:
     for chapter in lyrics.chapters:
         for line in chapter.lines:
-            for word in line.words:
-                if word.ruby is not None and len(word.ruby.parts) > 1 and len(word.ruby.parts) != len(word.text):
+            for unit in line.units:
+                if unit.ruby is not None and len(unit.ruby.parts) > 1 and len(unit.ruby.parts) != len(unit.text):
                     raise KrcError(
-                        f"the ruby of '{word.text}' has {len(word.ruby.parts)} parts for {len(word.text)} characters"
+                        f"the ruby of '{unit.text}' has {len(unit.ruby.parts)} parts for {len(unit.text)} characters"
                     )

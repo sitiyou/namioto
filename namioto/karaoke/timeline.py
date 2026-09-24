@@ -16,10 +16,11 @@ Qt-free.
 from __future__ import annotations
 
 import hashlib
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from namioto.karaoke.model import KrcError, Line, Word
+from namioto.karaoke.model import Group, KrcError, Line, Unit, Word
 from namioto.karaoke.parser import parse
 from namioto.karaoke.writer import dumps
 from namioto.utils import kana_tokens
@@ -248,7 +249,7 @@ def group_morae(
     words = line.words[indices[0] : indices[-1] + 1]
     line.words = [
         *line.words[: indices[0]],
-        Word("".join(word.text for word in words), grouped=True),
+        Unit(Group([Word(char) for char in "".join(word.text for word in words)])),
         *line.words[indices[-1] + 1 :],
     ]
     grouped = dumps(lyrics)
@@ -338,3 +339,69 @@ def _size(kana: str) -> int:
     if kana in OWN_MORA:
         return 1
     return len("".join(kana_tokens(kana)))
+
+
+def assign_by_order(blocks: int, notes: int) -> list[int | None]:
+    """Pair the blocks and the notes in order, one for one, until the shorter side runs out."""
+    return [index if index < notes else None for index in range(blocks)]
+
+
+def assign_by_time(
+    blocks: Sequence[tuple[float | None, float | None]], notes: Sequence[tuple[float, float]]
+) -> list[int | None]:
+    """Match every block to one note, in order, by the note its aligned onset falls in.
+
+    A block takes the note holding its start, or the nearest note when it lands in a rest, and the
+    whole match is the cheapest monotone one: every block gets a note, a note may take several
+    blocks, and a note no block reaches is skipped. Monotonicity keeps noisy times from reordering
+    the blocks, and the search passes over an instrumental note between two sung ones rather than
+    claiming it. None means there was no note at all to give it.
+    """
+    if not blocks:
+        return []
+    if not notes:
+        return [None] * len(blocks)
+    count, total = len(blocks), len(notes)
+    inf = math.inf
+    reach = [[inf] * (total + 1) for _ in range(count + 1)]  # blocks[:i] among notes[:j], any end
+    last = [[inf] * (total + 1) for _ in range(count + 1)]  # the same, with block i-1 on note j-1
+    opens = [[False] * (total + 1) for _ in range(count + 1)]  # last came from opening a new note
+    takes = [[False] * (total + 1) for _ in range(count + 1)]  # reach came from last, not a skip
+    for column in range(total + 1):
+        reach[0][column] = 0.0
+    for i in range(1, count + 1):
+        for j in range(1, total + 1):
+            cost = _onset_distance(blocks[i - 1], notes[j - 1])
+            grouped = last[i - 1][j] if i > 1 else inf
+            opened = reach[i - 1][j - 1]
+            opens[i][j] = opened < grouped
+            last[i][j] = cost + (opened if opens[i][j] else grouped)
+            takes[i][j] = last[i][j] <= reach[i][j - 1]
+            reach[i][j] = min(reach[i][j - 1], last[i][j])
+    found: list[int | None] = [None] * count
+    i, j, on_last = count, total, False
+    while i > 0:
+        if not on_last:
+            if not takes[i][j]:
+                j -= 1  # the note takes no block, so step past it
+                continue
+            on_last = True
+            continue
+        found[i - 1] = j - 1
+        opened = opens[i][j]
+        i -= 1
+        if opened:
+            j -= 1
+            on_last = False  # back to the note before, still unassigned
+    return found
+
+
+def _onset_distance(span: tuple[float | None, float | None], note: tuple[float, float]) -> float:
+    """How far a block's onset is from a note: zero inside it, else the gap to its nearer edge."""
+    start = span[0]
+    if start is None:
+        return 0.0
+    low, high = note
+    if low <= start <= high:
+        return 0.0
+    return min(abs(start - low), abs(start - high))

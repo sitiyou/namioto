@@ -10,6 +10,8 @@ import pytest
 from namioto.karaoke import (
     KrcError,
     align_tokens,
+    assign_by_order,
+    assign_by_time,
     conflicts,
     group_morae,
     mora_lines,
@@ -285,3 +287,42 @@ def test_with_counts_leaves_the_readings_alone(text):
     assert [mora.ruby for line in again for mora in line.morae] == [
         mora.ruby for line in mora_lines(text) for mora in line.morae
     ]
+
+
+def test_blocks_pair_with_the_notes_in_order_until_one_runs_out():
+    assert assign_by_order(3, 5) == [0, 1, 2]
+    assert assign_by_order(5, 3) == [0, 1, 2, None, None]
+    assert assign_by_order(0, 3) == []
+    assert assign_by_order(3, 0) == [None, None, None]
+
+
+def test_an_alignment_puts_each_block_on_the_note_holding_its_onset():
+    notes = [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 4.0)]
+    assert assign_by_time(notes, notes) == [0, 1, 2, 3]
+
+
+def test_a_note_no_block_reaches_is_skipped():
+    notes = [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]
+    assert assign_by_time([(0.0, 0.5), (2.0, 2.5)], notes) == [0, 2]
+
+
+def test_several_blocks_inside_one_note_group_on_it():
+    notes = [(0.0, 4.0)]
+    assert assign_by_time([(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)], notes) == [0, 0, 0]
+
+
+def test_a_block_in_a_rest_takes_the_nearest_note():
+    assert assign_by_time([(2.0, 2.5)], [(0.0, 1.0), (3.0, 4.0)]) == [1]
+
+
+def test_every_block_gets_a_note_and_the_match_is_monotone():
+    notes = [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]
+    noisy = [(0.5, 0.6), (2.5, 2.6), (1.5, 1.6)]  # out of order: the times cannot reorder the blocks
+    found = assign_by_time(noisy, notes)
+    assert all(index is not None for index in found)
+    assert found == sorted(found)
+
+
+def test_no_notes_leaves_every_block_unassigned():
+    assert assign_by_time([(0.0, 1.0)], []) == [None]
+    assert assign_by_time([], [(0.0, 1.0)]) == []

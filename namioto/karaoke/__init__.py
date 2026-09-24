@@ -7,12 +7,14 @@ one, and `timeline` turns a parsed lyric into the morae the editor draws and the
 whole package is Qt-free; the names it re-exports are its public surface.
 """
 
-from namioto.karaoke.model import Chapter, KrcError, Line, Lyrics, Ruby, Word
+from namioto.karaoke.model import Chapter, Group, KrcError, Line, Lyrics, Ruby, Unit, Word
 from namioto.karaoke.parser import parse
 from namioto.karaoke.timeline import (
     Mora,
     MoraLine,
     align_tokens,
+    assign_by_order,
+    assign_by_time,
     conflicts,
     group_morae,
     mora_lines,
@@ -28,14 +30,18 @@ from namioto.karaoke.writer import dumps
 
 __all__ = [
     "Chapter",
+    "Group",
     "KrcError",
     "Line",
     "Lyrics",
     "Mora",
     "MoraLine",
     "Ruby",
+    "Unit",
     "Word",
     "align_tokens",
+    "assign_by_order",
+    "assign_by_time",
     "conflicts",
     "dumps",
     "flatten_ruby",

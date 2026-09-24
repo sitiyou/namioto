@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import pytest
 
-from namioto.karaoke import Lyrics, flatten_ruby, merge_words, parse
+from namioto.karaoke import Group, Lyrics, Unit, Word, flatten_ruby, merge_words, parse
 
 SAMPLE = """青[あお]い(星)[ほし]見[み]つめ
 ねえ# comment
@@ -130,3 +130,24 @@ def test_an_overridden_grouped_word_keeps_its_base_mora():
     assert [word.text for word in words] == ["F", "LO", "WER"]
     assert [word.base_mora for word in words] == [1, 2, 3]
     assert [word.mora for word in words] == [1, 1, 1]
+
+
+def test_a_word_is_one_character_and_parentheses_make_an_explicit_group():
+    units = parse("(AB)c").chapters[0].lines[0].units
+    assert isinstance(units[0], Unit)
+    assert isinstance(units[0].base, Group) and units[0].base.explicit
+    assert [word.char for word in units[0].base.words] == ["A", "B"]
+    assert isinstance(units[1].base, Word) and units[1].base.char == "c"
+
+
+def test_a_kanji_run_with_a_ruby_is_an_auto_group():
+    unit = parse("季節[き,せつ]").chapters[0].lines[0].units[0]
+    assert isinstance(unit.base, Group) and not unit.base.explicit
+    assert unit.text == "季節"
+
+
+def test_parentheses_around_one_word_change_nothing():
+    plain = parse("あ").chapters[0].lines[0].units[0]
+    grouped = parse("(あ)").chapters[0].lines[0].units[0]
+    assert grouped.text == plain.text
+    assert grouped.mora == plain.mora

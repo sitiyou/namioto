@@ -4833,7 +4833,7 @@ def test_exporting_is_blocked_until_the_lyrics_sit_on_the_notes(own_window, monk
     assert "do not line up" in own_window.statusBar().currentMessage()
 
 
-def test_exporting_writes_the_note_count_back_as_a_dot(own_window, monkeypatch, tmp_path) -> None:
+def test_exporting_leaves_the_krc_alone(own_window, monkeypatch, tmp_path) -> None:
     (tmp_path / "song.krc").write_text("あん\n", encoding="utf-8")
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = None
@@ -4846,7 +4846,7 @@ def test_exporting_writes_the_note_count_back_as_a_dot(own_window, monkeypatch, 
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "out"), "MIDI"))
 
     assert own_window._on_export_midi() is True
-    assert (tmp_path / "song.krc").read_text(encoding="utf-8") == "あん.2"
+    assert (tmp_path / "song.krc").read_text(encoding="utf-8") == "あん\n"
 
 
 def test_making_one_word_writes_the_group_and_its_note_count_into_the_krc(own_window, monkeypatch, tmp_path) -> None:
@@ -4866,7 +4866,7 @@ def test_making_one_word_writes_the_group_and_its_note_count_into_the_krc(own_wi
 
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "out"), "MIDI"))
     assert own_window._on_export_midi() is True
-    assert (tmp_path / "song.krc").read_text(encoding="utf-8") == "(コー).1(ヒー).1"
+    assert (tmp_path / "song.krc").read_text(encoding="utf-8") == "(コー)(ヒー)"
 
 
 def test_a_group_that_cannot_be_read_the_same_is_refused(own_window, tmp_path) -> None:

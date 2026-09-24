@@ -2,87 +2,105 @@
 """Optional passes over a parsed `.krc`, each one `Lyrics -> Lyrics` and free of side effects.
 
 A pass returns a new model and leaves its argument alone, so the caller decides whether to use it.
+`merge_words` is the normalization pass: it folds each run of kanji, or of Latin letters, into a
+`Group`, and recurses into rubies, which is the "auto `()`" the syntax would otherwise have to spell
+out. `flatten_ruby` expands a ruby into one unit per mora, the shape the timeline reads.
 """
 
 from __future__ import annotations
 
-from namioto.karaoke.model import Chapter, Line, Lyrics, Ruby, Word, validate
+from namioto.karaoke.model import Chapter, Group, Line, Lyrics, Ruby, Unit, Word, validate
 
 
 def merge_words(lyrics: Lyrics) -> Lyrics:
-    """Fold each run of kanji, or of Latin letters, into the word that carries the ruby."""
+    """Fold each run of kanji, or of Latin letters, into the group that carries the ruby."""
     chapters = []
     for chapter in lyrics.chapters:
-        lines = [Line([_merge_ruby(word) for word in _fold(line.words)], track=line.track) for line in chapter.lines]
+        lines = [Line([_merge_ruby(unit) for unit in _fold(line.units)], track=line.track) for line in chapter.lines]
         chapters.append(Chapter(lines))
     merged = Lyrics(chapters)
     validate(merged)
     return merged
 
 
-def _merge_ruby(word: Word) -> Word:
-    if word.ruby is None:
-        return word
-    return Word(word.text, Ruby([_fold(part) for part in word.ruby.parts]), word.override, word.grouped)
+def _merge_ruby(unit: Unit) -> Unit:
+    if unit.ruby is None:
+        return unit
+    return Unit(unit.base, Ruby([_fold(part) for part in unit.ruby.parts]), unit.override)
 
 
-def _fold(words: list[Word]) -> list[Word]:
-    merged: list[Word] = []
-    for word in _fold_kanji(words):
+def _fold(units: list[Unit]) -> list[Unit]:
+    merged: list[Unit] = []
+    for unit in _fold_kanji(units):
         if (
             merged
-            and not word.grouped
-            and not merged[-1].grouped
-            and word.is_latin()
+            and not _explicit(unit)
+            and not _explicit(merged[-1])
+            and unit.is_latin()
             and merged[-1].is_latin()
             and merged[-1].ruby is None
         ):
             previous = merged.pop()
-            override = word.override if word.override is not None else previous.override
-            word = Word(previous.text + word.text, word.ruby, override, word.grouped)
-        merged.append(word)
+            override = unit.override if unit.override is not None else previous.override
+            unit = Unit(Group([*_base_words(previous.base), *_base_words(unit.base)]), unit.ruby, override)
+        merged.append(unit)
     return merged
 
 
-def _fold_kanji(words: list[Word]) -> list[Word]:
-    pending = list(words)
-    folded: list[Word] = []
+def _explicit(unit: Unit) -> bool:
+    return isinstance(unit.base, Group) and unit.base.explicit
+
+
+def _fold_kanji(units: list[Unit]) -> list[Unit]:
+    pending = list(units)
+    folded: list[Unit] = []
     while pending:
-        word = pending.pop()
-        if word.ruby is not None and word.is_kanji():
-            text = word.text
-            while pending and pending[-1].is_kanji() and pending[-1].ruby is None:
-                text = pending.pop().text + text
-            if text != word.text:
-                word = Word(text, word.ruby, word.override, word.grouped)
-        folded.insert(0, word)
+        unit = pending.pop()
+        if unit.ruby is not None and unit.is_kanji():
+            explicit = _explicit(unit)
+            words = _base_words(unit.base)
+            grew = False
+            while pending and pending[-1].ruby is None and pending[-1].is_kanji():
+                words = _base_words(pending.pop().base) + words
+                grew = True
+            if grew:
+                unit = Unit(Group(words, explicit=explicit), unit.ruby, unit.override)
+        folded.insert(0, unit)
     return folded
 
 
+def _base_words(base: Word | Group) -> list[Word]:
+    return list(base.words) if isinstance(base, Group) else [base]
+
+
 def flatten_ruby(lyrics: Lyrics) -> Lyrics:
-    """Give every ruby word one mora, by writing one word per mora of its ruby."""
+    """Give every ruby word one mora, by writing one unit per mora of its ruby."""
     chapters = [Chapter([_flatten_line(line) for line in chapter.lines]) for chapter in lyrics.chapters]
     return Lyrics(chapters)
 
 
 def _flatten_line(line: Line) -> Line:
-    words: list[Word] = []
-    for word in line.words:
-        if word.ruby is None or not word.is_ruby_mora:
-            words.append(word)
+    units: list[Unit] = []
+    for unit in line.units:
+        if unit.ruby is None or not unit.is_ruby_mora:
+            units.append(unit)
             continue
 
-        if word.mora == 1:
-            part = word.ruby.parts[0]
+        if unit.mora == 1:
+            part = unit.ruby.parts[0]
             if len(part) == 1:
-                words.append(word)
+                units.append(unit)
                 continue
 
-        for part_idx, part in enumerate(word.ruby.parts):
-            part_text = word.text if len(word.ruby.parts) == 1 else word.text[part_idx]
+        for part_idx, part in enumerate(unit.ruby.parts):
+            part_text = unit.text if len(unit.ruby.parts) == 1 else unit.text[part_idx]
             for i, inner in enumerate(part):
                 text = ("#" * bool(part_idx != 0) + part_text) if i == 0 else "#"
-                flat = Word(text)
+                flat = Unit(_base(text))
                 flat.set_ruby(Ruby([[inner]]))
-                words.append(flat)
-    return Line(words, track=line.track)
+                units.append(flat)
+    return Line(units, track=line.track)
+
+
+def _base(text: str) -> Word | Group:
+    return Word(text) if len(text) == 1 else Group([Word(char) for char in text])
