@@ -68,7 +68,15 @@ def test_a_ruby_is_cut_into_one_token_per_mora():
 def test_a_label_is_the_word_itself_without_a_ruby():
     assert [mora.label for line in mora_lines("だから") for mora in line.morae] == ["だ", "か", "ら"]
     assert [mora.label for line in mora_lines("hello") for mora in line.morae] == ["hello"]
-    assert [mora.label for line in mora_lines("きょう") for mora in line.morae] == ["き", "う"]
+    # the small kana stays one mora with the kana before it, and the block reads the whole surface
+    assert [mora.label for line in mora_lines("きょう") for mora in line.morae] == ["きょ", "う"]
+    assert [mora.label for line in mora_lines("ワイドショー") for mora in line.morae] == [
+        "ワ",
+        "イ",
+        "ド",
+        "ショ",
+        "ー",
+    ]
 
 
 def test_a_label_puts_the_ruby_beside_the_base_unit_it_reads():
@@ -238,6 +246,27 @@ def test_a_group_of_morae_becomes_one_word_that_covers_one_note():
     assert conflicts(lines, folded, notes) == []  # one word may hold one note
     assert note_counts(lines, folded, notes) == [[1, 1]]
     assert with_counts(text, note_counts(lines, folded, notes)) == "(コー).1(ヒー).1"
+
+
+def test_a_group_steps_over_a_small_kana_that_is_no_mora_of_its_own():
+    # ショ is one mora of the two kana シ and ョ, so grouping it with ー takes both written words
+    times = [[(0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 4.0), (4.0, 5.0)]]
+    text, folded = group_morae("ワイドショー", times, 0, 3, 4)
+    assert text == "ワイド(ショー)"
+    assert folded == [[(0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 5.0)]]
+    assert [mora.token for mora in mora_lines(text)[0].morae] == ["wa", "i", "do", "shoo"]
+
+
+def test_a_group_steps_over_a_small_kana_but_still_takes_whole_words():
+    with pytest.raises(KrcError):
+        group_morae("あ、い", [[(0.0, 1.0), (1.0, 2.0)]], 0, 0, 1)  # the 、 is no part of a group
+
+
+def test_grouping_a_mora_of_no_length_hands_it_the_previous_note_span():
+    # い has no length of its own and nothing in front of it, so あ takes it in
+    text, folded = group_morae("あい", [[(0.0, 1.0), (1.0, 1.0)]], 0, 0, 1)
+    assert text == "(あい)"
+    assert folded == [[(0.0, 1.0)]]  # the group takes the previous note's span
 
 
 def test_grouping_refuses_a_ruby_a_lone_mora_and_times_that_do_not_count_them():

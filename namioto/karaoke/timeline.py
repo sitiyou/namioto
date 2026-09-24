@@ -234,7 +234,13 @@ def group_morae(
         if index is None:
             raise KrcError("a group cannot take in a mora that a ruby reads")
         indices.append(index)
-    if indices != list(range(indices[0], indices[0] + len(indices))):
+    # a small kana is no mora of its own: it rides in the word before it, so the range may step
+    # over it and the group still takes whole words
+    covered = set(indices)
+    stepped = (
+        line.words[index].text in SMALL_KANA for index in range(indices[0], indices[-1] + 1) if index not in covered
+    )
+    if not all(stepped):
         raise KrcError("a group takes whole words next to each other")
 
     tokens = [[mora.token for mora in _row(other)[0].morae] for other in lines]
@@ -288,6 +294,9 @@ def _row(line: Line) -> tuple[MoraLine, list[Word]]:
             if kana in SMALL_KANA:
                 if units:
                     units[-1][1] += kana
+                    if not units[-1][2]:
+                        # a plain surface takes the small kana too, so its block reads ショ, not シ
+                        units[-1][0] += kana
                 continue
             if word.natural_mora == 0:
                 continue
