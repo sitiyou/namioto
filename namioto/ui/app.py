@@ -18,7 +18,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QByteArray, QEvent, QLibraryInfo, QProcess, QTimer, QTranslator, pyqtSignal
+from PyQt6.QtCore import QByteArray, QEvent, QLibraryInfo, QProcess, QThread, QTimer, QTranslator, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
@@ -170,6 +170,38 @@ class SongLoader(LoadingThread):
         self.loaded.emit(*load_song(self.path))
 
 
+def _map_lyrics(lines, times, notes, text, aligned):
+    if notes:
+        placements = map_morae(lines, times, notes, text, aligned=aligned)
+        spans = [[placement.span for placement in row] for row in placements]
+        red = [[placement.red for placement in row] for row in placements]
+    else:
+        spans = [list(row) for row in times]
+        red = [[False] * len(row) for row in times]
+    return spans, red
+
+
+class LyricMapper(QThread):
+    mapped = pyqtSignal(object)
+    failed = pyqtSignal(str)
+
+    def __init__(self, revision, lines, times, notes, text, aligned, parent=None):
+        super().__init__(parent)
+        self.revision = revision
+        self.lines = lines
+        self.times = times
+        self.notes = notes
+        self.text = text
+        self.aligned = aligned
+
+    def run(self) -> None:
+        try:
+            spans, red = _map_lyrics(self.lines, self.times, self.notes, self.text, self.aligned)
+            self.mapped.emit((self.revision, self.lines, spans, red, self.times))
+        except Exception as error:
+            self.failed.emit(f"{type(error).__name__}: {error}")
+
+
 class MainWindow(QMainWindow):
     def __init__(self, settings=None, overrides: dict | None = None):
         super().__init__()
@@ -200,6 +232,9 @@ class MainWindow(QMainWindow):
         self._lyric_error = ""
         self._auto_align_thread: Aligner | None = None
         self._auto_align_key = ""
+        self._lyric_map_thread: LyricMapper | None = None
+        self._lyric_map_pending = None
+        self._lyric_map_revision = 0
         self.loader: SpectrumLoader | None = None
         self.tempo_loader: TempoLoader | None = None
         self._tempo_manual = False
@@ -318,7 +353,7 @@ class MainWindow(QMainWindow):
 
         self.view.notes_changed.connect(self._update_status)
         self.view.notes_changed.connect(self._mark_dirty)
-        self.view.notes_changed.connect(self._remap_lyrics)
+        self.view.notes_changed.connect(self._remap_lyrics_async)
         self.view.channels_changed.connect(self._on_channels_changed)
         self.view.active_channel_changed.connect(self._on_active_channel_changed)
         self.transport.channels.toggled.connect(self.channel_panel.setVisible)
@@ -1031,19 +1066,72 @@ class MainWindow(QMainWindow):
         The aligned times are what is mapped; without notes there is nothing to map onto, so they
         are drawn as they came, and without times the morae and the notes pair one for one.
         """
+        self._lyric_map_revision += 1
+        self._lyric_map_pending = None
         lines = list(self.view.lyric_lines if lines is None else lines)
         times = self._align_times
         if times is None or len(times) != len(lines):
             times = [[(None, None)] * len(line.morae) for line in lines]
-        notes = self._mapped_notes()
-        if notes:
-            aligned = any(span[0] is not None for row in times for span in row)
-            placements = map_morae(lines, times, notes, self.lyrics_text, aligned=aligned)
-            spans = [[placement.span for placement in row] for row in placements]
-            red = [[placement.red for placement in row] for row in placements]
-        else:
-            spans = [list(row) for row in times]
-            red = [[False] * len(row) for row in times]
+        spans, red = _map_lyrics(
+            lines,
+            times,
+            self._mapped_notes(),
+            self.lyrics_text,
+            any(span[0] is not None for row in times for span in row),
+        )
+        self._apply_lyric_mapping(lines, spans, red, times)
+
+    def _remap_lyrics_async(self) -> None:
+        if not self.view.lyric_lines:
+            self._remap_lyrics()
+            return
+        lines = tuple(self.view.lyric_lines)
+        times = self._align_times
+        if times is None or len(times) != len(lines):
+            times = [[(None, None)] * len(line.morae) for line in lines]
+        snapshot = (
+            lines,
+            tuple(tuple(row) for row in times),
+            tuple(self._mapped_notes()),
+            self.lyrics_text,
+            any(span[0] is not None for row in times for span in row),
+        )
+        self._lyric_map_revision += 1
+        request = (self._lyric_map_revision, snapshot)
+        if self._lyric_map_thread is not None:
+            self._lyric_map_pending = request
+            return
+        self._start_lyric_mapper(request)
+
+    def _start_lyric_mapper(self, request) -> None:
+        revision, (lines, times, notes, text, aligned) = request
+        thread = LyricMapper(revision, lines, times, notes, text, aligned, self)
+        thread.mapped.connect(self._on_lyric_mapping)
+        thread.failed.connect(self._on_lyric_mapping_failed)
+        thread.finished.connect(partial(self._on_lyric_mapper_finished, thread))
+        thread.finished.connect(thread.deleteLater)
+        self._lyric_map_thread = thread
+        thread.start()
+
+    def _on_lyric_mapping(self, result) -> None:
+        revision, lines, spans, red, times = result
+        if revision != self._lyric_map_revision:
+            return
+        self._apply_lyric_mapping(lines, spans, red, times)
+
+    def _on_lyric_mapping_failed(self, message: str) -> None:
+        self.statusBar().showMessage(message)
+
+    def _on_lyric_mapper_finished(self, thread) -> None:
+        if thread is not self._lyric_map_thread:
+            return
+        self._lyric_map_thread = None
+        request = self._lyric_map_pending
+        self._lyric_map_pending = None
+        if request is not None:
+            self._start_lyric_mapper(request)
+
+    def _apply_lyric_mapping(self, lines, spans, red, times) -> None:
         self.view.load_lyrics(lines, spans, red, raw=[list(row) for row in times])
         self.mora_strip.setVisible(any(span[0] is not None for row in spans for span in row))
 
@@ -1195,6 +1283,9 @@ class MainWindow(QMainWindow):
         if self._auto_align_thread is not None:
             self._auto_align_thread.wait()  # a pass in flight may still be reading the audio
             self._auto_align_thread = None
+        if self._lyric_map_thread is not None:
+            self._lyric_map_thread.wait()
+            self._lyric_map_thread = None
         self._remember_configuration()
         self._remember_session()
         self.settings_store.flush()

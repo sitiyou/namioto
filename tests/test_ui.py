@@ -2452,6 +2452,14 @@ def own_window(tmp_path, monkeypatch):
     opened.close()
 
 
+def wait_for_lyric_mapping(window) -> None:
+    deadline = time.monotonic() + 1.0
+    while window._lyric_map_thread is not None and time.monotonic() < deadline:
+        QApplication.processEvents()
+        time.sleep(0.001)
+    assert window._lyric_map_thread is None
+
+
 def row_writer(dialog, section: str, name: str):
     """The write half of one row of the settings window, to change it the way a widget would."""
     for row_section, field, _read, write in dialog._rows:
@@ -4076,6 +4084,7 @@ def test_without_alignment_the_morae_take_the_notes_in_order(own_window, tmp_pat
     own_window.transport.bpm.setValue(60.0)  # a beat is a second, so notes read in seconds
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 2.0, 1.0, 0)))
+    wait_for_lyric_mapping(own_window)
 
     assert own_window.view.lyric_times == (((0.0, 1.0), (2.0, 3.0)),)
     assert own_window.view.lyric_red == ((False, False),)
