@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Note playback outputs: an external MIDI synth when one is listening, else the built-in one."""
+"""Note playback outputs: the MIDI synth listening on this machine, or silence when there is none."""
 
 from __future__ import annotations
 
@@ -53,6 +53,7 @@ class NotePlayer(QObject):
     """What the window drives: a prepared program, a transport and an audition."""
 
     finished = pyqtSignal()
+    silent = False  # the bars disable the MIDI control around a player that cannot sound
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -444,6 +445,46 @@ class MidiPortOut(NotePlayer):
             self._sounding.discard((channel, pitch))
 
 
+class SilentPlayer(NotePlayer):
+    """No note output: the machine has no MIDI service, so nothing is auditioned or played.
+
+    It keeps the transport's interface so the window can hold it without asking which player it has;
+    the MIDI control is what says the notes have nowhere to go.
+    """
+
+    silent = True
+
+    def set_program(self, notes, speed, channels=()) -> None:
+        pass
+
+    def play(self, seconds: float = 0.0) -> None:
+        pass
+
+    def pause(self) -> None:
+        pass
+
+    def stop(self) -> None:
+        pass
+
+    def seek(self, seconds: float) -> None:
+        pass
+
+    def preview(self, pitch: int, seconds: float = PREVIEW_SECONDS) -> None:
+        pass
+
+    @property
+    def duration(self) -> float:
+        return 0.0
+
+    @property
+    def position(self) -> float:
+        return 0.0
+
+    @property
+    def is_playing(self) -> bool:
+        return False
+
+
 def open_player(
     parent=None,
     backend: str = "auto",
@@ -455,9 +496,10 @@ def open_player(
 ) -> tuple[NotePlayer, str]:
     """A player and a description of where it sends the sound.
 
-    The external synth is preferred: it brings its own patches (TiMidity's piano, FluidSynth's
-    SoundFont), which is what the rest of the machine already sounds like. `backend` overrides that
-    choice, and a backend that was asked for and cannot be had falls back to the built-in one.
+    The external synth is the note output: it brings its own patches (TiMidity's piano, FluidSynth's
+    SoundFont), which is what the rest of the machine already sounds like. A machine with no MIDI
+    service gets a silent player rather than the built-in synth, so nothing is heard until a synth is
+    there; `backend="builtin"` still asks for the built-in synth on purpose.
     """
     if backend != "builtin":
         try:
@@ -471,4 +513,5 @@ def open_player(
         if index is not None:
             port.open_port(index)
             return MidiPortOut(port, parent, velocity=velocity, program=program), port.get_port_name(index)
+        return SilentPlayer(parent), "no MIDI output"
     return MidiSink(parent, buffer_ms=buffer_ms, a4=a4), "the built-in synth"

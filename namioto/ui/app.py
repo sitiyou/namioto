@@ -35,7 +35,7 @@ from PyQt6.QtWidgets import (
 
 from namioto import i18n, lyrics, midi, project
 from namioto import settings as store
-from namioto.analysis import align, bpm
+from namioto.analysis import align, bpm, devices
 from namioto.analysis.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
@@ -344,9 +344,7 @@ class MainWindow(QMainWindow):
         self.view.note_preview.connect(self._on_note_preview)
         self.keyboard.key_preview.connect(self._on_note_preview)
         self.transport.settings_button.clicked.connect(self._open_settings)
-        self.mix.midi_volume.slider.setToolTip(
-            i18n.tr("Volume of the note playback through {player}", player=self.player_name)
-        )
+        self._sync_midi_volume()
         self.view.gain = self.mix.gain.value()
         self.view.contrast = self.mix.contrast.value()
         self.view.bpm = self.transport.bpm.value()
@@ -566,6 +564,7 @@ class MainWindow(QMainWindow):
             self.view.refresh()
             if self._player_key() != self._current_player_key:
                 self._rebuild_player()
+            self._sync_midi_volume()
         finally:
             self._seeding = False
         self._apply_theme()
@@ -580,12 +579,29 @@ class MainWindow(QMainWindow):
         self._current_player_key = self._player_key()
         self.player.gain = self.mix.midi_volume.value() / 100.0
         self.player.finished.connect(self._on_playback_finished)
-        self.mix.midi_volume.slider.setToolTip(
-            i18n.tr("Volume of the note playback through {player}", player=self.player_name)
-        )
+        self._sync_midi_volume()
         self._send_program()
         if playing:
             self.player.play(position)
+
+    def _sync_midi_volume(self) -> None:
+        """The MIDI slider follows the note output: no MIDI service means zero and out of reach.
+
+        Filling the bar in is not a change the user made, so it must not write the zero back.
+        """
+        silent = self.player.silent
+        seeding, self._seeding = self._seeding, True
+        try:
+            self.mix.midi_volume.setEnabled(not silent)
+            if silent:
+                self.mix.midi_volume.set_value(0)
+                self.mix.midi_volume.slider.setToolTip(i18n.tr("No MIDI output is available on this machine"))
+            else:
+                self.mix.midi_volume.slider.setToolTip(
+                    i18n.tr("Volume of the note playback through {player}", player=self.player_name)
+                )
+        finally:
+            self._seeding = seeding
 
     def _program(self) -> tuple[tuple, tuple]:
         """The notes of every channel that sounds, and each sounding channel's instrument, volume."""
@@ -1182,7 +1198,9 @@ class MainWindow(QMainWindow):
         if not self.view.lyric_lines:
             return
         choices = align.load_parameters()
-        model, provider, chunk = choices["model"], choices["provider"], bool(choices["chunk"])
+        model = choices["model"]
+        provider = devices.resolve(choices["device"])
+        chunk = bool(choices["chunk"])
         if not align.is_installed(model) or not align.has_emissions(self.audio_path, model, provider, chunk):
             self.statusBar().showMessage(i18n.tr("The lyrics changed — align again to move them onto the notes"))
             return
@@ -1428,6 +1446,8 @@ class MainWindow(QMainWindow):
         self._show_position()
         if self._is_playing():
             self.position_timer.start()
+        elif self.player.silent:
+            self.statusBar().showMessage(i18n.tr("No MIDI output is available on this machine"))
         else:
             self.statusBar().showMessage(i18n.tr("{player} did not accept the notes", player=self.player_name))
 

@@ -36,7 +36,7 @@ import librosa
 import numpy as np
 
 from namioto import settings as store
-from namioto.analysis import model_store
+from namioto.analysis import devices, model_store
 from namioto.settings import Field
 from namioto.utils import config_dir, data_dir, file_stamp, resolved
 
@@ -72,7 +72,6 @@ MODEL_ENV = model_store.MODELS["aligner"].env
 LANGUAGES = ("ja",)
 MODELS = ("mms", "yohane")
 DEFAULT_MODEL = "mms"
-PROVIDERS = model_store.PROVIDERS
 # the cells per quarter note the window offers to snap with; a label is the note that cell is
 QUANTIZE_CELLS = (0, 1, 2, 4, 8, 16, 32)
 QUANTIZE_LABELS = ("Off", "1/4", "1/8", "1/16", "1/32", "1/64", "1/128")
@@ -82,7 +81,15 @@ QUANTIZE_LABELS = ("Off", "1/4", "1/8", "1/16", "1/32", "1/64", "1/128")
 PARAMETER_FILE = "align.json"
 PARAMETERS: tuple[Field, ...] = (
     Field("model", "choice", DEFAULT_MODEL, "Model", "Which forced-alignment model to use", choices=MODELS),
-    Field("provider", "choice", "cpu", "Device", "Where the model runs", choices=tuple(PROVIDERS)),
+    Field(
+        "device",
+        "choice",
+        "cpu",
+        "Device",
+        "Run on the CPU, or on the GPU backend the settings name; the settings window says which",
+        choices=devices.RUN_CHOICES,
+        labels=devices.RUN_LABELS,
+    ),
     Field(
         "quantize",
         "choice",
@@ -723,7 +730,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("--model", choices=MODELS, default=DEFAULT_MODEL, help="which aligner to use")
     parser.add_argument("--language", choices=LANGUAGES, default="ja", help="which language model to use")
-    parser.add_argument("--provider", choices=tuple(PROVIDERS), default="cpu", help="where the model runs")
+    parser.add_argument(
+        "--device",
+        choices=devices.RUN_CHOICES,
+        default="cpu",
+        help="run on the CPU, or on the GPU backend the settings name",
+    )
     parser.add_argument("--out", type=pathlib.Path, help="write the alignment here instead of to stdout")
     return parser.parse_args(argv)
 
@@ -732,7 +744,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
         directory = resolve_model(args.dir, args.model, args.language)
-        backend = OnnxBackend(directory / MODEL_FILE, provider=args.provider)
+        backend = OnnxBackend(directory / MODEL_FILE, provider=devices.resolve(args.device))
         dictionary, blank_id = load_dictionary(directory / VOCAB_FILE)
         segments = read_segments(args.segments)
     except (OSError, ValueError, KeyError) as error:

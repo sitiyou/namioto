@@ -3,8 +3,7 @@
 An open-source editor that follows [WaveTone](https://ackiesound.ifdef.jp/)'s feature set: analyse an
 audio file into a note-domain spectrum, draw that behind a piano roll, then transcribe what you see
 into notes - time on the horizontal axis, pitch on the vertical axis, with notes you can draw, move,
-resize and delete. Notes play back through a MIDI synth or the built-in one, and the file plays along
-with them.
+resize and delete. Notes play back through a MIDI synth, and the file plays along with them.
 
 ![namioto](docs/screenshot.png)
 
@@ -15,6 +14,7 @@ with them.
 ## Run
 
 ```bash
+uv sync --extra cpu                       # the onnxruntime build the analysis models use (or --extra cuda/rocm)
 uv run namioto                            # the editor
 uv run namioto song.mp3                   # the editor with the audio analysed into a spectrum
 uv run namioto song.nto                   # open a project (the notes and the audio together)
@@ -33,9 +33,11 @@ uv run pytest -m slow                     # just those, minutes of synthetic aud
 uv run scripts/bench_spectrum.py          # spectrum benchmark
 ```
 
-`uv` creates the virtual environment and installs the dependencies on first run. No model is part
-of the program: the ones it uses are downloaded from this project's `models` release (or GAME's, for
-GAME's own), so the first run of an analysis is the one that fetches them.
+`uv` creates the virtual environment and installs the dependencies on first run. `--extra cpu` adds
+ONNX Runtime, which the analysis models need and which is optional: its builds are mutually
+exclusive, so an installed copy takes `pip install namioto[cpu]` instead (or `[cuda]`/`[rocm]` for a
+GPU). No model is part of the program: the ones it uses are downloaded from this project's `models`
+release (or GAME's, for GAME's own), so the first run of an analysis is the one that fetches them.
 
 ## Spectrum
 
@@ -213,8 +215,9 @@ The window has three control bars, each split into captioned blocks of related c
 | Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window (the few options the bars do not hold; the analysis parameters belong to the project) |
 
 **Volume** has a slider for each layer: the audio file is streamed at the level of the first one, and
-the second is the note playback - a scale factor for the built-in synth, and control change 7 (channel
-volume) for an external one, which does its own mixing.
+the second is the note playback through the machine's external MIDI synth, sent as control change 7
+(channel volume) since that synth does its own mixing. A machine with no MIDI synth leaves the notes
+silent and the slider disabled.
 
 **Channels** are toggled by the layers icon among the playback switches: a sidebar with one card per MIDI channel.
 The notes of each channel are painted in its colour, and the card holds the name (double-click to
@@ -222,9 +225,8 @@ rename), the GM instrument the channel plays, and the lock, show and mute switch
 makes it the drawing channel; the context menu adds a channel, sets its volume or deletes it (the
 last one stays). Deleting one leaves the numbers of the others alone, so a note keeps the MIDI
 channel it plays on. Any of the sixteen can be used, percussion included.
-A locked channel cannot be edited, a hidden one is not drawn, and a muted one stays silent - the
-built-in synth plays each channel with the voice of its instrument family, an external one receives
-the real GM program on the channel's own number.
+A locked channel cannot be edited, a hidden one is not drawn, and a muted one stays silent; an
+external synth receives the real GM program on the channel's own number.
 
 | Action | Input |
 | --- | --- |

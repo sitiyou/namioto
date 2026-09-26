@@ -26,7 +26,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from namioto.analysis import align
+from namioto.analysis import align, devices
 from namioto.i18n import tr
 from namioto.karaoke import align_tokens, mora_lines, snap_to_beats, split
 from namioto.settings import Field
@@ -177,11 +177,17 @@ class AlignDialog(QDialog):
     def _start(self) -> None:
         if self._thread is not None:
             return
+        problem = devices.validate()
+        if problem is not None:
+            self._fail(tr(problem))
+            return
         self.log.clear()
         self.run.setEnabled(False)
         self._remember()
         model = self._parameters["model"]
-        provider = self._parameters["provider"]
+        provider = devices.resolve(self._parameters["device"])
+        if self._parameters["device"] == "gpu" and provider == "cpu":
+            self.log.appendPlainText(tr("No GPU backend is available; running on the CPU"))
         chunk = bool(self._parameters["chunk"])
         cached = align.find_alignment(self.audio, model, provider, self.text, chunk)
         if cached is not None:

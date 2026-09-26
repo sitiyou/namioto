@@ -6,9 +6,8 @@ keeps its own keys and its own files - GAME a size, the aligner a model and a la
 order they are looked up in, the download that puts them there and the session opened on them are
 the same for all of them.
 
-This module imports ONNX Runtime, so it is imported by the modules that own a model (`game.py`,
-`align.py`) and never by `settings.py` or `bpm.py`: the GUI's startup path must not pull the runtime
-in with it.
+This module does not import ONNX Runtime of its own: the runtime is optional and is reached only
+when a session is opened, so importing this module never pulls it into the GUI's startup path.
 """
 
 from __future__ import annotations
@@ -21,16 +20,16 @@ import urllib.request
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
-import onnxruntime as ort
-
+from namioto.analysis import devices
 from namioto.utils import data_dir
 
-# `cuda` keeps the CPU in the list, so a machine whose CUDA provider cannot be set up still runs
-PROVIDERS = {
-    "cpu": ("CPUExecutionProvider",),
-    "cuda": ("CUDAExecutionProvider", "CPUExecutionProvider"),
-}
+if TYPE_CHECKING:
+    import onnxruntime as ort
+
+# every device the program can offer, with the provider list each one runs with
+PROVIDERS = devices.PROVIDERS
 
 
 @dataclass(frozen=True)
@@ -180,6 +179,8 @@ def providers(key: str) -> tuple[str, ...]:
 
 def session(source: str | pathlib.Path, provider: str = "cpu") -> ort.InferenceSession:
     """A session over one ONNX file, with the providers a name stands for."""
+    import onnxruntime as ort  # the runtime is optional; reach it only where a session is opened
+
     return ort.InferenceSession(str(source), providers=list(providers(provider)))
 
 

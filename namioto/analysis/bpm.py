@@ -59,8 +59,11 @@ def estimate(
             residual=result.residual,
         )
     if algorithm == "tempocnn":
-        from namioto.analysis import tempo
+        from namioto.analysis import devices, tempo
 
+        problem = devices.validate()
+        if problem is not None:
+            raise RuntimeError(problem)
         result = tempo.estimate(path)
         agree = sum(1 for local in result.local if local.bpm == round(result.bpm))
         return BpmEstimate(

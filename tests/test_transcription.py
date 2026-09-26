@@ -10,7 +10,7 @@ import queue
 import pytest
 
 import namioto.analysis.game as game
-from namioto.analysis import transcription
+from namioto.analysis import devices, transcription
 
 AUDIO = "/tmp/song.wav"
 
@@ -60,8 +60,8 @@ def test_the_model_sizes_are_the_ones_game_publishes() -> None:
     assert transcription.GAME_SIZES == game.MODEL_SIZES
 
 
-def test_the_providers_are_the_ones_game_supports() -> None:
-    assert tuple(game.PROVIDERS) == transcription.GAME_PROVIDERS
+def test_the_devices_are_the_ones_the_registry_names() -> None:
+    assert tuple(game.PROVIDERS) == devices.KEYS
 
 
 def test_every_parameter_is_a_usable_field() -> None:
@@ -185,16 +185,18 @@ def test_transcribe_hands_the_notes_over_raw(fake_game) -> None:
     assert messages[-1] == ("done", [(0.0, 0.5, 60.0), (0.5, 1.0, 62.0)])
 
 
-def test_transcribe_runs_on_the_provider_it_was_given(fake_game) -> None:
+def test_transcribe_runs_on_the_device_its_choice_resolves_to(fake_game, monkeypatch) -> None:
+    monkeypatch.setattr(transcription.devices, "resolve", lambda choice: "cuda" if choice == "gpu" else "cpu")
     channel = queue.Queue()
-    transcription.transcribe(AUDIO, {"provider": "cuda"}, channel)
+    transcription.transcribe(AUDIO, {"device": "gpu"}, channel)
 
     assert fake_game["backend"] == "cuda"
 
 
-def test_transcribe_falls_back_to_the_cpu_for_a_provider_nobody_offers(fake_game) -> None:
+def test_transcribe_falls_back_to_the_cpu_for_a_gpu_that_is_not_there(fake_game, monkeypatch) -> None:
+    monkeypatch.setattr(transcription.devices, "resolve", lambda choice: "cpu")
     channel = queue.Queue()
-    transcription.transcribe(AUDIO, {"provider": "gpu"}, channel)
+    transcription.transcribe(AUDIO, {"device": "gpu"}, channel)
 
     assert fake_game["backend"] == "cpu"
 

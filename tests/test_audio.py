@@ -3,7 +3,9 @@
 
 from __future__ import annotations
 
+import sys
 import time
+import types
 from types import SimpleNamespace
 
 import numpy as np
@@ -16,6 +18,7 @@ from namioto.ui.audio import (
     VELOCITY,
     MidiPortOut,
     MidiSink,
+    SilentPlayer,
     open_player,
 )
 
@@ -141,3 +144,22 @@ def test_a_backend_that_was_asked_for_is_honoured() -> None:
     player, name = open_player(backend="builtin")
     assert isinstance(player, MidiSink)
     assert name == "the built-in synth"
+
+
+def test_a_machine_with_no_synth_plays_nothing(monkeypatch) -> None:
+    fake_midi = types.ModuleType("rtmidi")
+
+    class NoPorts:
+        def get_ports(self) -> list[str]:
+            return []
+
+    fake_midi.MidiOut = NoPorts
+    monkeypatch.setitem(sys.modules, "rtmidi", fake_midi)
+
+    player, name = open_player()
+    assert isinstance(player, SilentPlayer)
+    assert name == "no MIDI output" and player.silent
+    player.set_program([(60, 0.0, 1.0)], 1.0)
+    player.play()
+    player.preview(60)
+    assert player.duration == 0.0 and player.position == 0.0 and not player.is_playing

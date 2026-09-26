@@ -19,12 +19,13 @@ from dataclasses import dataclass, field, make_dataclass
 from pathlib import Path
 from typing import Any
 
+from namioto.analysis import devices
 from namioto.analysis.bpm import ALGORITHMS
 from namioto.analysis.spectrum import CHANNEL_MODES
 from namioto.i18n import LANGUAGE_CODES, LANGUAGE_LABELS, SYSTEM
 from namioto.utils import config_dir, write_text
 
-VERSION = 3
+VERSION = 4
 TEXT_LIMIT = 4096
 DIVISIONS = ("beats", "seconds")
 # the General MIDI program list, in the order the program change is meant to select them in
@@ -166,7 +167,7 @@ class Field:
     """One setting: its default, how to read it back, and how the dialog shows it."""
 
     name: str
-    kind: str  # bool, int, float, choice, text, style or secret
+    kind: str  # bool, int, float, choice, device, text, style or secret
     default: Any
     caption: str
     tooltip: str = ""
@@ -273,6 +274,23 @@ SECTIONS: tuple[Section, ...] = (
                 high=480,
                 step=0.5,
                 decimals=1,
+            ),
+        ),
+    ),
+    Section(
+        "hardware",
+        "Devices",
+        "Device",
+        (
+            Field(
+                "gpu",
+                "device",
+                devices.AUTO,
+                "GPU",
+                "Which GPU backend a run that asks for the GPU uses; the line under it says whether "
+                "its runtime is installed",
+                choices=(devices.AUTO, *devices.GPU_KEYS),
+                labels=("Automatic", *devices.GPU_LABELS),
             ),
         ),
     ),
@@ -677,7 +695,7 @@ def coerce(spec: Field, value: Any) -> Any:
     """A file may hold anything at all, so every value is checked before it is used."""
     if spec.kind == "bool":
         return value if isinstance(value, bool) else spec.default
-    if spec.kind == "choice":
+    if spec.kind in ("choice", "device"):
         # a bool would pass for 0 or 1 here, and the synthesiser would be sent a true instead of a number
         return value if not isinstance(value, bool) and value in spec.choices else spec.default
     if spec.kind in ("int", "float"):

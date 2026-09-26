@@ -14,7 +14,9 @@ from the quantised graph) and `vocab.json` into the aligner's data directory, or
 wav2vec2 CTC models trained on romanised kana. The graph bakes in the waveform normalisation
 the models expect, takes `input_values` and returns `logits`; quantisation is limited to `MatMul`,
 because the exporter writes the convolutions' bias outside the initializers and quantising those
-fails.
+fails. The attention's `where(isnan(softmax), 0, softmax)` guard is dropped: it is redundant for
+finite input, and ONNX Runtime's MIGraphX provider counts `IsNaN` as unsupported - a handful of them
+is enough to put the whole graph back on the CPU.
 """
 
 from __future__ import annotations
@@ -43,8 +45,32 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
+def drop_nan_guards(graph) -> int:
+    """Drop every `where(isnan(x), fallback, x)` guard in `graph` and return how many were removed."""
+    guard = {node.output[0]: node for node in graph.node if node.op_type == "IsNaN"}
+    replace, dropped = {}, set()
+    for consumer in graph.node:
+        if consumer.op_type != "Where" or consumer.input[0] not in guard:
+            continue
+        guarded = guard[consumer.input[0]].input[0]
+        if consumer.input[2] == guarded:
+            replace[consumer.output[0]] = guarded
+            dropped.update({guard[consumer.input[0]].name, consumer.name})
+    if not dropped:
+        return 0
+    for node in graph.node:
+        for index, name in enumerate(node.input):
+            if name in replace:
+                node.input[index] = replace[name]
+    kept = [node for node in graph.node if node.name not in dropped]
+    graph.ClearField("node")
+    graph.node.extend(kept)
+    return len(dropped)
+
+
 def export(module, destination: pathlib.Path) -> None:
     """Write the int8 ONNX graph of `module`, which takes raw audio and returns `logits`."""
+    import onnx
     import torch
     from onnxruntime.quantization import QuantType, quantize_dynamic
 
@@ -66,6 +92,9 @@ def export(module, destination: pathlib.Path) -> None:
                 # the dynamo exporter ignores dynamic_axes, which the variable-length windows need
                 dynamo=False,
             )
+        graph = onnx.load(str(source))
+        drop_nan_guards(graph)
+        onnx.save(graph, str(source))
         quantize_dynamic(str(source), str(destination), weight_type=QuantType.QInt8, op_types_to_quantize=["MatMul"])
 
 

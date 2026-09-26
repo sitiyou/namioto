@@ -38,7 +38,7 @@ build_cli() {
     case "${1:-tempo}" in
         tempo) freeze_cli namioto/analysis/beats.py namioto-tempo ;;
         wavetone) freeze_cli namioto/analysis/wavetone.py namioto-wavetone ;;
-        tempocnn) freeze_cli namioto/analysis/tempo.py namioto-tempocnn ;;
+        tempocnn) freeze_cli namioto/analysis/tempo.py namioto-tempocnn cpu ;;
         spectrum) freeze_cli namioto/analysis/spectrum.py namioto-spectrum ;;
         *)
             echo "Unknown CLI: ${1}. Expected tempo, wavetone, tempocnn or spectrum." >&2
@@ -48,6 +48,9 @@ build_cli() {
 }
 
 freeze_cli() {
+    if [ -n "${3:-}" ]; then
+        uv sync --extra "$3"
+    fi
     uv run --with pyinstaller pyinstaller "${pyinstaller_common[@]}" \
         --name "$2" \
         --onedir \
@@ -56,6 +59,7 @@ freeze_cli() {
 }
 
 build_app() {
+    uv sync --extra cpu
     uv run --with pyinstaller pyinstaller "${pyinstaller_common[@]}" \
         --name namioto \
         --onedir \

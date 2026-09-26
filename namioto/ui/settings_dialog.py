@@ -34,6 +34,7 @@ from PyQt6.QtWidgets import (
 )
 
 from namioto import settings as store
+from namioto.analysis import devices
 from namioto.i18n import tr
 from namioto.settings import Field
 from namioto.ui import theme
@@ -49,7 +50,85 @@ def add_row(form: QFormLayout, editor: QWidget, field: Field) -> None:
     if field.tooltip:
         label.setToolTip(tr(field.tooltip))
         editor.setToolTip(tr(field.tooltip))
+    if field.kind == "device":
+        form.addRow(label, device_row(editor))
+        return
     form.addRow(label, editor)
+
+
+class WrappedLabel(QLabel):
+    """A wrapped line that keeps itself as tall as the lines it actually has.
+
+    A word-wrapped `QLabel` inside a form row is given only the one-line height its `sizeHint`
+    carries, so the rest of the text is clipped. The height the text needs at the label's real width
+    is forced as a minimum whenever either changes, which makes the row grow to fit.
+    """
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.setWordWrap(True)
+        policy = self.sizePolicy()
+        policy.setHeightForWidth(True)
+        self.setSizePolicy(policy)
+
+    def setText(self, text: str) -> None:
+        super().setText(text)
+        self._fit()
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self._fit()
+
+    def _fit(self) -> None:
+        if self.width() <= 0:
+            return
+        needed = self.heightForWidth(self.width())
+        if needed > 0 and needed != self.minimumHeight():
+            self.setMinimumHeight(needed)
+
+
+def device_row(editor: QComboBox) -> QWidget:
+    """A device combo with a line under it saying whether the runtime it needs is installed."""
+    holder = QWidget()
+    box = QVBoxLayout(holder)
+    box.setContentsMargins(0, 0, 0, 0)
+    box.setSpacing(2)
+    box.addWidget(editor)
+    status = WrappedLabel()
+    box.addWidget(status)
+    editor.currentIndexChanged.connect(lambda *_: _show_device_status(editor, status))
+    _show_device_status(editor, status)
+    return holder
+
+
+def _show_device_status(editor: QComboBox, status: QLabel) -> None:
+    """What the device the row names needs, and whether this machine has it."""
+    chosen = editor.currentData()
+    if chosen in devices.GPU_KEYS:
+        key = chosen
+    else:
+        found = [name for name in devices.GPU_KEYS if devices.available(name)]
+        if not found:
+            status.setText(tr("No GPU backend is available; a GPU run falls back to the CPU"))
+            status.setToolTip("")
+            _warn(status)
+            return
+        key = found[0]
+    device = devices.get(key)
+    name = device.runtime or device.label
+    if devices.available(key):
+        status.setText(tr("{name} is available", name=name))
+        status.setToolTip("")
+        status.setStyleSheet("")
+        return
+    missing = ", ".join(devices.missing(key)) or device.providers[0]
+    status.setText(tr("{name} is not available: {missing} is missing", name=name, missing=missing))
+    status.setToolTip(tr(device.hint))
+    _warn(status)
+
+
+def _warn(status: QLabel) -> None:
+    status.setStyleSheet(f"color: {theme.canvas().note_selected_edge.name()};")
 
 
 class SettingsStore(QObject):
@@ -120,7 +199,7 @@ def field_editor(value: Any, field: Field) -> tuple[QWidget, Callable[[], Any], 
     """The widget one setting is edited with, plus how to read it back and how to fill it in."""
     if field.kind == "bool":
         widget = QCheckBox()
-    elif field.kind == "choice":
+    elif field.kind in ("choice", "device"):
         labels = field.labels or tuple(str(choice) for choice in field.choices)
         return combo_editor(list(zip((tr(label) for label in labels), field.choices, strict=True)), value)
     elif field.kind == "style":

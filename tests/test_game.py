@@ -119,7 +119,7 @@ def test_the_backend_hands_its_provider_to_every_session(tmp_path, monkeypatch) 
         def __init__(self, path, providers=None, **options):
             seen.append(providers)
 
-    monkeypatch.setattr("namioto.analysis.model_store.ort.InferenceSession", Session)
+    monkeypatch.setattr("onnxruntime.InferenceSession", Session)
     backend = OnnxBackend(tmp_path, provider="cuda")
 
     assert backend.provider == "cuda"
@@ -127,10 +127,10 @@ def test_the_backend_hands_its_provider_to_every_session(tmp_path, monkeypatch) 
 
 
 def test_the_cli_runs_on_the_cpu_unless_asked_otherwise() -> None:
-    assert parse_args(["song.wav"]).provider == "cpu"
-    assert parse_args(["song.wav", "--provider", "cuda"]).provider == "cuda"
+    assert parse_args(["song.wav"]).device == "cpu"
+    assert parse_args(["song.wav", "--device", "gpu"]).device == "gpu"
     with pytest.raises(SystemExit):
-        parse_args(["song.wav", "--provider", "gpu"])
+        parse_args(["song.wav", "--device", "cuda"])
 
 
 def test_extract_checks_the_language_against_the_config() -> None:

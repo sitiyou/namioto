@@ -55,10 +55,10 @@ DICTIONARY = {"[pad]": 0, "a": 1, "b": 2}
 def test_the_alignment_parameters_are_remembered_and_checked():
     assert align.load_parameters() == align.default_parameters()
 
-    align.save_parameters({"model": "yohane", "provider": "cuda", "quantize": 4, "chunk": False})
-    assert align.load_parameters() == {"model": "yohane", "provider": "cuda", "quantize": 4, "chunk": False}
+    align.save_parameters({"model": "yohane", "device": "gpu", "quantize": 4, "chunk": False})
+    assert align.load_parameters() == {"model": "yohane", "device": "gpu", "quantize": 4, "chunk": False}
 
-    align.save_parameters({"model": "nope", "provider": 7, "quantize": "eight"})
+    align.save_parameters({"model": "nope", "device": 7, "quantize": "eight"})
     assert align.load_parameters() == align.default_parameters()  # every value goes through its check
 
     align.parameter_path().write_text("{not json", encoding="utf-8")

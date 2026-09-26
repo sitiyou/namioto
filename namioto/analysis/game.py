@@ -28,7 +28,7 @@ try:
 except ImportError:  # the extractor itself only needs numpy; the file loader and pitch names do not
     librosa = None
 
-from namioto.analysis import model_store
+from namioto.analysis import devices, model_store
 
 MODEL_SIZES = ("small", "medium", "large")
 # the package also holds `dur2bd`, which the run has no use for: see `extract`
@@ -524,10 +524,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     parser.add_argument("-l", "--language", help="language code from config.json, if the model has any")
     parser.add_argument(
-        "--provider",
-        choices=tuple(PROVIDERS),
+        "--device",
+        choices=devices.RUN_CHOICES,
         default="cpu",
-        help="where the models run: cuda needs ONNX Runtime's GPU build, CUDA 12 and cuDNN 9",
+        help="run on the CPU, or on the GPU backend the settings name",
     )
     parser.add_argument("--batch-size", type=int, default=4, help="chunks per inference batch")
     parser.add_argument("--seg-threshold", type=float, default=0.2, help="boundary decoding threshold")
@@ -568,7 +568,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.audio is None:
         print(f"{args.size} model in {model_dir}")
         return 0
-    backend = OnnxBackend(model_dir, provider=args.provider)
+    backend = OnnxBackend(model_dir, provider=devices.resolve(args.device))
     notes = extract(
         backend,
         args.audio,

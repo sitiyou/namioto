@@ -16,11 +16,11 @@ import traceback
 from typing import Any
 
 from namioto import settings as store
+from namioto.analysis import devices
 from namioto.settings import Field
 from namioto.utils import config_dir, data_dir, file_stamp, resolved
 
 GAME_SIZES = ("small", "medium", "large")
-GAME_PROVIDERS = ("cpu", "cuda")
 # the codes GAME's own config.json maps for the segmenter; 0, and so the empty code, is universal
 LANGUAGE_CODES = ("", "en", "ja", "yue", "zh")
 LANGUAGE_LABELS = ("Universal", "English", "Japanese", "Cantonese", "Mandarin")
@@ -38,13 +38,13 @@ PARAMETERS: tuple[Field, ...] = (
         choices=GAME_SIZES,
     ),
     Field(
-        "provider",
+        "device",
         "choice",
         "cpu",
-        "Backend",
-        "Where the models run; CUDA falls back to the CPU when it cannot be set up",
-        choices=GAME_PROVIDERS,
-        labels=tuple(name.upper() for name in GAME_PROVIDERS),
+        "Device",
+        "Run on the CPU, or on the GPU backend the settings name; the settings window says which",
+        choices=devices.RUN_CHOICES,
+        labels=devices.RUN_LABELS,
     ),
     Field(
         "language",
@@ -167,7 +167,7 @@ def audio_key(path: Any) -> str:
 
 
 def run_key(path: Any, parameters: Any) -> str:
-    """What makes two runs the same one: the audio and the model's own inputs.
+    """What makes two runs the same one: the audio, the device and the model's own inputs.
 
     The grid is not one of them: a quantised run and a raw one are the same model run, so changing
     the tempo, the quantize choice or the grid offset re-snaps the stored notes instead of asking
@@ -176,7 +176,10 @@ def run_key(path: Any, parameters: Any) -> str:
     values = coerce_parameters(parameters)
     identity = {
         "audio": list(file_stamp(path)),
-        "parameters": {item.name: values[item.name] for item in PARAMETERS if item.name not in ("target", "quantize")},
+        "device": devices.resolve(values["device"]),
+        "parameters": {
+            item.name: values[item.name] for item in PARAMETERS if item.name not in ("target", "quantize", "device")
+        },
     }
     return hashlib.sha1(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -254,7 +257,7 @@ def transcribe(path: str, parameters: dict, queue) -> None:
             progress=lambda done, total: queue.put(("progress", "download", done, total)),
         )
         queue.put(("log", f"model at {model}"))
-        backend = game.OnnxBackend(model, provider=values["provider"])
+        backend = game.OnnxBackend(model, provider=devices.resolve(values["device"]))
         notes = game.extract(
             backend,
             path,

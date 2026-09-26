@@ -27,7 +27,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from namioto.analysis import transcription
+from namioto.analysis import devices, transcription
 from namioto.i18n import tr
 from namioto.settings import Field
 from namioto.ui.settings_dialog import add_row, advanced_section, field_editor
@@ -171,6 +171,10 @@ class TranscriptionDialog(QDialog):
 
     def _launch(self) -> None:
         self.log.clear()
+        problem = devices.validate()
+        if problem is not None:
+            self._fail(tr(problem))
+            return
         self._log_line(tr("Transcribing {name} …", name=pathlib.Path(self.audio).name))
         self._notes = []
         self._settled = False

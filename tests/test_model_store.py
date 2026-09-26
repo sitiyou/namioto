@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import subprocess
+import sys
 import zipfile
 
 import pytest
@@ -19,6 +21,7 @@ def test_each_family_keeps_the_directory_it_already_uses(tmp_path, monkeypatch) 
 def test_the_providers_a_name_stands_for() -> None:
     assert model_store.providers("cpu") == ("CPUExecutionProvider",)
     assert model_store.providers("cuda") == ("CUDAExecutionProvider", "CPUExecutionProvider")
+    assert model_store.providers("migraphx") == ("MIGraphXExecutionProvider", "CPUExecutionProvider")
     with pytest.raises(ValueError, match="unknown provider"):
         model_store.providers("gpu")
 
@@ -30,7 +33,7 @@ def test_a_session_is_built_with_the_providers_that_were_asked_for(monkeypatch) 
         def __init__(self, path, providers=None, **options):
             made.append((path, providers))
 
-    monkeypatch.setattr(model_store.ort, "InferenceSession", Session)
+    monkeypatch.setattr("onnxruntime.InferenceSession", Session)
     model_store.session("/models/x.onnx", "cuda")
     model_store.session("/models/x.onnx")
 
@@ -78,3 +81,10 @@ def test_a_model_with_nothing_published_says_what_to_do(tmp_path, monkeypatch) -
     message = str(error.value)
     assert "no unpublished model" in message
     assert unpublished.env in message
+
+
+def test_importing_the_store_does_not_reach_for_the_runtime() -> None:
+    """The runtime is optional, so the store's own import must not pull it in; a run reaches it."""
+    probe = "import sys, namioto.analysis.model_store; assert 'onnxruntime' not in sys.modules"
+    result = subprocess.run([sys.executable, "-c", probe], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

@@ -40,7 +40,7 @@ from PyQt6.QtWidgets import (
 
 from namioto import lyrics, midi, project
 from namioto import settings as store
-from namioto.analysis import align, transcription
+from namioto.analysis import align, devices, transcription
 from namioto.analysis.bpm import BpmEstimate
 from namioto.analysis.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.channels import Channel
@@ -66,7 +66,7 @@ from namioto.ui.roll import (
     PianoRollView,
     is_black_key,
 )
-from namioto.ui.settings_dialog import SettingsDialog, field_editor
+from namioto.ui.settings_dialog import SettingsDialog, WrappedLabel, _show_device_status, field_editor
 from namioto.ui.spectrogram import SpectrumImage, SpectrumLoader
 from namioto.ui.transcription_dialog import TranscriptionDialog
 
@@ -792,6 +792,8 @@ def test_playhead_is_drawn_at_the_play_position(window) -> None:
 
 class FakeOutput:
     """Stands in for a playback backend, so the transport can be tested without sound."""
+
+    silent = False
 
     def __init__(self) -> None:
         self.gain = 1.0
@@ -2122,6 +2124,18 @@ def test_midi_volume_scales_the_output(window) -> None:
     window.mix.midi_volume.set_value(80.0)
 
 
+def test_a_silent_player_takes_the_midi_slider_out_of_reach(window) -> None:
+    volume = window.mix.midi_volume.value()
+    window.player.silent = True
+    window._sync_midi_volume()
+    assert window.mix.midi_volume.value() == 0
+    assert not window.mix.midi_volume.isEnabled()
+    window.player.silent = False
+    window.mix.midi_volume.set_value(volume)
+    window._sync_midi_volume()
+    assert window.mix.midi_volume.isEnabled()
+
+
 def test_midi_sink_keeps_the_position_without_playing() -> None:
     sink = MidiSink()
     sink.set_program([(69, 0.0, 1.0)], 1.0)
@@ -2484,7 +2498,7 @@ def test_the_settings_window_lists_every_visible_field(own_window) -> None:
     }
     assert names == expected
     pages = [dialog.findChild(QTabWidget).tabText(index) for index in range(dialog.findChild(QTabWidget).count())]
-    assert pages == ["General", "Tempo", "Lyrics", "Advanced"]  # the rest of the spec is what it remembers
+    assert pages == ["General", "Devices", "Tempo", "Lyrics", "Advanced"]  # the rest of the spec is what it remembers
     dialog.close()
 
 
@@ -2507,6 +2521,37 @@ def test_the_analysis_options_are_a_project_s_so_the_window_has_no_row(own_windo
     dialog = SettingsDialog(own_window.settings, parent=own_window)
     assert not [row for row in dialog._rows if row[0] == "analysis"]
     dialog.close()
+
+
+def test_a_wrapped_status_line_grows_to_fit_its_text(qt_app) -> None:
+    label = WrappedLabel()
+    label.setText("没有可用的 GPU 后端；选择 GPU 时会回退到 CPU")
+    label.setFixedWidth(200)
+    label.show()
+    qt_app.processEvents()
+
+    needed = label.heightForWidth(200)
+    assert needed > label.fontMetrics().lineSpacing()  # the text really does wrap
+    assert label.minimumHeight() == needed  # and the row is forced tall enough for it
+    label.close()
+
+
+def test_the_gpu_row_says_whether_its_runtime_is_installed(qt_app, monkeypatch) -> None:
+    monkeypatch.setattr(devices, "installed", lambda: ("CPUExecutionProvider",))
+    field = store.FIELD_SPECS[("hardware", "gpu")]
+    combo, _read, write = field_editor(store.Settings().hardware.gpu, field)
+    status = QLabel()
+
+    _show_device_status(combo, status)
+    assert "No GPU backend is available" in status.text()
+
+    write("cuda")
+    _show_device_status(combo, status)
+    assert "NVIDIA CUDA is not available" in status.text()
+
+    monkeypatch.setattr(devices, "installed", lambda: ("CUDAExecutionProvider", "CPUExecutionProvider"))
+    _show_device_status(combo, status)
+    assert "NVIDIA CUDA is available" in status.text()
 
 
 def test_restoring_defaults_puts_every_widget_back(own_window) -> None:
@@ -2935,6 +2980,17 @@ def test_a_child_that_cannot_start_is_reported(own_window, monkeypatch) -> None:
     dialog._start()
 
     assert "no processes left" in dialog.log.toPlainText()
+    assert dialog.run_button.isEnabled()
+
+
+def test_a_missing_runtime_stops_the_transcription(own_window, monkeypatch) -> None:
+    monkeypatch.setattr(devices, "validate", lambda: devices.MISSING_RUNTIME)
+    monkeypatch.setattr("namioto.ui.transcription_dialog.start_job", lambda *args: pytest.fail("must not run"))
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+
+    dialog._start()
+
+    assert devices.MISSING_RUNTIME in dialog.log.toPlainText()
     assert dialog.run_button.isEnabled()
 
 
@@ -4185,6 +4241,17 @@ def test_the_align_dialog_hands_the_times_over(own_window) -> None:
     assert dialog.run.isEnabled()
 
 
+def test_a_missing_runtime_stops_the_alignment(own_window, monkeypatch) -> None:
+    monkeypatch.setattr(devices, "validate", lambda: devices.MISSING_RUNTIME)
+    monkeypatch.setattr(Aligner, "start", lambda self: pytest.fail("must not run"))
+    dialog = AlignDialog("vocal.wav", "あい\n", 120.0, parent=own_window)
+
+    dialog._start()
+
+    assert devices.MISSING_RUNTIME in dialog.log.toPlainText()
+    assert dialog.run.isEnabled()
+
+
 def test_the_align_dialog_snaps_to_the_beat_grid_when_asked(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
     parameter_writer(dialog, "quantize")(1)  # 1/4 notes, one beat
@@ -4250,7 +4317,7 @@ def test_the_align_dialog_remembers_what_was_chosen(own_window) -> None:
     dialog.reject()
 
     again = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
-    assert again.parameters() == {"model": "yohane", "provider": "cpu", "quantize": 4, "chunk": False}
+    assert again.parameters() == {"model": "yohane", "device": "cpu", "quantize": 4, "chunk": False}
 
 
 def test_the_align_dialog_runs_chunked_unless_told_otherwise(own_window) -> None:
