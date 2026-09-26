@@ -434,6 +434,7 @@ class TransportBar(_Group):
     open_requested = pyqtSignal()
     save_requested = pyqtSignal()
     export_midi_requested = pyqtSignal()
+    export_krc_requested = pyqtSignal()
     auto_page_toggled = pyqtSignal(bool)
     overtone_toggled = pyqtSignal(bool)
     division_changed = pyqtSignal(str)
@@ -443,10 +444,15 @@ class TransportBar(_Group):
         self.setObjectName("transportBar")
         self.open = icon_button("open", tr("Open a project (.nto) — Ctrl+O"))
         self.save = icon_button("save", tr("Save the project — Ctrl+S, with Shift for Save As"))
-        self.export_midi = icon_button("export", tr("Export the notes as a MIDI file — every channel"))
+        self.export = icon_button("export", tr("Export: the notes as MIDI, or the lyrics as .krc"))
+        self.export_menu = QMenu(self.export)
+        self.export_midi_action = self.export_menu.addAction(tr("Export MIDI…"))
+        self.export_krc_action = self.export_menu.addAction(tr("Export lyrics (.krc)…"))
+        self.export_midi_action.triggered.connect(lambda: self.export_midi_requested.emit())
+        self.export_krc_action.triggered.connect(lambda: self.export_krc_requested.emit())
         self.open.clicked.connect(self.open_requested)
         self.save.clicked.connect(self.save_requested)
-        self.export_midi.clicked.connect(self.export_midi_requested)
+        self.export.clicked.connect(self._show_export_menu)
         self.rewind = icon_button("rewind", tr("Rewind to the beginning"))
         self.stop = icon_button("stop", tr("Stop"))
         self.play_from_start = icon_button("playstart", tr("Play from the beginning"))
@@ -523,7 +529,7 @@ class TransportBar(_Group):
         project = Cluster("project")
         project.add(self.open)
         project.add(self.save)
-        project.add(self.export_midi)
+        project.add(self.export)
         project.add(self.settings_button)
 
         playback = Cluster("playback")
@@ -559,6 +565,9 @@ class TransportBar(_Group):
         pause button while the sound runs."""
         self.play_pause.setIcon(icons.icon("pause" if playing else "play"))
         self.play_pause.setToolTip(tr("Pause playback (Space)") if playing else tr("Play from the cursor (Space)"))
+
+    def _show_export_menu(self) -> None:
+        self.export_menu.exec(self.export.mapToGlobal(QPoint(0, self.export.height())))
 
     def set_position(self, seconds: float) -> None:
         self.position.setText(format_time(seconds))

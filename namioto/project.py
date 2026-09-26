@@ -21,9 +21,10 @@ from namioto import settings as store
 from namioto.channels import CHANNEL_COUNT, Channel, valid_color
 
 FORMAT = "namioto"
-VERSION = 7
+VERSION = 8
 SUFFIX = ".nto"
 NOTE_DECIMALS = 4
+LYRIC_MODES = ("edit", "read")
 
 
 class Note(NamedTuple):
@@ -36,15 +37,21 @@ class Note(NamedTuple):
     channel: int = 0
 
 
-class LyricTimes(NamedTuple):
-    """The aligned times of a `.krc` as a cache beside the notes.
+class Lyrics(NamedTuple):
+    """A `.krc` as the project keeps it: the text itself, and the times made from it.
 
-    `key` is the hash of the `.krc` text the times were made from, so a changed file invalidates
-    them; `lines` holds one `(start, end)` in seconds per sound, `None` where none was found.
+    The text is the baseline: the `.krc` beside the project is a copy written for editing and
+    export, so a project still opens with the lyrics it was saved with once that file is gone.
+    `key` is the hash of the text the times were made from, so a changed text invalidates them;
+    `lines` holds one `(start, end)` in seconds per sound, `None` where none was found; `mode` is
+    `edit` while the aligner's times lay the sounds out, or `read` while the `.krc`'s own `.N` and
+    groups do.
     """
 
+    text: str = ""
     key: str = ""
     model: str = ""
+    mode: str = "edit"
     lines: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
 
 
@@ -54,7 +61,7 @@ class Project:
     audio: str = ""
     channels: tuple[Channel, ...] = ()
     notes: tuple[Note, ...] = ()
-    lyrics: LyricTimes | None = None
+    lyrics: Lyrics | None = None
 
 
 def looks_like_project(path: str | Path) -> bool:
@@ -100,12 +107,14 @@ def to_dict(project: Project) -> dict:
     }
 
 
-def _lyrics_dict(lyrics: LyricTimes | None) -> dict | None:
+def _lyrics_dict(lyrics: Lyrics | None) -> dict | None:
     if lyrics is None:
         return None
     return {
+        "text": lyrics.text,
         "key": lyrics.key,
         "model": lyrics.model,
+        "mode": lyrics.mode,
         "lines": [[list(span) for span in line] for line in lyrics.lines],
     }
 
@@ -195,11 +204,11 @@ def _notes(value: Any) -> tuple[Note, ...]:
     return tuple(notes)
 
 
-def _lyric_times(value: Any) -> LyricTimes | None:
+def _lyrics(value: Any) -> Lyrics | None:
     if not isinstance(value, dict):
         return None
     key, lines = value.get("key"), value.get("lines")
-    model = value.get("model")
+    model, text, mode = value.get("model"), value.get("text"), value.get("mode")
     if not isinstance(key, str) or not isinstance(lines, list):
         return None
     rows: list[tuple[tuple[float | None, float | None], ...]] = []
@@ -221,7 +230,13 @@ def _lyric_times(value: Any) -> LyricTimes | None:
                 return None
             row.append((None if span[0] is None else float(span[0]), None if span[1] is None else float(span[1])))
         rows.append(tuple(row))
-    return LyricTimes(key=key, model=model if isinstance(model, str) else "", lines=tuple(rows))
+    return Lyrics(
+        text=text if isinstance(text, str) else "",
+        key=key,
+        model=model if isinstance(model, str) else "",
+        mode=mode if mode in LYRIC_MODES else "edit",
+        lines=tuple(rows),
+    )
 
 
 def from_dict(data: Any) -> Project:
@@ -242,7 +257,7 @@ def from_dict(data: Any) -> Project:
         audio=_audio(data.get("audio")),
         channels=channels,
         notes=notes,
-        lyrics=_lyric_times(data.get("lyrics")),
+        lyrics=_lyrics(data.get("lyrics")),
     )
 
 

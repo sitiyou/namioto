@@ -14,6 +14,7 @@ from namioto.karaoke import (
     assign_by_time,
     conflicts,
     contiguous,
+    export_krc,
     group_sounds,
     map_faithful,
     map_sounds,
@@ -238,6 +239,53 @@ def test_with_counts_writes_a_held_sound_as_dot_n_and_drops_a_stale_one():
 
 def test_with_counts_writes_inside_a_ruby_per_sound():
     assert with_counts("季節[き,せつ]", [[1, 2, 1]]) == "季節[き,せ.2つ]"
+
+
+def test_export_krc_writes_a_held_sound_as_dot_n():
+    assert export_krc("あ", sound_lines("あ"), [[(0.0, 2.0)]], [(0.0, 1.0), (1.0, 2.0)]) == "あ.2"
+
+
+def test_export_krc_folds_a_shared_note_and_writes_its_dot_n():
+    assert export_krc("あい", sound_lines("あい"), [[(0.0, 0.5), (0.5, 1.0)]], [(0.0, 1.0)]) == "(あい).1"
+
+
+def test_export_krc_writes_a_sound_that_covers_no_note_as_dot_zero():
+    assert export_krc("あい", sound_lines("あい"), [[(0.0, 1.0), (3.0, 3.5)]], [(0.0, 1.0)]) == "あい.0"
+
+
+def test_export_krc_keeps_a_one_to_one_mapping_as_it_was():
+    text = "季節[き,せつ]は"
+    times = [[(0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 4.0)]]
+    notes = [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 4.0)]
+    assert export_krc(text, sound_lines(text), times, notes) == text
+
+
+def test_export_krc_leaves_the_text_when_there_are_no_notes():
+    assert export_krc("あい", sound_lines("あい"), [[(0.0, 1.0), (1.0, 2.0)]], []) == "あい"
+
+
+def test_export_krc_reads_back_its_own_sounds():
+    text = "コーヒー"
+    times = [[(0.0, 0.5), (0.5, 1.0), (1.0, 1.5), (1.5, 2.0)]]
+    notes = [(0.0, 1.0), (1.0, 2.0)]
+    out = export_krc(text, sound_lines(text), times, notes)
+    assert out == "(コー).1(ヒー).1"
+    assert [sound.token for sound in sound_lines(out)[0].sounds] == ["ko", "o", "hi", "i"]
+
+
+def test_grouping_a_sound_inside_a_group_that_holds_a_symbol_is_refused():
+    # ・ carries no mora: dissolving (ブ・ユー) to fold inside it would take that sound away
+    with pytest.raises(KrcError):
+        group_sounds("みんな　アイ・ラ(ブ・ユー)", 0, 8, 9)
+
+
+def test_export_krc_moves_a_zero_reading_onto_its_ruby_word():
+    text = "遊[あそ]んで"
+    times = [[(5.0, 5.2), (5.2, 5.4), (0.0, 0.5), (0.5, 1.0)]]
+    notes = [(0.0, 0.5), (0.5, 1.0)]
+    out = export_krc(text, sound_lines(text), times, notes)
+    assert out == "遊[あそ].0んで"
+    assert align_tokens(sound_lines(out)) == align_tokens(sound_lines(text))
 
 
 def test_a_group_of_sounds_becomes_one_word_that_keeps_its_sounds():

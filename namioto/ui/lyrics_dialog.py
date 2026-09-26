@@ -13,8 +13,10 @@ from PyQt6.QtCore import QFileSystemWatcher, QObject, pyqtSignal
 from PyQt6.QtGui import QGuiApplication, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
+    QComboBox,
     QDialog,
     QFileDialog,
+    QGroupBox,
     QHBoxLayout,
     QLabel,
     QPlainTextEdit,
@@ -99,38 +101,68 @@ class LyricsWatcher(QObject):
 
 
 class LyricsDialog(QDialog):
-    """The source lyrics, the `.krc` beside the project, and the model that fills it in."""
+    """The `.krc` beside the project, and the two ways one gets there.
+
+    A `.krc` is imported whole into the lyrics box, or plain-text lyrics are annotated by a model
+    into it; `Save` writes the box out as the project's sidecar. The plain-text route is the only
+    reason a file that is not a `.krc` is read at all.
+    """
 
     saved = pyqtSignal(str)
     open_requested = pyqtSignal()
+    mode_changed = pyqtSignal(str)
 
-    def __init__(self, path: str | Path, config, parent=None):
+    def __init__(self, path: str | Path, config, mode: str = "edit", parent=None):
         super().__init__(parent)
         self.setWindowTitle(tr("Import lyrics"))
-        self.resize(640, 560)
+        self.resize(680, 640)
         self.path = Path(path)
         self.config = config
         self.translator: LyricsTranslator | None = None
 
         self.path_label = QLabel(str(self.path))
         self.path_label.setToolTip(tr("The lyrics file beside the project, written as .krc"))
-        self.source = QPlainTextEdit()
-        self.source.setPlaceholderText(tr("Paste the lyrics here"))
-        self.source.setFixedHeight(LOAD_HEIGHT)
-        self.load_button = QPushButton(tr("Load file…"))
-        self.load_button.clicked.connect(self._load)
-        self.result = QPlainTextEdit()
-        self.result.setPlaceholderText(tr("The annotated lyrics, editable before saving"))
-        self.result.setPlainText(lyrics.load(self.path))
-        self.log = QPlainTextEdit()
-        self.log.setReadOnly(True)
-        self.log.setFixedHeight(LOG_HEIGHT)
-        self.log.setPlaceholderText(tr("The model's own output, streamed as it arrives"))
-        self.log.hide()
-        self._log_kind: str | None = None
-        self.status_label = QLabel()
-        self.status_label.setWordWrap(True)
+        self.mode = QComboBox()
+        self.mode.addItem(tr("Edit mode"), "edit")
+        self.mode.addItem(tr("Read-only mode"), "read")
+        self.mode.setCurrentIndex(max(0, self.mode.findData(mode)))
+        self.mode.setToolTip(
+            tr(
+                "Edit: the aligner's times lay the sounds out and the strip may drag them. "
+                "Read-only: the .krc's own .N and groups lay them out."
+            )
+        )
+        self.mode.currentIndexChanged.connect(self._emit_mode)
 
+        self.load_krc_button = QPushButton(tr("Import .krc…"))
+        self.load_krc_button.setToolTip(tr("Use another .krc as this project's lyrics"))
+        self.load_krc_button.clicked.connect(self._load_krc)
+        self.save_button = QPushButton(tr("Save"))
+        self.save_button.setToolTip(tr("Write the lyrics to the project's .krc"))
+        self.save_button.clicked.connect(self._save)
+        self.open_button = QPushButton(tr("Open in external editor"))
+        self.open_button.setToolTip(tr("Open the lyrics file with the editor named in the settings"))
+        self.open_button.clicked.connect(self.open_requested)
+        self.result = QPlainTextEdit()
+        self.result.setPlaceholderText(tr("The .krc lyrics: import one, or annotate plain text below"))
+        self.result.setPlainText(lyrics.load(self.path))
+
+        krc_buttons = QHBoxLayout()
+        krc_buttons.addWidget(self.load_krc_button)
+        krc_buttons.addStretch(1)
+        krc_buttons.addWidget(self.save_button)
+        krc_buttons.addWidget(self.open_button)
+        krc = QGroupBox(tr("Lyrics (.krc)"))
+        krc_body = QVBoxLayout(krc)
+        krc_body.addWidget(self.result, 1)
+        krc_body.addLayout(krc_buttons)
+
+        self.source = QPlainTextEdit()
+        self.source.setPlaceholderText(tr("Paste plain-text lyrics to annotate"))
+        self.source.setFixedHeight(LOAD_HEIGHT)
+        self.load_text_button = QPushButton(tr("Load text…"))
+        self.load_text_button.setToolTip(tr("Load a plain-text lyrics file to annotate"))
+        self.load_text_button.clicked.connect(self._load_source)
         self.configured = bool(config.api_base.strip() and config.api_key.strip() and config.model.strip())
         self.translate_button = QPushButton(tr("Translate with the API"))
         self.translate_button.setEnabled(self.configured)
@@ -143,42 +175,68 @@ class LyricsDialog(QDialog):
         self.copy_button = QPushButton(tr("Copy prompt"))
         self.copy_button.setToolTip(tr("Put the prompt and the lyrics on the clipboard, for a web model"))
         self.copy_button.clicked.connect(self._copy_prompt)
-        self.save_button = QPushButton(tr("Save"))
-        self.save_button.setToolTip(tr("Write the result to the lyrics file"))
-        self.save_button.clicked.connect(self._save)
-        self.open_button = QPushButton(tr("Open in external editor"))
-        self.open_button.setToolTip(tr("Open the lyrics file with the editor named in the settings"))
-        self.open_button.clicked.connect(self.open_requested)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setFixedHeight(LOG_HEIGHT)
+        self.log.setPlaceholderText(tr("The model's own output, streamed as it arrives"))
+        self.log.hide()
+        self._log_kind: str | None = None
+
+        text_buttons = QHBoxLayout()
+        text_buttons.addWidget(self.load_text_button)
+        text_buttons.addWidget(self.translate_button)
+        text_buttons.addWidget(self.copy_button)
+        text_buttons.addStretch(1)
+        plain = QGroupBox(tr("Annotate plain text"))
+        plain_body = QVBoxLayout(plain)
+        plain_body.addWidget(self.source)
+        plain_body.addWidget(self.log)
+        plain_body.addLayout(text_buttons)
+
+        self.status_label = QLabel()
+        self.status_label.setWordWrap(True)
         self.close_button = QPushButton(tr("Close"))
         self.close_button.clicked.connect(self.reject)
+        bottom = QHBoxLayout()
+        bottom.addWidget(self.status_label, 1)
+        bottom.addWidget(self.close_button)
 
-        source_row = QHBoxLayout()
-        source_row.addWidget(QLabel(tr("Source lyrics")))
-        source_row.addStretch(1)
-        source_row.addWidget(self.load_button)
-        buttons = QHBoxLayout()
-        buttons.addWidget(self.translate_button)
-        buttons.addWidget(self.copy_button)
-        buttons.addStretch(1)
-        for button in (self.save_button, self.open_button, self.close_button):
-            buttons.addWidget(button)
+        top = QHBoxLayout()
+        top.addWidget(self.path_label, 1)
+        top.addWidget(QLabel(tr("Timeline mode")))
+        top.addWidget(self.mode)
 
         layout = QVBoxLayout(self)
-        layout.addWidget(self.path_label)
-        layout.addLayout(source_row)
-        layout.addWidget(self.source, 1)
-        layout.addWidget(QLabel(tr("Result (.krc)")))
-        layout.addWidget(self.result, 1)
-        layout.addWidget(self.log)
-        layout.addWidget(self.status_label)
-        layout.addLayout(buttons)
+        layout.addLayout(top)
+        layout.addWidget(krc, 3)
+        layout.addWidget(plain, 2)
+        layout.addLayout(bottom)
 
-    def _load(self) -> None:
+    def _emit_mode(self, _index: int) -> None:
+        self.mode_changed.emit(self.mode.currentData())
+
+    def _load_krc(self) -> None:
         chosen, _filter = QFileDialog.getOpenFileName(
             self,
-            tr("Load lyrics"),
+            tr("Import a .krc"),
             str(self.path.parent),
-            tr("Lyrics file ({patterns})", patterns="*.txt *.md *.lrc") + ";;" + tr("All files (*)"),
+            tr("Lyrics file (*.krc)") + ";;" + tr("All files (*)"),
+        )
+        if not chosen:
+            return
+        text = lyrics.load(chosen)
+        if not text:
+            self.status_label.setText(tr("That file could not be read"))
+            return
+        self.result.setPlainText(text)
+        self.status_label.setText(tr("Imported {name}; Save writes it into the project", name=Path(chosen).name))
+
+    def _load_source(self) -> None:
+        chosen, _filter = QFileDialog.getOpenFileName(
+            self,
+            tr("Load plain-text lyrics"),
+            str(self.path.parent),
+            tr("Text file ({patterns})", patterns="*.txt *.md *.lrc") + ";;" + tr("All files (*)"),
         )
         if not chosen:
             return
@@ -187,7 +245,7 @@ class LyricsDialog(QDialog):
             self.status_label.setText(tr("That file could not be read"))
             return
         self.source.setPlainText(text)
-        self.status_label.setText(tr("Loaded {name}", name=Path(chosen).name))
+        self.status_label.setText(tr("Loaded {name} — translate it, or copy the prompt", name=Path(chosen).name))
 
     def _copy_prompt(self) -> None:
         QGuiApplication.clipboard().setText(lyrics.build_prompt(self.source.toPlainText()))

@@ -22,7 +22,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-from namioto.karaoke.model import Group, KrcError, Line, Unit, Word
+from namioto.karaoke.model import Group, KrcError, Line, Lyrics, Unit, Word
 from namioto.karaoke.parser import parse
 from namioto.karaoke.writer import dumps
 from namioto.utils import kana_tokens
@@ -232,6 +232,97 @@ def with_counts(text: str, counts: list[list[int]]) -> str:
     return dumps(lyrics)
 
 
+def export_krc(
+    text: str,
+    lines: list[SoundLine],
+    times: Sequence[Sequence[tuple[float | None, float | None]]],
+    notes: Sequence[tuple[float, float]],
+    *,
+    aligned: bool = True,
+) -> str:
+    """The `.krc` the mapping writes: its groups folded and every unit's `.N` set to the notes it takes.
+
+    The sounds are laid on the notes the way the strip shows them, a run that shares a note is folded
+    into `(...)` where the format allows it, and each unit gets the number of notes its sounds cover
+    as its `.N` - `0` for a sound that covers none. A run the format cannot express (one crossing a
+    ruby part) is left unfolded, so its `.N` still travels; with no notes the text comes back as it
+    was.
+    """
+    if not notes or not lines:
+        return text
+    placements = map_sounds(lines, times, notes, text, aligned=aligned)
+    grouped = text
+    for row, row_placements in enumerate(placements):
+        for first, last in _group_runs(row_placements):
+            try:
+                grouped = group_sounds(grouped, row, first, last)
+            except KrcError:
+                continue
+    lyrics = parse(grouped)
+    index = 0
+    for chapter in lyrics.chapters:
+        for line in chapter.lines:
+            _line, _sources, locations = _row(line, True)
+            targets: dict[int, tuple] = {}
+            for sound_index, location in enumerate(locations):
+                target = _override_target(line, location)
+                covered = targets.setdefault(id(target), (target, set()))[1]
+                covered.update(placements[index][sound_index].notes)
+            for target, covered in targets.values():
+                count = len(covered)
+                target.override = None if count == target.natural_mora else count
+            index += 1
+    _move_zero_rubies(lyrics)
+    exported = dumps(lyrics)
+    if _flatten_tokens(exported) != _flatten_tokens(text):
+        raise KrcError("writing the counts back would move a sound")
+    return exported
+
+
+def _move_zero_rubies(lyrics: Lyrics) -> None:
+    """A ruby word whose parts all read zero would be dropped whole, so its `.0` goes on the word.
+
+    `_row` skips a unit whose `natural_mora` is zero, and a ruby's is the sum of its parts: pointing
+    every part at no note would take the word's sounds away with it. The zero then rides the word
+    itself, whose reading is its parts' own again.
+    """
+    for chapter in lyrics.chapters:
+        for line in chapter.lines:
+            for unit in line.units:
+                if unit.ruby is None or unit.ruby.total_mora() != 0:
+                    continue
+                for part in unit.ruby.parts:
+                    for inner in part:
+                        inner.override = None
+                unit.override = 0
+
+
+def _group_runs(row: Sequence[Placement]) -> list[tuple[int, int]]:
+    """Every run of two or more sounds that share one note, as `(first, last)` pairs."""
+    runs: list[tuple[int, int]] = []
+    index = 0
+    while index < len(row):
+        note = row[index].group
+        if note < 0:
+            index += 1
+            continue
+        last = index
+        while last + 1 < len(row) and row[last + 1].group == note:
+            last += 1
+        if last > index:
+            runs.append((index, last))
+        index = last + 1
+    return runs
+
+
+def _override_target(line: Line, location: tuple):
+    """The unit a sound's `.N` belongs on: the top-level unit or the ruby part's inner one."""
+    top, _last, part, inner, _member, _inner_last, _member_last = location
+    if part is None:
+        return line.units[top]
+    return line.units[top].ruby.parts[part][inner]
+
+
 def group_sounds(text: str, row: int, first: int, last: int) -> str:
     """Fold the sounds `first..last` of one line into one word of the `.krc`, written `(...)`.
 
@@ -260,6 +351,10 @@ def group_sounds(text: str, row: int, first: int, last: int) -> str:
         raise KrcError("a group cannot cross a ruby part or a word")
 
     _line, _sources, loc = _row(line, True)
+    if first >= len(loc) or last >= len(loc):
+        # dissolving a group may drop a member that carries no mora of its own (a `・`), so the run
+        # no longer lines up; leave it to the caller, which keeps the sounds where they are
+        raise KrcError("folding these sounds would move a sound")
     if ruby == {None}:
         low, high = loc[first][0], loc[last][1]
         chars = "".join(unit.text for unit in line.units[low : high + 1])

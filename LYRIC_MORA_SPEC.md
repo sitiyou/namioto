@@ -30,7 +30,7 @@
 | **Sound** | timeline 上的最小文本单元：把一个 `Unit` 按 mora 数 flatten 后的一份；带显示 `label` 与一个 aligner `token`。 | `timeline.Sound` |
 | NOTE | 卷帘上 channel 1 的音符 `(start, end)` 秒，按 start 排序；**也指**对齐后每个 Sound 落到的那个时间戳。 | |
 | 对齐 | `sum(每个 Unit 的 mora) == NOTE 总数`；每个 Sound 恰好对一个 NOTE。 | §2 |
-| raw 时间 | 每个 Sound 的原始对齐时间；`.nto` 的 `project.LyricTimes.lines` 存 `(start, end)`。 | |
+| raw 时间 | 每个 Sound 的原始对齐时间；`.nto` 的 `project.Lyrics.lines` 存 `(start, end)`。 | |
 | onset 链 | 只保留 raw 的 **start**；`end` 由下一个 Sound 的 start 决定（见 §3）。 | |
 | `|` | 条带上每个 Sound 起点的竖线，也是拖动把手。 | |
 | 块 | 条带上 Sound 映射到的 NOTE 矩形。 | |
@@ -214,16 +214,16 @@ group    # 共享的 NOTE 下标；-1 表示独立
 - `AlignDialog` 产出每 mora `(start, end)`；若选了 Quantize，先过 `karaoke.snap_to_beats`。
 - `snap_to_beats` 会把两端落在同一格内的 mora 收成零长（`start == end`）——这是 `.0` 的一个来源，
   等价于「对齐时选的 snap 决定初值」。
-- 结果存 `project.LyricTimes`，并 `_remap_lyrics`。
+- 结果存 `project.Lyrics`，并 `_remap_lyrics`。
 - `.krc` 外部改动：有缓存 pass 时 `lyrics.auto_align` 后台重对齐；否则保持 1:1 映射并提示。
 
 ---
 
 ## 9. 持久化与 dirty
 
-- `.nto` 的 `lyrics: LyricTimes{key, model, lines}`；`key` = `.krc` 文本 hash，`model` = 对齐模型。
+- `.nto` 的 `lyrics: Lyrics{text, key, model, mode, lines}`；`key` = `.krc` 文本 hash，`model` = 对齐模型。
   `lines` 每 mora `(start, end)`。
-- 载入：`_load_mora` 用 `LyricTimes` 还原 raw（再过 `contiguous`）。
+- 载入：`_load_mora` 用 `Lyrics` 还原 raw（再过 `contiguous`）。
 - 保存：`save_project` 写 `view.lyric_raw`。
 - dirty：歌词编辑经 `notes_changed` 触发 `_mark_dirty`；`_state_data` 含 `lyric_raw`。
 - **`.krc` 永不因编辑被写回。**

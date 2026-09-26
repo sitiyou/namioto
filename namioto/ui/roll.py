@@ -272,6 +272,7 @@ class PianoRollView(QGraphicsView):
         self._lyric_zero: tuple[tuple[bool, ...], ...] = ()
         self._lyric_group: tuple[tuple[int, ...], ...] = ()
         self._lyric_raw: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
+        self._lyric_editable = True
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         self.viewport().setMouseTracking(True)  # the row under the mouse is highlighted
@@ -389,20 +390,27 @@ class PianoRollView(QGraphicsView):
         """The aligned times the mapping was made from, which is what a project keeps."""
         return self._lyric_raw
 
+    @property
+    def lyric_editable(self) -> bool:
+        """Whether the strip may drag its raw times; off while the `.krc` itself lays them out."""
+        return self._lyric_editable
+
     def set_lyrics(self, lines, times) -> None:
         """Take a whole aligned `.krc` over: every line's sounds and their times, as one step."""
         with self._edit("Align lyrics"):
             self.load_lyrics(lines, times)
 
-    def load_lyrics(self, lines, times, red=None, raw=None, zero=None, group=None) -> None:
+    def load_lyrics(self, lines, times, red=None, raw=None, zero=None, group=None, editable=True) -> None:
         """The lyrics a `.krc` or a project brings in, with no undo step of their own.
 
         `times` are the spans the mapping draws, `raw` the aligned times it was made from and the
-        strip edits, `red` the sounds the mapping doubts, `zero` the sounds that cover no note and
-        `group` the note each sound shares. Without `red`/`zero` every sound is taken as sound, and
-        without `raw` the aligned times are the drawn spans themselves.
+        strip edits, `red` the sounds the mapping doubts, `zero` the sounds that cover no note,
+        `group` the note each sound shares and `editable` whether the strip may move `raw` at all.
+        Without `red`/`zero` every sound is taken as sound, and without `raw` the aligned times are
+        the drawn spans themselves.
         """
         self._lines = tuple(lines)
+        self._lyric_editable = bool(editable)
         self._lyric_times = tuple(tuple(span) for span in times)
         self._lyric_raw = tuple(tuple(span) for span in contiguous(times if raw is None else raw))
         self._lyric_red = (

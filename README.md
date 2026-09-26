@@ -55,7 +55,8 @@ side, both), `--t-num` the frames per second.
 ## Projects
 
 The **Project** block of the transport row holds `Open` and `Save` (`Ctrl+O`, `Ctrl+S`, `Ctrl+Shift+S`
-for Save As), and `Export MIDI` beside them for a MIDI file of its own. A `.nto` project is a plain
+for Save As), and `Export` beside them, a menu that writes either the notes as a MIDI file or the
+lyrics as a `.krc`. A `.nto` project is a plain
 JSON file that keeps the notes together with what they were drawn over and the values that belong to
 that piece of work: the audio file, the tempo, the analysis parameters, the spectrum display, the snap
 grid and the view. It is a few kilobytes, so it is diffable, searchable and editable by hand.
@@ -103,7 +104,9 @@ mapping is edited in the same dialog, and the tempo stays where the audio put it
 tempo, one track chunk per channel and no name on any of them. A note drawn on the roll's grid lands
 exactly on the tick that grid names, and one taken from the audio keeps the time it has, rounded to
 the nearest tick; a hidden channel goes in like any other, since hiding is about the drawing and not
-the notes. **WaveTone compatibility**, in the settings, is
+the notes. **Export lyrics** folds the current mapping back into a `.krc` - a run of sounds sharing a
+note becomes `(...)` and every word gets the notes it covers as its `.N` - writing a file of its own,
+for another karaoke tool or a read-only pass. **WaveTone compatibility**, in the settings, is
 on by default: WaveTone's own MIDI export starts every note one bar late, so a file it wrote is read
 back with that bar removed, and a file written here carries it again - which is what its own tools
 expect. Turn it off to exchange plain MIDI with anything else,
@@ -246,7 +249,7 @@ external synth receives the real GM program on the channel's own number.
 | Play or pause | `Space` or the play/pause button |
 | Open a project | `Ctrl+O`, or `Open` in the Project block |
 | Save a project | `Ctrl+S` (Save As on the first save, or `Ctrl+Shift+S`), or `Save` in the Project block |
-| Export MIDI | `Export MIDI` in the Project block, next to `Save` |
+| Export MIDI / lyrics | `Export` in the Project block, next to `Save`: a menu with `Export MIDI…` and `Export lyrics (.krc)…` |
 | Move the playhead | A press anywhere in the roll - over the grid or over a note, in either mode - or a click in the timeline ruler (any mode, and it works while the file plays), or the rewind / forward buttons for the ends. A press on a note moves, resizes or selects it *and* moves the playhead. Dragging carries the playhead along with the pointer, and sounding every row it crosses like a glissando. While the audio plays the roll keeps its cursor so editing does not jump the sound; seeking then is what the ruler is for, and the file carries on from there |
 | Double / halve the tempo | Right-click the Tempo field, or press `*` / `/` while it has the focus |
 | Pan | Middle drag, a scrollbar, or drag in the timeline ruler to scroll horizontally |
@@ -314,48 +317,47 @@ are downloaded rather than redistributed here - see NOTICE.
 
 ## Importing lyrics
 
-A project can carry rubies for the words its notes sing, in a `.krc` file beside it - the same
-base name with the `.krc` suffix. The text-box button beside the GAME wand opens a window over that
-file: paste the lyrics into the upper box (or load a `.txt`, `.md` or `.lrc`), and either ask a
-model to annotate it or type the lower one by hand. `Save` writes the `.krc` as plain UTF-8 text -
-readable and editable on its own - and the editor reloads it whenever something else changes it, so
-a hand edit shows up without reopening the project. `Open in external editor` hands the file to the
-command named under **External editor** in the settings, or to the platform's own choice when that is
-left empty.
+A project can carry rubies for the words its notes sing. The text itself lives in the `.nto`, so the
+project still opens with its lyrics once the sidecar is gone; a `.krc` file of the same base name
+beside it is a copy the project writes for external editing and export. The text-box button beside
+the GAME wand opens a window over that file. Import is a `.krc`: `Import .krc…` puts another one's
+text into the **Lyrics (.krc)** box, which is what the project sings. Plain text is the exception,
+and only so a model can make a `.krc` of it: the **Annotate plain text** box takes pasted lyrics or
+a `.txt`/`.md`/`.lrc` (`Load text…`), and `Translate with the API` or `Copy prompt` fills the
+lyrics box above. `Save` writes the `.krc` as plain UTF-8 text - readable and editable on its own -
+and the editor reloads it whenever something else changes it, so a hand edit shows up without
+reopening the project. `Open in external editor` hands the file to the command named under
+**External editor** in the settings, or to the platform's own choice when that is left empty.
 
 The prompt is built in and adds the rubies: it is the same rule set an external `lyrics.md` role would
 carry, asking for the kana of each kanji in square brackets, grouped per word and comma-separated.
 `Copy prompt` puts it on the clipboard together with the lyrics, for a web model - paste it there,
-paste the answer back into the lower box and save. With an OpenAI-compatible endpoint set up under
+paste the answer back into the lyrics box and save. With an OpenAI-compatible endpoint set up under
 **Lyrics** in the settings, `Translate with the API` does that round trip in the background instead,
-and a box under the result streams the model's own output as it arrives - its reasoning first, then
-the answer. That box appears only once the API is asked for; the clipboard and hand-editing routes
-never need it. The key lives in `~/.config/namioto/settings.json` in plain text, and nothing here
+and a box under the plain-text lyrics streams the model's own output as it arrives - its reasoning
+first, then the answer. That box appears only once the API is asked for; the clipboard and
+hand-editing routes never need it. The key lives in `~/.config/namioto/settings.json` in plain text,
+and nothing here
 checks the `.krc` syntax: a file with a mistake in it is still one you can fix in an editor.
+
+The window's **Timeline mode** picks how the sounds are laid on the notes. **Edit mode** lets the
+aligner's times do it and the strip be dragged; **Read-only mode** lets the `.krc`'s own `.N` and
+groups do it and keeps the strip still. The mode is kept in the `.nto`, and aligning is available in
+edit mode only.
 
 Once a `.krc` is open and its audio is loaded, the clock button beside the text-box one puts a time
 on every sound: the whole stream is forced onto the frames of a wav2vec2 CTC model in one pass, and
-each sound gets the span of frames it won. The lyrics are drawn above the roll as one row of
-note-like blocks, on the roll's own columns; a block is green while its sound sits on a note and red
-while it does not. Drag a block to move it or an edge to trim it, and it snaps onto the note grid; a
-line's blocks keep the order they were read in and never overlap, so a block dragged by its middle
-needs the room to be free while an edge dragged into a neighbour takes the room from it. A drag is a
-preview: come back to where you started before letting go and nothing changes, not even an undo step.
-A dragged block steps in whole cells too, keeping where it sits inside its cell.
-Drag a block up or down and its length goes away: a sound nothing is sung on, its block no longer drawn and no
-longer standing in the way of the blocks around it. The menu
-over the block it follows puts it back, out of the room in front of it or out of that block's own
-space. Click a block to select it, Ctrl-click to add or drop one, Shift-click for everything from
-the last click to the pointer, and a click on a block that is already selected leaves only it; a
-press that drags carries them all. A selected block wears a yellow rim (`theme.LYRIC_SELECT`) over a body
-that keeps saying whether its sound sits on its notes, and dragging one of the blocks moves them all
-together. Right-click a run of them and they can be made one word: the `.krc` gains `(...)`, and the
-run counts as one word from then on, so its `.N` is the notes the whole run covers - コー, two sounds
-of one sound, shares the one note under it rather than one of them being squeezed away.
-The times ride in the `.nto` beside the notes, saved and undone with them.
-Exporting MIDI checks the sounds against the notes first - a sound has to start and end on the notes
-it covers, though it may cover several with gaps between - and writes each sound's note count back
-into the `.krc` as its `.N`. The align window also offers a Quantize choice (Off / 1/4 / 1/8 / …)
+each sound gets the span of frames it won. The lyrics are drawn above the roll as one row of sounds, on the roll's own columns: each sound
+starts at a `|` with its label, and its block covers the note span the mapping gives it - green while
+it sits on its notes, red while the mapping doubts it, grey and blockless while it covers none.
+Dragging a `|` slides the boundary between two sounds' raw aligned starts; the drag is smooth and
+sticks to a drawn beat line when the pointer comes near it, and one gesture is one undo step.
+Hovering a sound that shares a note with its neighbours lights the whole run. The mapping is the only
+thing that decides a sound's look, and the editor never rewrites the `.krc` itself.
+The text and the times ride in the `.nto` beside the notes, saved and undone with them.
+`Export lyrics` folds the current mapping back into a `.krc`: a run of sounds sharing a note becomes
+`(...)`, and every word gets the notes it covers as its `.N` - `0` for a sound that covers none - so a
+read-only pass reads the same layout. The align window also offers a Quantize choice (Off / 1/4 / 1/8 / …)
 that snaps the result onto the BPM beat grid, and remembers the model, the device and the Quantize
 choice for the next run. A finished run is kept as a cache, so changing the
 tempo or the grid offset and running again re-snaps it without touching the model.

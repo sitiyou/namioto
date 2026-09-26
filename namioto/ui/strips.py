@@ -54,8 +54,8 @@ class SoundStrip(_ViewportStrip):
     Each sound starts with a `|` and its label, green while it sits on its notes, red while the
     mapping doubts it and grey while it covers none; the run of sounds one note is shared by lights
     up while the pointer is on it. The `|` is the pointer's target: a drag slides that boundary of
-    the raw aligned times. A label is drawn only when it fits - a rubied one drops the base in its
-    brackets first - so it never runs under the next `|`.
+    the raw aligned times, unless the view is read-only. A label is drawn only when it fits - a
+    rubied one drops the base in its brackets first - so it never runs under the next `|`.
     """
 
     def __init__(self, view: PianoRollView):
@@ -157,7 +157,7 @@ class SoundStrip(_ViewportStrip):
         painter.restore()
 
     def mousePressEvent(self, event) -> None:
-        if event.button() != Qt.MouseButton.LeftButton or not self.view.lyric_raw:
+        if event.button() != Qt.MouseButton.LeftButton or not self.view.lyric_raw or not self.view.lyric_editable:
             return
         found = self._boundary_at(event.position().x())
         if found is None:
@@ -335,7 +335,7 @@ class SoundStrip(_ViewportStrip):
         painter.restore()
 
     def _set_cursor(self, found: tuple[int, int] | None) -> None:
-        if found is None:
+        if found is None or not self.view.lyric_editable:
             self.unsetCursor()
         else:
             self.setCursor(Qt.CursorShape.SizeHorCursor)

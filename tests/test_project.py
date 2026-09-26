@@ -160,10 +160,26 @@ def test_notes_that_are_not_a_list_leave_an_empty_project() -> None:
 
 
 def test_the_lyric_times_survive_a_round_trip() -> None:
-    lyrics = project.LyricTimes(key="abc", model="mms", lines=(((0.0, 1.0), (None, None)),))
+    lyrics = project.Lyrics(text="あん\n", key="abc", model="mms", mode="read", lines=(((0.0, 1.0), (None, None)),))
     written = project.to_dict(make(lyrics=lyrics))
-    assert written["lyrics"] == {"key": "abc", "model": "mms", "lines": [[[0.0, 1.0], [None, None]]]}
+    assert written["lyrics"] == {
+        "text": "あん\n",
+        "key": "abc",
+        "model": "mms",
+        "mode": "read",
+        "lines": [[[0.0, 1.0], [None, None]]],
+    }
     assert project.from_dict(written).lyrics == lyrics
+
+
+def test_a_lyrics_block_without_a_text_still_reads() -> None:
+    old = {"format": "namioto", "lyrics": {"key": "abc", "model": "mms", "lines": [[[0.0, 1.0]]]}}
+    assert project.from_dict(old).lyrics == project.Lyrics(key="abc", model="mms", lines=(((0.0, 1.0),),))
+
+
+def test_an_unknown_lyric_mode_falls_back_to_edit() -> None:
+    data = {"format": "namioto", "lyrics": {"key": "a", "lines": [], "mode": "sideways"}}
+    assert project.from_dict(data).lyrics.mode == "edit"
 
 
 def test_a_broken_lyric_block_is_dropped() -> None:

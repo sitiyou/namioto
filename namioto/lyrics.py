@@ -2,10 +2,10 @@
 # ruff: noqa: E501
 """Lyrics: the `.krc` file beside a project, the prompt that fills it, and the model call.
 
-Qt-free on purpose. The file is a sidecar, not a document: the project keeps its notes, this keeps
-the rubies of the words they sing, and nothing here checks the `.krc` syntax - a file with a
-mistake in it is still the user's to fix in an editor. `translate` takes its opener as an argument,
-so a call can be exercised without a network.
+Qt-free on purpose. The `.krc` is a working copy: the project keeps the text itself as its
+baseline, and this reads and writes the sidecar beside it. Nothing here checks the `.krc` syntax - a
+file with a mistake in it is still the user's to fix in an editor. `translate` takes its opener as
+an argument, so a call can be exercised without a network.
 """
 
 from __future__ import annotations
