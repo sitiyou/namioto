@@ -3,13 +3,13 @@
 from namioto import utils
 
 
-def test_kana_tokens_splits_kana_into_one_hepburn_token_per_mora():
+def test_kana_tokens_splits_kana_into_one_hepburn_token_per_sound():
     assert utils.kana_tokens("きょう") == ["kyo", "u"]
     assert utils.kana_tokens("しんぶん") == ["shi", "n", "bu", "n"]
     assert utils.kana_tokens("ふぁんた") == ["fa", "n", "ta"]
 
 
-def test_kana_tokens_doubles_a_sokuon_onto_the_next_mora():
+def test_kana_tokens_doubles_a_sokuon_onto_the_next_sound():
     assert utils.kana_tokens("がっこう") == ["ga", "kko", "u"]
     assert utils.kana_tokens("ちょっと") == ["cho", "tto"]
 

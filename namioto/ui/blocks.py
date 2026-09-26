@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""The pointer grammar the notes and the lyrics morae share.
+"""The pointer grammar the notes and the lyrics sounds share.
 
 Both editors draw a timed block over the roll's shared time axis and answer the pointer the same
 way: an edge resizes the block, its body moves it, and a press stays a click - narrowing the
@@ -33,7 +33,7 @@ def block_part(x: float, start: float, end: float, grab: float) -> str:
 class Press:
     """A press that is a click until it travels past `CLICK_SLOP_PX`.
 
-    `block` is what the pointer landed on, whatever the editor calls it - a `NoteItem`, a mora's
+    `block` is what the pointer landed on, whatever the editor calls it - a `NoteItem`, a sound's
     (row, column). A click narrows a multi-selection to it; a drag carries the selection instead.
     """
 

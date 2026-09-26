@@ -229,7 +229,7 @@ def test_correct_times_moves_a_head_that_straddles_a_rest_to_the_stretch_of_its_
     rows = [[(0.5, 0.8), (1.3, 1.6)]]
     got = align.correct_times(rows, np.zeros(1))
     assert got[0][0][0] == pytest.approx(0.8)  # no one stretch holds the line, so the head takes its own end
-    assert got[0][1][1] == pytest.approx(2.0)  # the last mora reaches the stretch's end
+    assert got[0][1][1] == pytest.approx(2.0)  # the last sound reaches the stretch's end
 
 
 def test_correct_times_leaves_a_line_inside_one_stretch_alone(monkeypatch):

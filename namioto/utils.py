@@ -3,7 +3,7 @@
 file under a path, and `kana_tokens()`.
 
 `kana_tokens()` is the ruby `namioto-align` takes: it turns a `.krc` line's bracketed kana into
-one hepburn token per mora, the unit FA-Kara's models are trained on. It is deliberately small - a
+one hepburn token per sound, the unit FA-Kara's models are trained on. It is deliberately small - a
 `.krc` file already carries the kana ruby of every kanji, so the kanji surface and the annotation
 punctuation only have to be dropped, with no kanji lookup and no dictionary. A run of Latin letters
 or digits is kept as one token; everything else is dropped, so the same call reads a bare kana
@@ -151,7 +151,7 @@ _KANA = {
     "ょ": "yo",
 }
 
-# a base kana followed by a small ya, yu or yo, which is one mora
+# a base kana followed by a small ya, yu or yo, which is one sound
 _DIGRAPHS = {
     "きゃ": "kya",
     "きゅ": "kyu",
@@ -219,15 +219,15 @@ def _normalize(text: str) -> str:
     return "".join(folded)
 
 
-def _geminate(mora: str) -> str:
-    """A sokuon doubles the next mora's consonant; `ch` becomes `tch`, Hepburn's own spelling."""
-    if mora.startswith("ch"):
-        return "t" + mora
-    return mora[0] + mora if mora[:1] not in _VOWELS else "t" + mora
+def _geminate(token: str) -> str:
+    """A sokuon doubles the next token's consonant; `ch` becomes `tch`, Hepburn's own spelling."""
+    if token.startswith("ch"):
+        return "t" + token
+    return token[0] + token if token[:1] not in _VOWELS else "t" + token
 
 
 def kana_tokens(text: str) -> list[str]:
-    """The ruby of `text` as one hepburn token per mora, Latin and digits kept as runs.
+    """The ruby of `text` as one hepburn token per sound, Latin and digits kept as runs.
 
     `text` is a kana string or a whole `.krc` line; the kanji and the annotation punctuation are
     dropped, so `漢字[かんじ]` reads as `kanji`.
@@ -256,12 +256,12 @@ def kana_tokens(text: str) -> list[str]:
             continue
         pair = folded[index : index + 2]
         if pair in _DIGRAPHS:
-            mora, index = _DIGRAPHS[pair], index + 2
+            token, index = _DIGRAPHS[pair], index + 2
         elif char in _KANA:
-            mora, index = _KANA[char], index + 1
+            token, index = _KANA[char], index + 1
         else:
             index += 1
             continue
-        found.append(_geminate(mora) if geminate else mora)
+        found.append(_geminate(token) if geminate else token)
         geminate = False
     return found

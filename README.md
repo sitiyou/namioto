@@ -334,27 +334,27 @@ never need it. The key lives in `~/.config/namioto/settings.json` in plain text,
 checks the `.krc` syntax: a file with a mistake in it is still one you can fix in an editor.
 
 Once a `.krc` is open and its audio is loaded, the clock button beside the text-box one puts a time
-on every mora: the whole stream is forced onto the frames of a wav2vec2 CTC model in one pass, and
-each mora gets the span of frames it won. The lyrics are drawn above the roll as one row of
-note-like blocks, on the roll's own columns; a block is green while its mora sits on a note and red
+on every sound: the whole stream is forced onto the frames of a wav2vec2 CTC model in one pass, and
+each sound gets the span of frames it won. The lyrics are drawn above the roll as one row of
+note-like blocks, on the roll's own columns; a block is green while its sound sits on a note and red
 while it does not. Drag a block to move it or an edge to trim it, and it snaps onto the note grid; a
 line's blocks keep the order they were read in and never overlap, so a block dragged by its middle
 needs the room to be free while an edge dragged into a neighbour takes the room from it. A drag is a
 preview: come back to where you started before letting go and nothing changes, not even an undo step.
 A dragged block steps in whole cells too, keeping where it sits inside its cell.
-Drag a block up or down and its length goes away: a mora nothing is sung on, its block no longer drawn and no
+Drag a block up or down and its length goes away: a sound nothing is sung on, its block no longer drawn and no
 longer standing in the way of the blocks around it. The menu
 over the block it follows puts it back, out of the room in front of it or out of that block's own
 space. Click a block to select it, Ctrl-click to add or drop one, Shift-click for everything from
 the last click to the pointer, and a click on a block that is already selected leaves only it; a
 press that drags carries them all. A selected block wears a yellow rim (`theme.LYRIC_SELECT`) over a body
-that keeps saying whether its mora sits on its notes, and dragging one of the blocks moves them all
+that keeps saying whether its sound sits on its notes, and dragging one of the blocks moves them all
 together. Right-click a run of them and they can be made one word: the `.krc` gains `(...)`, and the
-run counts as one word from then on, so its `.N` is the notes the whole run covers - コー, two morae
+run counts as one word from then on, so its `.N` is the notes the whole run covers - コー, two sounds
 of one sound, shares the one note under it rather than one of them being squeezed away.
 The times ride in the `.nto` beside the notes, saved and undone with them.
-Exporting MIDI checks the morae against the notes first - a mora has to start and end on the notes
-it covers, though it may cover several with gaps between - and writes each mora's note count back
+Exporting MIDI checks the sounds against the notes first - a sound has to start and end on the notes
+it covers, though it may cover several with gaps between - and writes each sound's note count back
 into the `.krc` as its `.N`. The align window also offers a Quantize choice (Off / 1/4 / 1/8 / …)
 that snaps the result onto the BPM beat grid, and remembers the model, the device and the Quantize
 choice for the next run. A finished run is kept as a cache, so changing the
@@ -366,7 +366,7 @@ Given a separated vocal and the tokens of each line, `namioto-align` puts a time
 tokens are forced onto the frames of a wav2vec2 CTC model, which never recognises anything, it only
 says where the words it is given fall. The vocal has to be the isolated singing voice and not the
 mix, the tokens its kana romanised, and each line a roughly right window - a list of
-`{start, end, tokens}` in a JSON file, one token per mora - because the aligner refines a window and
+`{start, end, tokens}` in a JSON file, one token per sound - because the aligner refines a window and
 cannot find one: it is passed as a whole, only the model's own frames carry the times.
 
 ```bash
@@ -381,7 +381,7 @@ backwards, `collapsed` when a run of tokens was squeezed into no time at all, an
 reference times handed to the module's `problems()`. A line wearing one of them is worth running
 again with another window before it is believed.
 
-`namioto.utils.kana_tokens` turns a line's kana into those tokens, one hepburn token per mora. The
+`namioto.utils.kana_tokens` turns a line's kana into those tokens, one hepburn token per sound. The
 converted graph is downloaded from this project's `models` release on first use, into the data
 directory; `scripts/export_align_model.py` builds one yourself, and `--dir` or
 `$NAMIOTO_ALIGN_MODEL` points at a converted one instead.

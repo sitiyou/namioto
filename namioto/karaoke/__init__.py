@@ -3,26 +3,28 @@
 
 `model.py` holds the tree (`Word`/`Ruby`/`Line`/`Chapter`/`Lyrics`), `parser.parse` reads a `.krc`
 into it, `writer.dumps` writes an edited tree back out, `transforms` holds the optional passes over
-one, and `timeline` turns a parsed lyric into the morae the editor draws and the aligner times. The
+one, and `timeline` turns a parsed lyric into the sounds the editor draws and the aligner times. The
 whole package is Qt-free; the names it re-exports are its public surface.
 """
 
 from namioto.karaoke.model import Chapter, Group, KrcError, Line, Lyrics, Ruby, Unit, Word
 from namioto.karaoke.parser import parse
 from namioto.karaoke.timeline import (
-    Mora,
-    MoraLine,
     Placement,
+    Sound,
+    SoundLine,
     align_tokens,
     assign_by_order,
     assign_by_time,
     conflicts,
-    group_morae,
-    map_morae,
-    mora_lines,
-    mora_ok,
+    contiguous,
+    group_sounds,
+    map_faithful,
+    map_sounds,
     note_counts,
     snap_to_beats,
+    sound_lines,
+    sound_ok,
     split,
     text_key,
     with_counts,
@@ -36,8 +38,8 @@ __all__ = [
     "KrcError",
     "Line",
     "Lyrics",
-    "Mora",
-    "MoraLine",
+    "Sound",
+    "SoundLine",
     "Placement",
     "Ruby",
     "Unit",
@@ -46,13 +48,15 @@ __all__ = [
     "assign_by_order",
     "assign_by_time",
     "conflicts",
+    "contiguous",
     "dumps",
     "flatten_ruby",
-    "group_morae",
-    "map_morae",
+    "group_sounds",
+    "map_faithful",
+    "map_sounds",
     "merge_words",
-    "mora_lines",
-    "mora_ok",
+    "sound_lines",
+    "sound_ok",
     "note_counts",
     "parse",
     "snap_to_beats",

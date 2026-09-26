@@ -615,7 +615,7 @@ class EditBar(_Group):
         self.lyrics = icon_button("lyrics", tr("Import lyrics: have a model add the rubies and keep them in a .krc"))
         self.lyrics.setEnabled(False)
         self.lyrics.clicked.connect(self.lyrics_requested)
-        self.align = icon_button("align", tr("Align lyrics: put a time on every mora with the forced aligner"))
+        self.align = icon_button("align", tr("Align lyrics: put a time on every sound with the forced aligner"))
         self.align.setEnabled(False)
         self.align.clicked.connect(self.align_requested)
 

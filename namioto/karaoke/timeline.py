@@ -1,14 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""The `.krc` as a timeline: one mora per unit, each carrying the one token the aligner reads.
+"""The `.krc` as a timeline: a `Sound` per mora of every `Unit`, each carrying the one token the
+aligner reads.
 
-`mora_lines` turns the parsed lyrics into rows of morae for the strip, and `align_tokens` flattens
-them into the single token stream `namioto.analysis.align` reads. A token here is a per-mora refinement of
-`namioto.utils.kana_tokens`: the characters are the same and in the same order, so the forced
-alignment is unchanged, but a long vowel or a sokuon gets a token of its own and so a time of its
-own. A kanji the `.krc` never gave a ruby raises, because there is no sound to align it to.
+`sound_lines` flattens the parsed lyrics into rows of sounds for the strip - one per mora a unit
+reads - and `align_tokens` joins them into the single token stream `namioto.analysis.align` reads. A
+token here is a per-sound refinement of `namioto.utils.kana_tokens`: the characters are the same and
+in the same order, so the forced alignment is unchanged, but a long vowel or a sokuon gets a token of
+its own and so a time of its own. A kanji the `.krc` never gave a ruby raises, because there is no
+sound to align it to.
 
 `split` folds the aligner's flat token stream back onto the lines, `note_counts`/`conflicts` judge
-the times against the notes, and `with_counts` writes the counts back out as `.N`.
+the times against the notes, and `with_counts` writes each word's mora back out as `.N`.
 
 Qt-free.
 """
@@ -26,19 +28,18 @@ from namioto.karaoke.writer import dumps
 from namioto.utils import kana_tokens
 
 SMALL_KANA = frozenset("ャュョァィゥェォゃゅょぁぃぅぇぉゎヮ")
-OWN_MORA = frozenset("ーっッ")
-# how far a mora's time may sit from the note it should start and end on, one aligner frame of slack
+OWN_SOUND = frozenset("ーっッ")
+# how far a sound's time may sit from the note it should start and end on, one aligner frame of slack
 TOLERANCE = 0.05
-# how close the shares of a shared note must be for its morae to group, and how large each must stay
-EQUAL_BAND = 0.2
-SHARE = 0.4
+# the least of a shared note a sound must keep for the note to stay its own; below it the sound loses it
+SHARE = 0.25
 
 
 @dataclass(frozen=True)
-class Mora:
-    """One mora: the surface it belongs to, the kana it reads, and the token the aligner reads.
+class Sound:
+    """One sound: the surface it belongs to, the kana it reads, and the token the aligner reads.
 
-    A mora of a ruby-bearing word carries the base unit it is read from - the whole run of kanji
+    A sound of a ruby-bearing word carries the base unit it is read from - the whole run of kanji
     when the `.krc` gives one ruby for it, or one kanji of a comma-separated ruby - and whether that
     unit is the word's first, which `label` turns into its parentheses or its brackets.
     """
@@ -59,24 +60,24 @@ class Mora:
 
 
 @dataclass(frozen=True)
-class MoraLine:
-    """One lyric line as its morae, in order."""
+class SoundLine:
+    """One lyric line as its sounds, in order."""
 
     text: str
-    morae: tuple[Mora, ...]
+    sounds: tuple[Sound, ...]
 
 
-def mora_lines(text: str) -> list[MoraLine]:
-    """Every line of a `.krc`, as its morae.
+def sound_lines(text: str) -> list[SoundLine]:
+    """Every line of a `.krc`, as its sounds.
 
-    A kanji without a ruby, or a long vowel or sokuon with no mora to lean on, raises `KrcError`.
+    A kanji without a ruby, or a long vowel or sokuon with no sound to lean on, raises `KrcError`.
     """
     return [_row(line)[0] for chapter in parse(text).chapters for line in chapter.lines]
 
 
-def align_tokens(lines: list[MoraLine]) -> list[str]:
-    """The token stream the aligner reads: every line's morae, in order, one token each."""
-    return [mora.token for line in lines for mora in line.morae]
+def align_tokens(lines: list[SoundLine]) -> list[str]:
+    """The token stream the aligner reads: every line's sounds, in order, one token each."""
+    return [sound.token for line in lines for sound in line.sounds]
 
 
 def text_key(text: str) -> str:
@@ -84,12 +85,12 @@ def text_key(text: str) -> str:
     return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
 
-def split(tokens: Sequence, lines: list[MoraLine]) -> list[list[tuple[float | None, float | None]]]:
-    """The aligner's flat tokens, one per mora in order, cut back into the lines' rows."""
+def split(tokens: Sequence, lines: list[SoundLine]) -> list[list[tuple[float | None, float | None]]]:
+    """The aligner's flat tokens, one per sound in order, cut back into the lines' rows."""
     rows = []
     at = 0
     for line in lines:
-        row = tokens[at : at + len(line.morae)]
+        row = tokens[at : at + len(line.sounds)]
         rows.append([(token.start, token.end) for token in row])
         at += len(row)
     return rows
@@ -98,12 +99,12 @@ def split(tokens: Sequence, lines: list[MoraLine]) -> list[list[tuple[float | No
 def snap_to_beats(
     times: list[list[tuple[float | None, float | None]]], bpm: float, division: float = 1.0, offset: float = 0.0
 ) -> list[list[tuple[float | None, float | None]]]:
-    """Every mora's start and end rounded to the grid of `division` beats at `bpm` off `offset`.
+    """Every sound's start and end rounded to the grid of `division` beats at `bpm` off `offset`.
 
     The grid is the one that is drawn: `offset` is the editor's slid grid, 0 the absolute beats. A
-    mora rounds on its own, so one whose two ends land in the same cell comes back with no length -
-    a mora nothing is sung on, which the strip and the conflict check already read - rather than
-    pushing the rest of its line one cell per collision off the beat. A line with an unaligned mora
+    sound rounds on its own, so one whose two ends land in the same cell comes back with no length -
+    a sound nothing is sung on, which the strip and the conflict check already read - rather than
+    pushing the rest of its line one cell per collision off the beat. A line with an unaligned sound
     is left alone, since its boundaries say nothing yet.
     """
     step = 60.0 / max(bpm, 1.0) * division
@@ -122,29 +123,48 @@ def snap_to_beats(
 
 
 def note_counts(
-    lines: list[MoraLine], times: list[list[tuple[float | None, float | None]]], notes: Sequence[tuple[float, float]]
+    lines: list[SoundLine], times: list[list[tuple[float | None, float | None]]], notes: Sequence[tuple[float, float]]
 ) -> list[list[int]]:
-    """How many notes each mora covers: the notes wholly inside its span, gaps allowed."""
+    """How many notes each sound covers: the notes wholly inside its span, gaps allowed."""
     return [[_count(span, notes) for span in row] for row in times]
 
 
+def contiguous(
+    times: Sequence[Sequence[tuple[float | None, float | None]]],
+) -> list[list[tuple[float | None, float | None]]]:
+    """Every sound's end taken from the next sound's start: the aligner's own end is dropped.
+
+    The strip reads a line as a chain of onsets - each `|` marks where a sound begins and the sound
+    ends where the next begins - so only the starts carry the timing and a sound's own end says
+    nothing. The last sound of a line keeps the end it came with, since no `|` follows it.
+    """
+    rows = []
+    for row in times:
+        spans = [list(span) for span in row]
+        for index in range(len(spans) - 1):
+            if spans[index][0] is not None and spans[index + 1][0] is not None:
+                spans[index][1] = spans[index + 1][0]
+        rows.append([tuple(span) for span in spans])
+    return rows
+
+
 def conflicts(
-    lines: list[MoraLine], times: list[list[tuple[float | None, float | None]]], notes: Sequence[tuple[float, float]]
+    lines: list[SoundLine], times: list[list[tuple[float | None, float | None]]], notes: Sequence[tuple[float, float]]
 ) -> list[str]:
-    """Why the text and the notes do not line up yet: an unaligned, unbacked or shared mora."""
+    """Why the text and the notes do not line up yet: an unaligned, unbacked or shared sound."""
     problems = []
     claimed: dict[int, str] = {}
     for line, row in zip(lines, times, strict=True):
-        if len(row) != len(line.morae):
-            problems.append(f"'{line.text}' has {len(line.morae)} morae but {len(row)} times")
+        if len(row) != len(line.sounds):
+            problems.append(f"'{line.text}' has {len(line.sounds)} sounds but {len(row)} times")
             continue
-        for mora, (start, end) in zip(line.morae, row, strict=True):
-            label = mora.label
+        for sound, (start, end) in zip(line.sounds, row, strict=True):
+            label = sound.label
             if start is None or end is None:
                 problems.append(f"{label}: not aligned")
                 continue
             if end <= start:
-                continue  # a mora of no length has nothing to sit on
+                continue  # a sound of no length has nothing to sit on
             inside = [index for index, note in enumerate(notes) if _inside(note, start, end)]
             if not inside:
                 problems.append(f"{label}: no note between {start:.3f} and {end:.3f}")
@@ -160,13 +180,13 @@ def conflicts(
     return problems
 
 
-def mora_ok(
-    lines: list[MoraLine], times: list[list[tuple[float | None, float | None]]], notes: Sequence[tuple[float, float]]
+def sound_ok(
+    lines: list[SoundLine], times: list[list[tuple[float | None, float | None]]], notes: Sequence[tuple[float, float]]
 ) -> list[list[bool]]:
-    """Whether each mora sits on its own notes, the same judgement `conflicts` reports by hand.
+    """Whether each sound sits on its own notes, the same judgement `conflicts` reports by hand.
 
-    A mora is not settled when it is unaligned, backs no note, does not start and end on its
-    boundary notes, or shares a note with another mora.
+    A sound is not settled when it is unaligned, backs no note, does not start and end on its
+    boundary notes, or shares a note with another sound.
     """
     ok = []
     holders: dict[int, list[tuple[int, int]]] = {}
@@ -174,14 +194,14 @@ def mora_ok(
         flags = []
         for column, (start, end) in enumerate(row):
             if start is not None and end is not None and end <= start:
-                flags.append(len(row) == len(line.morae))  # a mora of no length has nothing to sit on
+                flags.append(len(row) == len(line.sounds))  # a sound of no length has nothing to sit on
                 continue
             inside = (
                 [index for index, note in enumerate(notes) if _inside(note, start, end)]
                 if start is not None and end is not None
                 else []
             )
-            good = bool(inside) and len(row) == len(line.morae)
+            good = bool(inside) and len(row) == len(line.sounds)
             if good:
                 good = abs(notes[inside[0]][0] - start) <= TOLERANCE and abs(notes[inside[-1]][1] - end) <= TOLERANCE
             flags.append(good)
@@ -196,82 +216,96 @@ def mora_ok(
 
 
 def with_counts(text: str, counts: list[list[int]]) -> str:
-    """A `.krc` with each mora's `.N` set to its note count; a count equal to the reading gets none."""
+    """A `.krc` with each word's `.N` set to the mora it reads, from its sound's note count.
+
+    `.N` is `Unit.override`, the unit's mora count; under `sum(unit.mora) == #NOTE` a sound covering
+    N notes makes its word read N morae. A `.N` already equal to the reading is left off.
+    """
     lyrics = parse(text)
     index = 0
     for chapter in lyrics.chapters:
         for line in chapter.lines:
-            _line, sources = _row(line)
+            _line, sources, _locations = _row(line)
             for source, count in zip(sources, counts[index], strict=True):
                 source.override = None if count == source.natural_mora else count
             index += 1
     return dumps(lyrics)
 
 
-def group_morae(
-    text: str,
-    times: Sequence[Sequence[tuple[float | None, float | None]]],
-    row: int,
-    first: int,
-    last: int,
-) -> tuple[str, list[list[tuple[float | None, float | None]]]]:
-    """Fold the morae `first..last` of one line into a single word of the `.krc`, written `(...)`.
+def group_sounds(text: str, row: int, first: int, last: int) -> str:
+    """Fold the sounds `first..last` of one line into one word of the `.krc`, written `(...)`.
 
-    A group is one word to the format, so its `.N` counts the notes the whole run covers rather than
-    one mora at a time: two morae that share a note stop clashing, and each keeps its own reading
-    instead of one of them being squeezed to no length. The run becomes one mora itself, so the
-    times come back as the span it covered. The kana is read the same way, so the aligner's token
-    stream does not move - a run that would move a sound, a sokuon or a long vowel left leaning on
-    nothing, raises `KrcError`.
+    The run must sit in one container - the top-level words or one ruby part - since the `.krc` has
+    no boundary to make a word out of a run that crosses a ruby part or a ruby word and a plain one
+    (see the spec's conversion section). The format has no nested parentheses, so a run that starts
+    or ends inside an existing `(...)` dissolves that group and re-forms it. The kana is read the
+    same way, so the aligner's token stream does not move - a run that would move a sound raises
+    `KrcError`.
     """
     lyrics = parse(text)
     lines = [line for chapter in lyrics.chapters for line in chapter.lines]
     if not 0 <= row < len(lines):
         raise KrcError(f"the lyrics have no line {row}")
     line = lines[row]
-    _line, sources = _row(line)
-    if not 0 <= first < last < len(sources):
-        raise KrcError("a group is made of two morae or more of one line")
-    indices = []
-    for source in sources[first : last + 1]:
-        index = next((index for index, word in enumerate(line.words) if word is source), None)
-        if index is None:
-            raise KrcError("a group cannot take in a mora that a ruby reads")
-        indices.append(index)
-    # a small kana is no mora of its own: it rides in the word before it, so the range may step
-    # over it and the group still takes whole words
-    covered = set(indices)
-    stepped = (
-        line.words[index].text in SMALL_KANA for index in range(indices[0], indices[-1] + 1) if index not in covered
-    )
-    if not all(stepped):
-        raise KrcError("a group takes whole words next to each other")
+    _line, _sources, loc = _row(line, True)
+    if not 0 <= first < last < len(loc):
+        raise KrcError("a group is made of two sounds or more of one line")
+    run = loc[first : last + 1]
+    ruby = {item[2] for item in run}
+    if ruby == {None}:
+        _dissolve_top(line, loc[first][0], loc[last][1])
+    elif len(ruby) == 1 and len({item[0] for item in run}) == 1:
+        _dissolve_part(line, run[0][0], run[0][2], loc[first][3], loc[last][5])
+    else:
+        raise KrcError("a group cannot cross a ruby part or a word")
 
-    tokens = [[mora.token for mora in _row(other)[0].morae] for other in lines]
-    tokens[row] = tokens[row][:first] + ["".join(tokens[row][first : last + 1])] + tokens[row][last + 1 :]
-    words = line.words[indices[0] : indices[-1] + 1]
-    line.words = [
-        *line.words[: indices[0]],
-        Unit(Group([Word(char) for char in "".join(word.text for word in words)])),
-        *line.words[indices[-1] + 1 :],
-    ]
+    _line, _sources, loc = _row(line, True)
+    if ruby == {None}:
+        low, high = loc[first][0], loc[last][1]
+        chars = "".join(unit.text for unit in line.units[low : high + 1])
+        line.units = [*line.units[:low], Unit(Group([Word(char) for char in chars])), *line.units[high + 1 :]]
+    else:
+        low, high = loc[first][3], loc[last][5]
+        part_units = line.units[run[0][0]].ruby.parts[run[0][2]]
+        chars = "".join(unit.text for unit in part_units[low : high + 1])
+        part_units[low : high + 1] = [Unit(Group([Word(char) for char in chars]))]
+
     grouped = dumps(lyrics)
-    if [[mora.token for mora in read.morae] for read in mora_lines(grouped)] != tokens:
-        raise KrcError("folding these morae into one word would move a sound")
-    return grouped, _fold_times(times, row, first, last)
+    if _flatten_tokens(grouped) != _flatten_tokens(text):
+        raise KrcError("folding these sounds into one word would move a sound")
+    return grouped
 
 
-def _fold_times(
-    times: Sequence[Sequence[tuple[float | None, float | None]]], row: int, first: int, last: int
-) -> list[list[tuple[float | None, float | None]]]:
-    """The rows of times with one line's run of morae folded into the span the run covered."""
-    rows = [list(row_times) for row_times in times]
-    if not rows or row >= len(rows):
-        return rows
-    if last >= len(rows[row]):
-        raise KrcError("the times do not count the morae of this line")
-    rows[row] = [*rows[row][:first], (rows[row][first][0], rows[row][last][1]), *rows[row][last + 1 :]]
-    return rows
+def _flatten_tokens(text: str) -> list[list[str]]:
+    """The editor's token stream: one token per sound, as `sound_lines` reads it back."""
+    return [[sound.token for sound in line.sounds] for line in sound_lines(text)]
+
+
+def _dissolve_top(line: Line, low: int, high: int) -> None:
+    """Break the `(...)` words in `line.units[low:high+1]` into their members, so the run has edges."""
+    units: list[Unit] = []
+    for index, unit in enumerate(line.units):
+        if low <= index <= high and _is_plain_group(unit):
+            units.extend(Unit(word) for word in unit.base.words)
+        else:
+            units.append(unit)
+    line.units = units
+
+
+def _dissolve_part(line: Line, top: int, part: int, low: int, high: int) -> None:
+    """Break the `(...)` words in one ruby part between the two sounds into their members."""
+    part_units = line.units[top].ruby.parts[part]
+    units: list[Unit] = []
+    for index, inner in enumerate(part_units):
+        if low <= index <= high and _is_plain_group(inner):
+            units.extend(Unit(word) for word in inner.base.words)
+        else:
+            units.append(inner)
+    line.units[top].ruby.parts[part] = units
+
+
+def _is_plain_group(unit: Unit) -> bool:
+    return unit.ruby is None and isinstance(unit.base, Group) and len(unit.base.words) > 1 and not unit.is_latin()
 
 
 def _inside(note: tuple[float, float], start: float, end: float) -> bool:
@@ -285,7 +319,15 @@ def _count(span: tuple[float | None, float | None], notes: Sequence[tuple[float,
     return sum(1 for note in notes if _inside(note, start, end))
 
 
-def _row(line: Line) -> tuple[MoraLine, list[Word]]:
+def _row(line: Line, split_groups: bool = True) -> tuple[SoundLine, list[Word], list[tuple]]:
+    """The line as its sounds, their source words, and where each sound sits in the parsed line.
+
+    `split_groups` reads a `(...)` word back as its members (the editor's view); off, it stays one
+    unit, which is what `group_sounds` folds and measures. A location is
+    `(top_first, top_last, part, inner_first, member_first, inner_last, member_last)`: the top-level
+    words the sound spans (a small kana widens the range), the ruby part it sits in (`None` at the
+    top level), and the word it covers there.
+    """
     text = "".join(word.text for word in line.words)
     unread = [word.text for word in line.words if word.ruby is None and word.is_kanji()]
     if unread:
@@ -293,53 +335,76 @@ def _row(line: Line) -> tuple[MoraLine, list[Word]]:
 
     units: list[list] = []
     sources: list[Word] = []
-    for word in line.words:
-        for base, kana, rubied, first, source in _units(word):
+    locations: list[tuple] = []
+    for top, word in enumerate(line.words):
+        for base, kana, rubied, first, source, part, inner, member in _units(word, split_groups):
             if kana in SMALL_KANA:
                 if units:
                     units[-1][1] += kana
                     if not units[-1][2]:
                         # a plain surface takes the small kana too, so its block reads ショ, not シ
                         units[-1][0] += kana
+                    old = locations[-1]
+                    if part is None:
+                        locations[-1] = (*old[:1], top, *old[2:])
+                    else:
+                        locations[-1] = (*old[:5], inner, old[6])
                 continue
             if word.natural_mora == 0:
                 continue
             units.append([base, kana, rubied, first])
             sources.append(source)
+            locations.append((top, top, part, inner, member, inner, member))
 
     folded = [char for token in kana_tokens("".join(kana for _base, kana, _rubied, _first in units)) for char in token]
     sizes = [_size(kana) for _base, kana, _rubied, _first in units]
     if sum(sizes) != len(folded):
         raise KrcError(f"'{text}' has a long vowel or a sokuon with no sound to lean on")
 
-    morae = []
+    sounds = []
     at = 0
     for (base, kana, rubied, first), size in zip(units, sizes, strict=True):
-        morae.append(Mora(base, kana, "".join(folded[at : at + size]), rubied, first))
+        sounds.append(Sound(base, kana, "".join(folded[at : at + size]), rubied, first))
         at += size
-    return MoraLine(text, tuple(morae)), sources
+    return SoundLine(text, tuple(sounds)), sources, locations
 
 
-def _units(word: Word) -> list[tuple[str, str, bool, bool, Word]]:
-    """`(surface, kana, rubied, first, source)` per unit: a plain word is one, a ruby one per mora.
+def _units(word: Unit, split_groups: bool = True) -> list[tuple]:
+    """`(surface, kana, rubied, first, source, part, inner, member)` per sound.
 
-    Every mora of a base unit carries that unit's whole text, and `first` marks the unit the word
-    opens with, so a comma-separated `世界[せ,かい]` reads `せ(世)` but `か[界]` and `い[界]`.
+    With `split_groups`, a `(...)` word is read back as its members, so `(しょう)` gives `しょ` and
+    `う` again - the small kana riding the one before, exactly as the ungrouped run would. The
+    members of a group inside a ruby all carry that ruby's surface, so `胡椒[こ,(しょう)]` reads
+    `こ(胡)`, `しょ[椒]`, `う[椒]` - the same sounds and token stream as `胡椒[こ,しょう]`.
+
+    `part`/`inner` are the ruby part the sound reads in (`None` at the top level); `member` is the
+    word it is inside a `(...)` group (`None` when the sound is a whole word).
     """
     if word.ruby is None:
-        return [(word.text, word.text, False, True, word)]
+        if split_groups and isinstance(word.base, Group) and len(word.base.words) > 1 and not word.is_latin():
+            return [
+                (inner.text, inner.text, False, True, inner, None, None, member)
+                for member, inner in enumerate(word.base.words)
+            ]
+        return [(word.text, word.text, False, True, word, None, None, None)]
     one_part = len(word.ruby.parts) == 1
     units = []
-    for index, part in enumerate(word.ruby.parts):
-        surface = word.text if one_part else word.text[index : index + 1]
-        for inner in part:
-            units.append((surface, inner.text, True, index == 0, inner))
+    for part_index, part in enumerate(word.ruby.parts):
+        surface = word.text if one_part else word.text[part_index : part_index + 1]
+        for inner_index, inner in enumerate(part):
+            if split_groups and isinstance(inner.base, Group) and len(inner.base.words) > 1 and not inner.is_latin():
+                units.extend(
+                    (surface, member.text, True, part_index == 0, member, part_index, inner_index, m)
+                    for m, member in enumerate(inner.base.words)
+                )
+            else:
+                units.append((surface, inner.text, True, part_index == 0, inner, part_index, inner_index, None))
     return units
 
 
 def _size(kana: str) -> int:
-    """How many characters this mora owns in the folded stream; a long vowel or sokuon owns one."""
-    if kana in OWN_MORA:
+    """How many characters this sound owns in the folded stream; a long vowel or sokuon owns one."""
+    if kana in OWN_SOUND:
         return 1
     return len("".join(kana_tokens(kana)))
 
@@ -412,10 +477,10 @@ def _onset_distance(span: tuple[float | None, float | None], note: tuple[float, 
 
 @dataclass(frozen=True)
 class Placement:
-    """Where one mora sits once the notes are read: its span, the notes it covers, and its doubt.
+    """Where one sound sits once the notes are read: its span, the notes it covers, and its doubt.
 
     `span` is what the strip draws - the note(s) it covers, a group's slice of a shared note, or a
-    point for a mora of no length. `notes` are the note indices it covers, `zero` a mora that fell
+    point for a sound of no length. `notes` are the note indices it covers, `zero` a sound that fell
     on none, and `red` one whose time the aligner cannot be trusted for.
     """
 
@@ -423,10 +488,63 @@ class Placement:
     notes: tuple[int, ...] = ()
     zero: bool = False
     red: bool = False
+    group: int = -1  # the note this sound shares with its neighbours, or -1 on its own
 
 
-def map_morae(
-    lines: Sequence[MoraLine],
+def map_faithful(text: str, notes: Sequence[tuple[float, float]]) -> list[list[Placement]]:
+    """The `.krc` laid on the notes with nothing estimated: a unit's mora count takes the next notes.
+
+    The `.krc` carries no times, so the notes are the times: a unit of `mora` notes takes that many
+    in reading order, and everything stops when the notes run out. Its sounds share those notes - a
+    unit with more notes than sounds holds one over several (`あ.2`), one with fewer puts several on
+    a note (`(あい).1`), which shows as a group. This is a reading of the file, not an edit of it.
+    """
+    found: list[list[Placement]] = []
+    at = 0
+    for chapter in parse(text).chapters:
+        for line in chapter.lines:
+            _line, _sources, loc = _row(line, True)
+            row: list[Placement] = []
+            for top, unit in enumerate(line.units):
+                if not unit.natural_mora:
+                    continue
+                sounds = sum(1 for item in loc if item[0] == top)
+                taken = notes[at : at + unit.mora]
+                row.extend(_faithful_unit(sounds, taken, at))
+                at += len(taken)
+            found.append(row)
+    return found
+
+
+def _faithful_unit(natural: int, taken: Sequence[tuple[float, float]], base: int) -> list[Placement]:
+    """`natural` sounds on the `taken` notes (indices from `base`): a held tail or shared notes."""
+    if not taken:
+        return [Placement(span=(None, None), zero=True) for _ in range(natural)]
+    if len(taken) >= natural:
+        out = []
+        for index in range(natural):
+            low = index * len(taken) // natural
+            high = (index + 1) * len(taken) // natural
+            part = taken[low:high]
+            out.append(Placement(span=(part[0][0], part[-1][1]), notes=tuple(range(base + low, base + high))))
+        return out
+    low, high = taken[0][0], taken[-1][1]
+    width = (high - low) / natural
+    spans = [(low + index * width, low + (index + 1) * width) for index in range(natural)]
+    covered: list[list[int]] = [[] for _ in range(natural)]
+    group = [-1] * natural
+    for offset, note in enumerate(taken):
+        holders = [index for index, (start, end) in enumerate(spans) if start < note[1] and end > note[0]]
+        for index in holders:
+            covered[index].append(base + offset)
+        if len(holders) > 1:
+            for index in holders:
+                group[index] = base + offset
+    return [Placement(span=spans[i], notes=tuple(covered[i]), group=group[i]) for i in range(natural)]
+
+
+def map_sounds(
+    lines: Sequence[SoundLine],
     times: Sequence[Sequence[tuple[float | None, float | None]]],
     notes: Sequence[tuple[float, float]],
     text: str = "",
@@ -434,18 +552,19 @@ def map_morae(
     *,
     aligned: bool = True,
 ) -> list[list[Placement]]:
-    """Put every mora on the notes its time covers, and settle the notes its neighbours share.
+    """Put every sound on the notes its time covers, and settle the notes its neighbours share.
 
-    With `aligned`, a mora covers every note its time overlaps; a note several morae share is
-    grouped when the shares are close and the run may be folded into one word, and otherwise all
-    but the largest share become morae of no length. A note no mora reaches is given to the one
-    before it and doubted, so every note is answered for. Without `aligned` the morae and the notes
-    are paired one for one, in reading order, until the shorter side runs out. `flagged` marks the
-    lines the aligner itself doubted, which reddens the whole line.
+    With `aligned`, a sound covers every note its time overlaps; a note several sounds share stays the
+    own of each that keeps a share of it of at least `SHARE` (a quarter), and the ones left under
+    that fall to no length - so a strong sound is never dragged down by a weak neighbour on the same
+    note. A note no sound reaches is given to the one before it and doubted, so every note is
+    answered for. Without `aligned` the sounds and the notes are paired one for one, in reading
+    order, until the shorter side runs out. `flagged` marks the lines the aligner itself doubted,
+    which reddens the whole line.
     """
     flat: list[tuple[int, int, float | None, float | None]] = []
     for row, line in enumerate(lines):
-        for column, _mora in enumerate(line.morae):
+        for column, _sound in enumerate(line.sounds):
             present = row < len(times) and column < len(times[row])
             span = times[row][column] if present else (None, None)
             flat.append((row, column, span[0], span[1]))
@@ -453,7 +572,7 @@ def map_morae(
     if not aligned:
         return _by_order(lines, notes, assign_by_order(len(flat), len(notes)))
     if not flat or not notes:
-        return [[Placement((None, None)) for _mora in line.morae] for line in lines]
+        return [[Placement((None, None)) for _sound in line.sounds] for line in lines]
 
     holders: list[list[int]] = [[] for _note in notes]
     for index, (_row, _column, start, end) in enumerate(flat):
@@ -464,6 +583,7 @@ def map_morae(
                 holders[note].append(index)
 
     owner: list[list[int]] = [[] for _note in notes]
+    grouped: dict[int, int] = {}  # sound -> the note its neighbours share it with
     doubted: set[int] = set()
     for note, sharers in enumerate(holders):
         if not sharers:
@@ -471,30 +591,33 @@ def map_morae(
         if len(sharers) == 1:
             owner[note] = list(sharers)
             continue
-        shares = [_share(flat, notes[note], mora) for mora in sharers]
-        if max(shares) - min(shares) <= EQUAL_BAND and min(shares) >= SHARE and _groupable(text, times, flat, sharers):
-            owner[note] = list(sharers)
-        else:
-            owner[note] = [sharers[max(range(len(sharers)), key=lambda at: shares[at])]]
+        shares = [_share(flat, notes[note], sound) for sound in sharers]
+        kept = [sound for sound, share in zip(sharers, shares, strict=True) if share >= SHARE]
+        if not kept:
+            kept = [sharers[max(range(len(sharers)), key=lambda at: shares[at])]]
+        owner[note] = kept
+        if len(kept) > 1:
+            for sound in kept:
+                grouped.setdefault(sound, note)
 
     for note in range(len(notes)):
         if owner[note]:
             continue
         before = next((other for other in range(note - 1, -1, -1) if owner[other]), None)
         if before is not None:
-            mora = owner[before][-1]
+            sound = owner[before][-1]
         else:
             after = next((other for other in range(note + 1, len(notes)) if owner[other]), None)
             if after is None:
                 continue
-            mora = owner[after][0]
-        owner[note] = [mora]
-        doubted.add(mora)
+            sound = owner[after][0]
+        owner[note] = [sound]
+        doubted.add(sound)
 
     covered: dict[int, list[int]] = {}
     for note, owners in enumerate(owner):
-        for mora in owners:
-            covered.setdefault(mora, []).append(note)
+        for sound in owners:
+            covered.setdefault(sound, []).append(note)
 
     pieces: dict[int, list[tuple[float, float]]] = {}
     for note, owners in enumerate(owner):
@@ -504,12 +627,12 @@ def map_morae(
         if len(owners) == 1:
             pieces.setdefault(owners[0], []).append((low, high))
             continue
-        shares = [_share(flat, notes[note], mora) for mora in owners]
+        shares = [_share(flat, notes[note], sound) for sound in owners]
         total = sum(shares) or float(len(owners))
         edge = low
-        for mora, share in zip(owners, shares, strict=True):
+        for sound, share in zip(owners, shares, strict=True):
             width = (high - low) * share / total
-            pieces.setdefault(mora, []).append((edge, edge + width))
+            pieces.setdefault(sound, []).append((edge, edge + width))
             edge += width
 
     marked = list(flagged) if flagged is not None else []
@@ -518,12 +641,19 @@ def map_morae(
     for row, line in enumerate(lines):
         red_line = row < len(marked) and bool(marked[row])
         placements = []
-        for _mora in line.morae:
+        for _sound in line.sounds:
             notes_of = covered.get(index)
             if notes_of:
                 chunks = pieces[index]
                 span = (min(chunk[0] for chunk in chunks), max(chunk[1] for chunk in chunks))
-                placements.append(Placement(span=span, notes=tuple(notes_of), red=red_line or index in doubted))
+                placements.append(
+                    Placement(
+                        span=span,
+                        notes=tuple(notes_of),
+                        red=red_line or index in doubted,
+                        group=grouped.get(index, -1),
+                    )
+                )
             else:
                 point = _zero_point(flat[index][2], notes)
                 placements.append(Placement(span=(point, point), zero=True, red=red_line))
@@ -532,13 +662,13 @@ def map_morae(
     return found
 
 
-def _by_order(lines: Sequence[MoraLine], notes: Sequence[tuple[float, float]], found) -> list[list[Placement]]:
-    """The morae and the notes matched in reading order, one for one, with nothing doubted."""
+def _by_order(lines: Sequence[SoundLine], notes: Sequence[tuple[float, float]], found) -> list[list[Placement]]:
+    """The sounds and the notes matched in reading order, one for one, with nothing doubted."""
     out: list[list[Placement]] = []
     at = 0
     for line in lines:
         row = []
-        for _mora in line.morae:
+        for _sound in line.sounds:
             index = found[at]
             span = tuple(notes[index]) if index is not None else (None, None)
             row.append(Placement(span=span, notes=(index,) if index is not None else ()))
@@ -548,7 +678,7 @@ def _by_order(lines: Sequence[MoraLine], notes: Sequence[tuple[float, float]], f
 
 
 def _share(flat: Sequence[tuple], note: tuple[float, float], index: int) -> float:
-    """A mora's share of a note, its end free to reach the next mora's start but not past the note."""
+    """A sound's share of a note, its end free to reach the next sound's start but not past the note."""
     start, end = flat[index][2], flat[index][3]
     low, high = note
     if start is None or end is None or high <= low:
@@ -570,14 +700,14 @@ def _groupable(text: str, times, flat: Sequence[tuple], holders: Sequence[int]) 
     if len(columns) < 2 or columns != list(range(columns[0], columns[-1] + 1)):
         return False
     try:
-        group_morae(text, times, rows.pop(), columns[0], columns[-1])
+        group_sounds(text, rows.pop(), columns[0], columns[-1])
     except KrcError:
         return False
     return True
 
 
 def _zero_point(start: float | None, notes: Sequence[tuple[float, float]]) -> float | None:
-    """Where a mora of no length is drawn: its own onset, else the nearest note's."""
+    """Where a sound of no length is drawn: its own onset, else the nearest note's."""
     if start is not None:
         return start
     return notes[0][0] if notes else None

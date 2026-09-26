@@ -40,7 +40,7 @@ class LyricTimes(NamedTuple):
     """The aligned times of a `.krc` as a cache beside the notes.
 
     `key` is the hash of the `.krc` text the times were made from, so a changed file invalidates
-    them; `lines` holds one `(start, end)` in seconds per mora, `None` where none was found.
+    them; `lines` holds one `(start, end)` in seconds per sound, `None` where none was found.
     """
 
     key: str = ""

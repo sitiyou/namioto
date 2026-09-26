@@ -2,7 +2,7 @@
 """Piano-roll widgets on one shared time axis: the notes and the grid, the view that edits them, and
 the ruler and keyboard round it. The lyrics strip lives in `namioto.ui.strips`.
 
-`PianoRollView` is the editor: it owns the document, the channels, the morae and their times, and
+`PianoRollView` is the editor: it owns the document, the channels, the sounds and their times, and
 the undo stack of whole-document snapshots, and it is where a gesture is begun and committed. The
 ruler and the keyboard are the strips that stay here; all three share `strips._ViewportStrip`, and
 read the view's scroll position rather than keeping one of their own.
@@ -30,7 +30,7 @@ from namioto.channels import Channel, free_channel
 from namioto.document import MIN_DURATION, PITCH_COUNT, PITCH_MAX, PITCH_MIN, Document, Note
 from namioto.i18n import tr
 from namioto.interaction import Interaction, Tool
-from namioto.karaoke.timeline import MoraLine
+from namioto.karaoke.timeline import SoundLine, contiguous
 from namioto.ui import theme
 from namioto.ui.blocks import CLICK_SLOP_PX, Press, block_part
 from namioto.ui.spectrogram import SpectrumImage
@@ -92,11 +92,11 @@ class _RollState:
     selected: frozenset[int]
     active_channel: int
     lyrics: tuple = ()
-    lyric_times: tuple = ()
+    lyric_raw: tuple = ()
 
 
 def _state_data(state: _RollState) -> tuple:
-    return (state.channels, state.notes, state.lyric_times)
+    return (state.channels, state.notes, state.lyric_raw)
 
 
 class _RollEdit(QUndoCommand):
@@ -266,9 +266,11 @@ class PianoRollView(QGraphicsView):
         self._gesture_before: _RollState | None = None
         self._gesture_text = ""
         self._history_depth = 0
-        self._lines: tuple[MoraLine, ...] = ()
+        self._lines: tuple[SoundLine, ...] = ()
         self._lyric_times: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
         self._lyric_red: tuple[tuple[bool, ...], ...] = ()
+        self._lyric_zero: tuple[tuple[bool, ...], ...] = ()
+        self._lyric_group: tuple[tuple[int, ...], ...] = ()
         self._lyric_raw: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -360,7 +362,7 @@ class PianoRollView(QGraphicsView):
     # --- lyrics -----------------------------------------------------------
 
     @property
-    def lyric_lines(self) -> tuple[MoraLine, ...]:
+    def lyric_lines(self) -> tuple[SoundLine, ...]:
         return self._lines
 
     @property
@@ -369,8 +371,18 @@ class PianoRollView(QGraphicsView):
 
     @property
     def lyric_red(self) -> tuple[tuple[bool, ...], ...]:
-        """Whether the mapping doubts each mora, laid out as `lyric_times` is."""
+        """Whether the mapping doubts each sound, laid out as `lyric_times` is."""
         return self._lyric_red
+
+    @property
+    def lyric_zero(self) -> tuple[tuple[bool, ...], ...]:
+        """Whether each sound covers no note, the sounds it draws grey."""
+        return self._lyric_zero
+
+    @property
+    def lyric_group(self) -> tuple[tuple[int, ...], ...]:
+        """The note each sound shares with its neighbours, -1 where it stands on its own."""
+        return self._lyric_group
 
     @property
     def lyric_raw(self) -> tuple[tuple[tuple[float | None, float | None], ...], ...]:
@@ -378,27 +390,68 @@ class PianoRollView(QGraphicsView):
         return self._lyric_raw
 
     def set_lyrics(self, lines, times) -> None:
-        """Take a whole aligned `.krc` over: every line's morae and their times, as one step."""
+        """Take a whole aligned `.krc` over: every line's sounds and their times, as one step."""
         with self._edit("Align lyrics"):
             self.load_lyrics(lines, times)
 
-    def load_lyrics(self, lines, times, red=None, raw=None) -> None:
+    def load_lyrics(self, lines, times, red=None, raw=None, zero=None, group=None) -> None:
         """The lyrics a `.krc` or a project brings in, with no undo step of their own.
 
-        `times` are the spans the strip draws, `red` the morae the mapping doubts and `raw` the
-        aligned times behind them; without `red` every mora is taken as sound, and without `raw` the
-        drawn spans are the aligned times themselves.
+        `times` are the spans the mapping draws, `raw` the aligned times it was made from and the
+        strip edits, `red` the sounds the mapping doubts, `zero` the sounds that cover no note and
+        `group` the note each sound shares. Without `red`/`zero` every sound is taken as sound, and
+        without `raw` the aligned times are the drawn spans themselves.
         """
         self._lines = tuple(lines)
         self._lyric_times = tuple(tuple(span) for span in times)
-        self._lyric_raw = tuple(tuple(span) for span in (times if raw is None else raw))
+        self._lyric_raw = tuple(tuple(span) for span in contiguous(times if raw is None else raw))
         self._lyric_red = (
             tuple(tuple(bool(flag) for flag in row) for row in red)
             if red is not None
             else tuple(tuple(False for _span in row) for row in times)
         )
+        self._lyric_zero = (
+            tuple(tuple(bool(flag) for flag in row) for row in zero)
+            if zero is not None
+            else tuple(tuple(False for _span in row) for row in times)
+        )
+        self._lyric_group = (
+            tuple(tuple(int(flag) for flag in row) for row in group)
+            if group is not None
+            else tuple(tuple(-1 for _span in row) for row in times)
+        )
         self.lyrics_changed.emit()
         self.view_changed.emit()
+
+    def set_sound_boundary(self, row: int, boundary: int, seconds: float, base=None) -> bool:
+        """Move one boundary of a line's raw sound times, keeping the sounds in order.
+
+        Boundary `i` is the start of sound `i` and the end of sound `i - 1`, and the line's last
+        boundary is the end of its last sound alone. A boundary is shared, so the sound before it
+        gives up its end as the sound after it takes the start - a line the aligner read as
+        contiguous stays contiguous. `base` is the line as a drag found it, so every move of that
+        drag is measured from there and dragging home leaves the line exactly as it was. The raw
+        times are all that move: the notes and the mapping over them stay where they are.
+        """
+        if not 0 <= row < len(self._lyric_raw):
+            return False
+        spans = list(self._lyric_raw[row] if base is None else base)
+        if not 0 <= boundary <= len(spans) or not spans:
+            return False
+        low = spans[boundary - 1][0] if boundary > 0 else 0.0
+        high = spans[boundary][1] if boundary < len(spans) else math.inf
+        value = max(0.0, float(seconds))
+        if low is not None:
+            value = max(value, low)
+        if high is not None:
+            value = min(value, high)
+        if boundary > 0:
+            spans[boundary - 1] = (spans[boundary - 1][0], value)
+        if boundary < len(spans):
+            spans[boundary] = (value, spans[boundary][1])
+        self._lyric_raw = self._lyric_raw[:row] + (tuple(contiguous([spans])[0]),) + self._lyric_raw[row + 1 :]
+        self.lyrics_changed.emit()
+        return True
 
     def note_seconds(self) -> list[tuple[float, float]]:
         per_beat = self.seconds_per_beat
@@ -447,7 +500,7 @@ class PianoRollView(QGraphicsView):
             selected=frozenset(index for index, item in enumerate(self._items) if item.isSelected()),
             active_channel=self.active_channel,
             lyrics=self._lines,
-            lyric_times=self._lyric_times,
+            lyric_raw=self._lyric_raw,
         )
 
     def _push(self, before: _RollState, after: _RollState, text: str) -> bool:
@@ -489,13 +542,16 @@ class PianoRollView(QGraphicsView):
     def _restore_state(self, state: _RollState) -> None:
         """Put a snapshot back in one rebuild, selecting the same notes by position again.
 
-        The notes go in first: a channel list only holds the numbers its notes play on, so a channel
-        that is about to lose its notes would come straight back if it were set while they were
-        still there.
+        The lyrics go in first, so the remap the notes trigger reads the times restored. The notes
+        go in before the channels: a channel list only holds the numbers its notes play on, so a
+        channel that is about to lose its notes would come straight back if it were set while they
+        were still there.
         """
         self._history_depth += 1
         try:
             per_beat = self.seconds_per_beat
+            self._lines = state.lyrics
+            self._lyric_raw = state.lyric_raw
             self.set_notes(
                 (pitch, start / per_beat, duration / per_beat, channel)
                 for pitch, start, duration, channel in state.notes
@@ -505,8 +561,6 @@ class PianoRollView(QGraphicsView):
                 if index < len(self._items):
                     self._items[index].setSelected(True)
             self.set_active_channel(state.active_channel)
-            self._lines = state.lyrics
-            self._lyric_times = state.lyric_times
             self.lyrics_changed.emit()
         finally:
             self._history_depth -= 1

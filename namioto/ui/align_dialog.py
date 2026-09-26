@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""The alignment window: put a time on every mora by forcing the lyrics onto the audio.
+"""The alignment window: put a time on every sound by forcing the lyrics onto the audio.
 
 The run is a `LoadingThread` of its own (`Aligner`), because the model is an ONNX graph and the
 audio is read once; the window only starts it, shows the progress, and shows the failures
@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
 
 from namioto.analysis import align, devices
 from namioto.i18n import tr
-from namioto.karaoke import align_tokens, mora_lines, snap_to_beats, split
+from namioto.karaoke import align_tokens, snap_to_beats, sound_lines, split
 from namioto.settings import Field
 from namioto.ui.loading import LoadingThread
 from namioto.ui.settings_dialog import add_row, field_editor
@@ -61,9 +61,9 @@ class Aligner(LoadingThread):
 
     def load(self) -> None:
         started = time.monotonic()
-        lines = mora_lines(self.text)
-        morae = sum(len(line.morae) for line in lines)
-        self.message.emit(tr("Read {lines} lines, {morae} morae", lines=len(lines), morae=morae))
+        lines = sound_lines(self.text)
+        sounds = sum(len(line.sounds) for line in lines)
+        self.message.emit(tr("Read {lines} lines, {sounds} sounds", lines=len(lines), sounds=sounds))
         audio = align.load_audio(self.path)
         seconds = len(audio) / align.SAMPLE_RATE
         emission = align.load_emissions(self.path, self.model, self.provider, self.chunk)
@@ -86,7 +86,7 @@ class Aligner(LoadingThread):
         dictionary, blank_id = align.load_dictionary(directory / align.VOCAB_FILE)
         segment = align.Segment(0.0, seconds, tuple(align_tokens(lines)))
         found = align.align_whole(segment, emission, dictionary, blank_id=blank_id)
-        self.message.emit(tr("Fitting the morae to the voice\u2026"))
+        self.message.emit(tr("Fitting the sounds to the voice\u2026"))
         rows = align.correct_times(split(found.tokens, lines), audio)
         problems = self._problems(found, lines)
         with suppress(OSError):  # the cache is disposable, and the alignment itself already came back
@@ -108,7 +108,7 @@ class Aligner(LoadingThread):
         reported = []
         at = 0
         for line in lines:
-            chunk = found.tokens[at : at + len(line.morae)]
+            chunk = found.tokens[at : at + len(line.sounds)]
             at += len(chunk)
             trouble = align.problems(align.AlignedSegment(found.start, found.end, tuple(chunk)))
             if trouble:

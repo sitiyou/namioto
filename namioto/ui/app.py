@@ -40,7 +40,7 @@ from namioto.analysis.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
 from namioto.channels import set_field as channel_set_field
-from namioto.karaoke import KrcError, map_morae, mora_lines, snap_to_beats, text_key
+from namioto.karaoke import KrcError, map_sounds, snap_to_beats, sound_lines, text_key
 from namioto.playback import note_frequency
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner
@@ -54,7 +54,7 @@ from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, Timeline
 from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
 from namioto.ui.song import SongPlayer, load_song
 from namioto.ui.spectrogram import SpectrumLoader
-from namioto.ui.strips import MoraStrip
+from namioto.ui.strips import SoundStrip
 from namioto.ui.text import note_name
 from namioto.ui.transcription_dialog import TranscriptionDialog
 
@@ -172,13 +172,17 @@ class SongLoader(LoadingThread):
 
 def _map_lyrics(lines, times, notes, text, aligned):
     if notes:
-        placements = map_morae(lines, times, notes, text, aligned=aligned)
+        placements = map_sounds(lines, times, notes, text, aligned=aligned)
         spans = [[placement.span for placement in row] for row in placements]
         red = [[placement.red for placement in row] for row in placements]
+        zero = [[placement.zero for placement in row] for row in placements]
+        group = [[placement.group for placement in row] for row in placements]
     else:
         spans = [list(row) for row in times]
         red = [[False] * len(row) for row in times]
-    return spans, red
+        zero = [[False] * len(row) for row in times]
+        group = [[-1] * len(row) for row in times]
+    return spans, red, zero, group
 
 
 class LyricMapper(QThread):
@@ -196,8 +200,8 @@ class LyricMapper(QThread):
 
     def run(self) -> None:
         try:
-            spans, red = _map_lyrics(self.lines, self.times, self.notes, self.text, self.aligned)
-            self.mapped.emit((self.revision, self.lines, spans, red, self.times))
+            spans, red, zero, group = _map_lyrics(self.lines, self.times, self.notes, self.text, self.aligned)
+            self.mapped.emit((self.revision, self.lines, spans, red, self.times, zero, group))
         except Exception as error:
             self.failed.emit(f"{type(error).__name__}: {error}")
 
@@ -226,7 +230,6 @@ class MainWindow(QMainWindow):
         self.audio_path: str | None = None
         self.lyrics_text = ""
         self._stored_lyrics: project.LyricTimes | None = None
-        self._align_times: list[list[tuple[float | None, float | None]]] | None = None
         self._lyric_key = ""
         self._lyric_model = ""
         self._lyric_error = ""
@@ -247,8 +250,8 @@ class MainWindow(QMainWindow):
         self.view.overtone_highlight = editor.overtone_highlight
         self.view.division = editor.division
         self.ruler = TimelineRuler(self.view)
-        self.mora_strip = MoraStrip(self.view)
-        self.mora_strip.setVisible(False)
+        self.sound_strip = SoundStrip(self.view)
+        self.sound_strip.setVisible(False)
         self.keyboard = PianoKeyboard(self.view)
         self.player, self.player_name = self._make_player()
         self._current_player_key = self._player_key()
@@ -276,7 +279,7 @@ class MainWindow(QMainWindow):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(corner, 0, 0)
         layout.addWidget(self.ruler, 0, 1)
-        layout.addWidget(self.mora_strip, 1, 1)
+        layout.addWidget(self.sound_strip, 1, 1)
         layout.addWidget(self.keyboard, 2, 0)
         layout.addWidget(self.view, 2, 1)
         layout.setColumnStretch(1, 1)
@@ -1048,10 +1051,10 @@ class MainWindow(QMainWindow):
         self.edit.align.setEnabled(path is not None)
         self.lyrics_text = lyrics.load(path) if path is not None else ""
         self.lyrics_watcher.watch(path)
-        self._load_mora()
+        self._load_sounds()
 
-    def _load_mora(self) -> None:
-        """Derive the morae of the open `.krc` and lay them onto the notes the project kept."""
+    def _load_sounds(self) -> None:
+        """Derive the sounds of the open `.krc` and lay them onto the notes the project kept."""
         text = self.lyrics_text
         key = text_key(text) if text else ""
         if key == self._lyric_key and bool(self.view.lyric_lines) == bool(text):
@@ -1061,7 +1064,7 @@ class MainWindow(QMainWindow):
         lines = []
         if text:
             try:
-                lines = mora_lines(text)
+                lines = sound_lines(text)
             except KrcError as error:
                 self._lyric_error = str(error)
                 self.statusBar().showMessage(str(error))
@@ -1071,40 +1074,41 @@ class MainWindow(QMainWindow):
         stored = self._stored_lyrics
         if lines and stored is not None and stored.key == key and len(stored.lines) == len(lines):
             self._lyric_model = stored.model
-            self._align_times = [list(row) for row in stored.lines]
+            raw = [list(row) for row in stored.lines]
         else:
-            self._align_times = [[(None, None)] * len(line.morae) for line in lines]
+            raw = [[(None, None)] * len(line.sounds) for line in lines]
+        self.view.load_lyrics(lines, raw, raw=raw)
         self._remap_lyrics(lines)
 
     def _remap_lyrics(self, lines=None) -> None:
-        """Map the open morae onto the notes, and hand the strip the spans and doubts to draw.
+        """Map the open sounds onto the notes, and hand the strip the spans and doubts to draw.
 
-        The aligned times are what is mapped; without notes there is nothing to map onto, so they
-        are drawn as they came, and without times the morae and the notes pair one for one.
+        The raw times the strip holds are what is mapped: without notes they are drawn as they came,
+        and without times the sounds and the notes pair one for one.
         """
         self._lyric_map_revision += 1
         self._lyric_map_pending = None
         lines = list(self.view.lyric_lines if lines is None else lines)
-        times = self._align_times
-        if times is None or len(times) != len(lines):
-            times = [[(None, None)] * len(line.morae) for line in lines]
-        spans, red = _map_lyrics(
+        times = [list(row) for row in self.view.lyric_raw]
+        if len(times) != len(lines):
+            times = [[(None, None)] * len(line.sounds) for line in lines]
+        spans, red, zero, group = _map_lyrics(
             lines,
             times,
             self._mapped_notes(),
             self.lyrics_text,
             any(span[0] is not None for row in times for span in row),
         )
-        self._apply_lyric_mapping(lines, spans, red, times)
+        self._apply_lyric_mapping(lines, spans, red, times, zero, group)
 
     def _remap_lyrics_async(self) -> None:
         if not self.view.lyric_lines:
             self._remap_lyrics()
             return
         lines = tuple(self.view.lyric_lines)
-        times = self._align_times
-        if times is None or len(times) != len(lines):
-            times = [[(None, None)] * len(line.morae) for line in lines]
+        times = [list(row) for row in self.view.lyric_raw]
+        if len(times) != len(lines):
+            times = [[(None, None)] * len(line.sounds) for line in lines]
         snapshot = (
             lines,
             tuple(tuple(row) for row in times),
@@ -1130,10 +1134,10 @@ class MainWindow(QMainWindow):
         thread.start()
 
     def _on_lyric_mapping(self, result) -> None:
-        revision, lines, spans, red, times = result
+        revision, lines, spans, red, times, zero, group = result
         if revision != self._lyric_map_revision:
             return
-        self._apply_lyric_mapping(lines, spans, red, times)
+        self._apply_lyric_mapping(lines, spans, red, times, zero, group)
 
     def _on_lyric_mapping_failed(self, message: str) -> None:
         self.statusBar().showMessage(message)
@@ -1147,9 +1151,9 @@ class MainWindow(QMainWindow):
         if request is not None:
             self._start_lyric_mapper(request)
 
-    def _apply_lyric_mapping(self, lines, spans, red, times) -> None:
-        self.view.load_lyrics(lines, spans, red, raw=[list(row) for row in times])
-        self.mora_strip.setVisible(any(span[0] is not None for row in spans for span in row))
+    def _apply_lyric_mapping(self, lines, spans, red, times, zero, group) -> None:
+        self.view.load_lyrics(lines, spans, red, raw=[list(row) for row in times], zero=zero, group=group)
+        self.sound_strip.setVisible(any(span[0] is not None for row in times for span in row))
 
     def _mapped_notes(self) -> list[tuple[float, float]]:
         """The notes of the mapped MIDI channel, in time order; the lyrics map to channel 1 for now."""
@@ -1170,7 +1174,7 @@ class MainWindow(QMainWindow):
     def _on_lyrics_saved(self, text: str) -> None:
         """A write of our own, so the watcher's next event does not read it back as a change."""
         self.lyrics_text = text
-        self._load_mora()
+        self._load_sounds()
         self._auto_align()
 
     def _on_lyrics_file_changed(self) -> None:
@@ -1182,7 +1186,7 @@ class MainWindow(QMainWindow):
             return  # our own save, or a change to another file in the project's folder
         self.lyrics_text = text
         self.statusBar().showMessage(i18n.tr("Lyrics reloaded from {name}", name=path.name))
-        self._load_mora()
+        self._load_sounds()
         self._auto_align()
 
     def _auto_align(self) -> None:
@@ -1237,7 +1241,7 @@ class MainWindow(QMainWindow):
         QProcess.startDetached(command[0], [*command[1:], str(path)])
 
     def _open_align(self) -> None:
-        """Ask the forced aligner for a time on every mora of the open `.krc`."""
+        """Ask the forced aligner for a time on every sound of the open `.krc`."""
         path = self.lyrics_path()
         if path is None:
             self.statusBar().showMessage(i18n.tr("Save the project first: the lyrics live in a .krc beside it"))
@@ -1263,7 +1267,8 @@ class MainWindow(QMainWindow):
             return
         self._lyric_key = text_key(self.lyrics_text)
         self._lyric_model = model
-        self._align_times = [list(row) for row in times]
+        raw = [list(row) for row in times]
+        self.view.load_lyrics(lines, raw, raw=raw)
         self._remap_lyrics(lines)
         self._mark_dirty()
         self.statusBar().showMessage(i18n.tr("Aligned {lines} lines", lines=len(lines)))

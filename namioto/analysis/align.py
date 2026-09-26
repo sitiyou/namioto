@@ -48,7 +48,7 @@ FRAME_SECONDS = FRAME_SAMPLES / SAMPLE_RATE
 # wav2vec2's convolutional front end rejects anything shorter than 400 samples
 MIN_SAMPLES = 400
 # characters this close together in a row are one character's frames spread over several, not a
-# fast line; a single close pair is a zero-mora symbol or a punctuation mark and means nothing
+# fast line; a single close pair is a zero-sound symbol or a punctuation mark and means nothing
 COLLAPSE_SECONDS = 0.04
 COLLAPSE_RUN = 3
 # a wav2vec2 graph attends over its whole input, so one pass over a song costs quadratically in
@@ -57,7 +57,7 @@ COLLAPSE_RUN = 3
 # global CTC path.
 CHUNK_SECONDS = 60.0
 CHUNK_OVERLAP_SECONDS = 4.0
-# the energy windows the voice detector reads: a short one finds the tail a mora ends in, a wide
+# the energy windows the voice detector reads: a short one finds the tail a sound ends in, a wide
 # one the stretch a line's head sits in; a frame counts as voice above a fraction of the loud
 # percentile
 TAIL_FRAME_SECONDS = 0.02
@@ -641,8 +641,8 @@ def correct_times(
 ) -> list[list[tuple[float | None, float | None]]]:
     """A line's head and ends take the voice they were aligned against, the way FA-Kara fixes them.
 
-    A line's last mora reaches the end of the voiced stretch it sits in, or the next line's onset
-    when the voice runs on; its first mora moves to the onset of the stretch that holds the line's
+    A line's last sound reaches the end of the voiced stretch it sits in, or the next line's onset
+    when the voice runs on; its first sound moves to the onset of the stretch that holds the line's
     end. This is FA-Kara's `tail_correct=3`/`head_correct=1` defaults for the MMS model, on the
     lines `split` hands back, so a rest still stays a rest. A line with nothing aligned is left
     alone.
@@ -668,7 +668,7 @@ def _correct_heads(rows: list[list], segments: Sequence[tuple[float, float]]) ->
 
 
 def _correct_tails(rows: list[list], segments: Sequence[tuple[float, float]]) -> None:
-    """A line's last mora reaches the voice's end, or the next line's onset when it runs on."""
+    """A line's last sound reaches the voice's end, or the next line's onset when it runs on."""
     for index, row in enumerate(rows):
         last = _last_aligned(row)
         if last is None:
@@ -699,7 +699,7 @@ def _next_onset(rows: list[list], index: int) -> float:
 
 
 def _tail_end(segments: Sequence[tuple[float, float]], end: float, next_onset: float) -> float:
-    """Where a mora's voice stops: the stretch's end, or the next onset when the voice runs on."""
+    """Where a sound's voice stops: the stretch's end, or the next onset when the voice runs on."""
     for begin, finish in segments:
         if begin <= end <= finish:
             if finish <= next_onset:
