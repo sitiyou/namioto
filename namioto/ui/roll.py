@@ -6,6 +6,19 @@ the ruler and keyboard round it. The lyrics strip lives in `namioto.ui.strips`.
 the undo stack of whole-document snapshots, and it is where a gesture is begun and committed. The
 ruler and the keyboard are the strips that stay here; all three share `strips._ViewportStrip`, and
 read the view's scroll position rather than keeping one of their own.
+
+Undo lives here, never in the document: one `QUndoStack` of whole-document `_RollState` snapshots
+stored in seconds (a tempo change rescales beats, so seconds are what a note still sounds at), one
+gesture one step. A discrete edit goes through `_edit`, whose depth guard makes nested edits one
+step, and opening a project clears the stack. `Ctrl+C`/`Ctrl+V` copy and paste a selection snapped to
+`snap`; `Ctrl+D` and `Delete`/`Backspace` remove it; clearing every note is `Ctrl+A` then `Delete` in
+edit mode, with no button for it. A drag snaps the movement, not the place on the grid
+(`round(movement / snap) * snap`), so an off-grid note keeps the offset it had; trimming an edge is
+the exception and lands on the drawn grid.
+
+`playback.latency_ms` slides the drawn grid through `set_offset`, negative left and positive right;
+the snap helpers, the ruler and the align dialog's Quantize follow it, while the notes, the spectrum
+and the playhead keep their exact timestamps.
 """
 
 from __future__ import annotations

@@ -1,5 +1,12 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Control bars: playback, edit, spectrum and mix, grouped into blocks laid out on one grid."""
+"""Control bars: playback, edit, spectrum and mix, grouped into blocks laid out on one grid.
+
+The bars are `QWidget` subclasses, not `QMainWindow` toolbars: Qt's toolbar reflow collapses every
+row onto one line behind an overflow chevron. Blocks (`Cluster`) sit on `ControlArea`'s columns,
+whose widths are what stands on them - nothing stretches and leftover room trails at the right - and
+sliders sharing a block go through `Cluster.add_sliders` so their label, track and value columns
+line up.
+"""
 
 from __future__ import annotations
 

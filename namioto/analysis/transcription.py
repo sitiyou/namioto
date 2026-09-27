@@ -4,6 +4,11 @@
 Qt-free on purpose, and free of `namioto.analysis.game` too: importing that would pull `onnxruntime` into the
 GUI's startup path. `namioto.ui.transcription_dialog` builds its form from `PARAMETERS`, and
 `transcribe` is the module-level function a spawned process runs, so a crash cannot touch the GUI.
+
+A finished run is cached by the audio's stamp and the model's own inputs alone: the tempo, the
+quantize choice and the grid offset are applied where the notes are used (`game.quantized`), so
+changing any of them re-snaps a stored run instead of running the model again. The parameters are
+kept at `parameter_path()`, beside `settings.json`.
 """
 
 from __future__ import annotations

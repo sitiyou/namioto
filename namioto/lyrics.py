@@ -6,6 +6,12 @@ Qt-free on purpose. The `.krc` is a working copy: the project keeps the text its
 baseline, and this reads and writes the sidecar beside it. Nothing here checks the `.krc` syntax - a
 file with a mistake in it is still the user's to fix in an editor. `translate` takes its opener as
 an argument, so a call can be exercised without a network.
+
+`mode` is `edit` (the aligner's times lay the sounds out and the strip may drag them) or `read` (the
+`.krc`'s own `.N` and groups do, and the strip is read-only); aligning refuses in `read`. The API
+endpoint and `DEFAULT_PROMPT` are the app's, kept in the settings file. `auto_align` (on by default)
+re-runs the CTC search in the background on an outside `.krc` change when a pass is cached, and
+otherwise leaves the lyrics on the 1:1 mapping until Align is pressed.
 """
 
 from __future__ import annotations

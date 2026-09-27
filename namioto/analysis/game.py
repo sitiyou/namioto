@@ -11,6 +11,10 @@ this program's own.
 The code follows GAME's MIT license; the models are a separate work under CC BY-NC-SA 4.0 and are not
 shipped with the program, so a directory holding the ONNX export package (`config.json` plus
 encoder/segmenter/estimator/dur2bd/bd2dur) is passed in, or pointed at with `$NAMIOTO_GAME_MODEL`.
+
+`quantized` is monophonic and grid-bound: a note whose onset lands inside the one before it starts
+where that one ended, and a note the grid leaves shorter than one cell is dropped, so what is kept is
+at least one cell.
 """
 
 from __future__ import annotations

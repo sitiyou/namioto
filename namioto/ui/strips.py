@@ -8,7 +8,12 @@ editor: dragging it slides that boundary of the raw aligned times, the notes and
 them following on release. The block is the note span the mapping derives (`lyric_times`), so it
 lines up with the roll and covers the whole note; the `|` and the label are the raw start
 (`lyric_raw`) the aligner gave. A zero-length sound's own `|` is stepped left of the note it butts
-against, so the two can be told apart and dragged separately.
+against, so the two can be told apart and dragged separately. A label is dropped, or loses its
+brackets, when its room is too narrow, rather than elided.
+
+The `|` drag is smooth - several sounds may sit inside one note cell - and is pulled onto a drawn
+beat division whenever the pointer comes within `SOUND_MAGNET_PX` of one; one gesture is one undo
+step and one dirty mark. Grouping is a display decision only, so it never folds the `.krc`.
 """
 
 from __future__ import annotations

@@ -5,6 +5,19 @@
 writes, and runs in this one process - the analysis that must not touch the GUI goes out to the
 `LoadingThread` loaders at the top of the file, or to a spawned `namioto-transcription` child. Run
 it with `uv run namioto`.
+
+Every bar value is one `_make_bindings` entry; `_remember_configuration` and the apply path both
+walk that table, and `_seeding` keeps an apply's quiet writes from counting as user edits. A project
+is the document: opening audio needs one (the sibling `.nto` when there is one, else a name from the
+chooser), a MIDI is imported into the project already open and never on its own, and the Open dialog
+offers its filter only inside a project; switching documents goes through `_confirm_discard` first.
+The Export button is a menu: MIDI, or the lyrics as a `.krc` with the mapping folded in
+(`karaoke.export_krc`).
+
+Dirty state covers notes, channels, tempo, audio and the lyric times, and is asked about only once
+the document has a file name. `general.auto_save` (off by default) writes the open project once an
+edit settles (`AUTOSAVE_DELAY_MS`) and when the window loses focus; only a named document is written,
+and a modal dialog holds the focus trigger back so the save-on-close prompt never answers itself.
 """
 
 from __future__ import annotations

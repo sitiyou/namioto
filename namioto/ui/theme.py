@@ -6,6 +6,12 @@ included, from the palette the desktop hands out. The parts this app paints itse
 ruler, the keyboard and the spectrum - read `canvas()`, and the set they get is the one that fits
 the window the desktop dressed: the light one on a light palette, the dark one on a dark. A colour
 there is named once, so the drawing code never spells one out.
+
+`general.style` names a style to use instead and `apply_style` puts it in force, while
+`platform_style()` is the one the desktop handed out, the one "System default" puts back. The
+painted widgets read the canvas while they paint, never at import, because a window outlives a style
+switch; the keyboard always uses the light set, the ruler the palette's own, and a roll with a
+spectrum under it the fixed dark set.
 """
 
 from __future__ import annotations

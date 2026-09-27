@@ -6,6 +6,14 @@ Qt-free on purpose. The spec table below is the single source of truth: it gives
 `namioto.ui.settings_dialog` build its pages without repeating any of it. A `Field` is what the align
 and transcription windows describe their own parameter files with too, and they load and save those
 through the same helpers at the bottom of this module.
+
+`coerce` brings a bad value back in line on load: a wrong type falls to the field's default, an
+out-of-range one is clamped, and a number is snapped to its step. A field a bar control already sets
+is `hidden` and gets no row, and so is a project field with no control; `scope="project"` marks a
+document field, read and written by `project_values` / `apply_project_values` on this same table.
+Precedence is project file > settings file > built-in default, with the command line on top for one
+run, and `remembered=False` marks the two song-scoped values (tempo, the grid offset) whose default
+is written back rather than what the user left.
 """
 
 from __future__ import annotations

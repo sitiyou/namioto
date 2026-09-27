@@ -4,6 +4,9 @@
 Qt-free on purpose, like project.py and settings.py: the project file reads and writes these, the
 players receive their playback values, and only the UI draws them. Notes never live here — they
 carry the channel number and stay in one flat sequence.
+
+`CHANNEL_COUNT` is 16 and the drum channel is a channel like any other. No name is kept here: a
+library name rides on a MIDI track chunk and may repeat, so names live in the project file alone.
 """
 
 from __future__ import annotations

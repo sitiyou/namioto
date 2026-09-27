@@ -17,6 +17,13 @@ before a rest reaches into the rest.
 The caller passes a window per line; the aligner can only refine a window, never find one, and a
 window that does not hold the line's voice still comes back with times, from a path the model
 barely supports - which is what `problems()` is for.
+
+A whole song is not run in one pass: `ChunkedBackend` walks it in overlapping chunks, because a
+wav2vec2 graph attends over its whole input and one pass is quadratic in frames; the `chunk`
+parameter of `PARAMETERS` (on by default) turns that off. The model's pass is cached on its own
+(`save_emissions`/`load_emissions`, keyed without the lyrics, since the encoder never sees them) and
+the raw run beside it (`save_alignment`/`find_alignment`), so a changed lyric re-runs only the CTC
+search. The run is fitted to the voice the way FA-Kara does (`correct_times`).
 """
 
 from __future__ import annotations

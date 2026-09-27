@@ -10,6 +10,10 @@ chunk, not on a channel, so none is read or written - they belong to the project
 
 Notes are stored in seconds, as everywhere else in the project, so the tempo map of a file is walked
 on the way in and written as the one tempo the grid has on the way out.
+
+`settings.midi.wavetone` (on by default) drops the leading bar WaveTone's own export writes in front
+of every note and adds it back on the way out; a file whose notes start before that bar did not come
+from WaveTone and is read as it stands.
 """
 
 from __future__ import annotations

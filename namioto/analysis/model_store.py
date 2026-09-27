@@ -4,7 +4,9 @@
 The program ships no model: every one of them is fetched into the data directory on demand. A family
 keeps its own keys and its own files - GAME a size, the aligner a model and a language - while the
 order they are looked up in, the download that puts them there and the session opened on them are
-the same for all of them.
+the same for all of them. A family is looked up as an explicit path, its environment variable, an
+installed copy under `models/`, then the release it names; the first file of a family is what a
+downloaded package is recognized by.
 
 This module does not import ONNX Runtime of its own: the runtime is optional and is reached only
 when a session is opened, so importing this module never pulls it into the GUI's startup path.

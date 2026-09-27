@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""The channel sidebar: one card per MIDI channel, noteDigger style, toggled from the edit bar."""
+"""The channel sidebar: one card per MIDI channel, noteDigger style, toggled from the edit bar.
+
+The panel is a view of `PianoRollView.channels`, never a copy; edits go through
+`set_channel_field`, `add_channel`, `remove_channel` and `set_channel_number`. A card shows the MIDI
+channel number in the channel's own note colour, and the card of `PianoRollView.active_channel` is
+outlined in the palette's `Highlight`. Its three switches are `checkable` and mark the exceptional
+state - locked, hidden or muted - and hiding a channel locks it too. `Channel.color` is the palette
+entry of the channel's number, and `theme.note_shades` derives a note's body and bevels from it.
+"""
 
 from __future__ import annotations
 

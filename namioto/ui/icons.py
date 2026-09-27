@@ -1,5 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Icons: one glyph font, so the bars and the settings window draw the same shapes."""
+"""Icons: one glyph font, so the bars and the settings window draw the same shapes.
+
+Every icon is a Material Design glyph through `qtawesome` - nothing is drawn by hand. `icon()` hands
+out a `QIconEngine` that asks the palette for its shades each time it draws, so a style or palette
+switch needs no walking of the widget tree.
+"""
 
 from __future__ import annotations
 

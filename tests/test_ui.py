@@ -1,5 +1,11 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Layout checks for the control bars and the main window."""
+"""Layout checks for the control bars and the main window.
+
+Offscreen, `QTest.mouseMove` delivers nothing, so send events to the handler instead - `roll_mouse`,
+`ruler_mouse`, `draw_note` and `roll_wheel` below. A shortcut needs
+`QApplication.setActiveWindow(window)` and the key sent to `window.view`. `QWidget.grab()` still
+renders, so a pixel check works.
+"""
 
 from __future__ import annotations
 

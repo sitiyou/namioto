@@ -1,5 +1,13 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Shared test setup: the suite runs headless, so it needs no display and no session of its own."""
+"""Shared test setup: the suite runs headless, so it needs no display and no session of its own.
+
+`QT_QPA_PLATFORM=offscreen` is assigned before Qt is imported - an assignment, never `setdefault`,
+because a desktop session already exports `wayland;xcb`. One `QApplication` is built for the whole
+run (session-wide, autouse): building a second one takes the first one's widgets down. `rtmidi` is
+swapped for a fake port and `XDG_CONFIG_HOME`/`XDG_DATA_HOME` point at a temp directory, so no test
+opens a real synth or touches the developer's own settings. No test may need a display or an audio
+device.
+"""
 
 from __future__ import annotations
 

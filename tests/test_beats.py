@@ -2,7 +2,9 @@
 """Tests for the beat-tracking tempo estimator, which needs no model and no audio fixtures.
 
 Marked `slow`: every estimate runs over 60-90 s of synthetic audio, so the file is most of what the
-suite costs. `uv run pytest` leaves it out; `uv run pytest -m slow` is the file on its own.
+suite costs. `uv run pytest` leaves it out; `uv run pytest -m slow` is the file on its own. Keep the
+audio that long rather than trimming it: the `±0.05` BPM assertion starts failing below about a
+minute of click track.
 """
 
 from __future__ import annotations

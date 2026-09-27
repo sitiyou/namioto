@@ -5,6 +5,9 @@
 English is the source: every string the interface shows is written in it, and a catalog names the
 text that replaces it. A missing entry falls back to the source, so a partly translated language
 still runs. Qt-free on purpose, so the settings spec can offer the languages without widgets.
+
+`general.language` is `system` by default, resolved from the session locale once when the window is
+built, so a change takes effect on the next run.
 """
 
 from __future__ import annotations

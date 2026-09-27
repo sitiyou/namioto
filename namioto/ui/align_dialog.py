@@ -5,6 +5,8 @@ The run is a `LoadingThread` of its own (`Aligner`), because the model is an ONN
 audio is read once; the window only starts it, shows the progress, and shows the failures
 `namioto.analysis.align` reports. The whole stream is aligned in one pass, the way FA-Kara does it. Its
 choices are `align.PARAMETERS`, remembered between runs in the file `align.parameter_path()` names.
+Its Quantize choice (Off / 1/4 / 1/8 / ..., GAME's list) snaps the raw alignment onto the beat grid
+off the drawn grid's offset (`karaoke.snap_to_beats`) before the mapping.
 """
 
 from __future__ import annotations

@@ -6,6 +6,10 @@ a binary container is the spectrum, and reanalysing a five-minute file takes abo
 
 Qt-free on purpose. Notes are stored in seconds and rounded to a tenth of a millisecond: seconds are
 what the editor anchors them to, so a different tempo moves the grid, not the notes.
+
+`Lyrics` carries the `.krc` text itself (the baseline), the aligned times keyed by a hash of that
+text, and the mode. A same-named `.krc` beside the project is a working copy the editor keeps in
+step; it is never validated.
 """
 
 from __future__ import annotations

@@ -5,6 +5,9 @@ Qt-free on purpose, like channels.py and project.py: the roll draws it, the play
 file read it, and nothing here knows about a widget or a scene. Notes are timed in beats, the unit
 the roll works in; the seconds a file or the audio uses are a conversion at that boundary, not a
 second home for the data.
+
+`MIN_DURATION` (a 64th note) is the floor this model keeps, so only a file may bring a note shorter
+than that.
 """
 
 from __future__ import annotations

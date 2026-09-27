@@ -12,6 +12,14 @@ sound to align it to.
 `split` folds the aligner's flat token stream back onto the lines, `note_counts`/`conflicts` judge
 the times against the notes, and `with_counts` writes each word's mora back out as `.N`.
 
+`map_sounds` lays the sounds on the notes of the mapped channel (`MainWindow._mapped_notes`, channel
+1 for now): with aligned times a sound covers every note its time overlaps, a note no sound reaches
+is given to the one before it and doubted, and a note several sounds share stays the own of each that
+keeps at least a quarter of it, the weaker sharers falling to no length. Without times `map_faithful`
+reads the `.krc`'s own mora counts onto the notes, one unit at a time. `contiguous` makes a line a
+chain of onsets - the aligner's own end is dropped and every sound's end is the next sound's start -
+so the count of covered notes matches the count of sounds.
+
 Qt-free.
 """
 
