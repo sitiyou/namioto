@@ -80,19 +80,32 @@ def test_the_export_puts_every_note_where_it_belongs(tmp_path) -> None:
     channels = (Channel(channel=0),)
     notes = (project.Note(1.5, 0.5, 60, 0),)
     plain = midi.write(tmp_path / "plain.mid", channels, notes, 120.0)
-    events = absolute(mido.MidiFile(plain).tracks[1])
-    # program change and volume, then the note 1.5 s in, which is 3 beats at 120 BPM over 960 ppq
-    assert [tick for tick, message in events if not message.is_meta] == [0, 0, 2880, 3840]
+    events = absolute(mido.MidiFile(plain).tracks[0])
+    # program change and volume, then the note 1.5 s in, which is 3 beats at 120 BPM
+    assert [tick for tick, message in events if not message.is_meta] == [0, 0, 3 * midi.PPQ, 4 * midi.PPQ]
 
     late = midi.write(tmp_path / "late.mid", channels, notes, 120.0, wavetone=True)
-    played = [tick for tick, message in absolute(mido.MidiFile(late).tracks[1]) if not message.is_meta]
+    played = [tick for tick, message in absolute(mido.MidiFile(late).tracks[0]) if not message.is_meta]
     assert played == [
         0,
         0,
-        2880 + midi.LEAD_IN_BEATS * midi.PPQ,
-        3840 + midi.LEAD_IN_BEATS * midi.PPQ,
+        3 * midi.PPQ + midi.LEAD_IN_BEATS * midi.PPQ,
+        4 * midi.PPQ + midi.LEAD_IN_BEATS * midi.PPQ,
     ]
     assert midi.read(late, wavetone=True).notes[0].start == pytest.approx(1.5, abs=0.002)
+
+
+def test_the_first_channel_opens_the_file_with_the_tempo(tmp_path) -> None:
+    """No conductor track stands in front of the channels: the notes start on track 0."""
+    channels = (Channel(channel=0), Channel(channel=1))
+    notes = (project.Note(0.0, 1.0, 60, 0), project.Note(0.0, 1.0, 62, 1))
+    path = midi.write(tmp_path / "tracks.mid", channels, notes, 120.0)
+    tracks = mido.MidiFile(path).tracks
+
+    assert len(tracks) == 2
+    assert tracks[0][0].type == "set_tempo"
+    assert {message.channel for message in tracks[0] if message.type == "note_on"} == {0}
+    assert {message.channel for message in tracks[1] if message.type == "note_on"} == {1}
 
 
 def test_wavetone_files_lose_their_lead_in_only_when_asked(tmp_path) -> None:
@@ -202,8 +215,8 @@ def test_a_note_drawn_on_the_grid_lands_on_its_tick(tmp_path) -> None:
     notes = (project.Note(0.25, 0.5, 60, 0),)
     path = midi.write(tmp_path / "grid.mid", (Channel(channel=0),), notes, 120.0)
 
-    events = absolute(mido.MidiFile(path).tracks[1])
-    assert [tick for tick, message in events if not message.is_meta] == [0, 0, 480, 1440]
+    events = absolute(mido.MidiFile(path).tracks[0])
+    assert [tick for tick, message in events if not message.is_meta] == [0, 0, midi.PPQ // 2, 3 * midi.PPQ // 2]
 
 
 def test_a_note_shorter_than_a_tick_still_has_one(tmp_path) -> None:

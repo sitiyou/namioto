@@ -29,7 +29,7 @@ from namioto import project
 from namioto.channels import CHANNEL_COUNT, Channel
 
 SUFFIXES = (".mid", ".midi")
-PPQ = 960  # the beat grid: a tick is well under a millisecond
+PPQ = 480  # the beat grid, the standard division every DAW reads
 VELOCITY = 100  # a note carries no velocity of its own, so every one is written alike
 DEFAULT_VOLUME = 100  # MIDI's own channel volume when the file says nothing
 LEAD_IN_BEATS = 4  # WaveTone's export starts one bar late; see `read` and `write`
@@ -137,10 +137,11 @@ def read(path: str | Path, *, wavetone: bool = False, limit: int = CHANNEL_COUNT
 def write(path: str | Path, channels, notes, bpm: float, *, wavetone: bool = False) -> Path:
     """Write channels and notes, both in seconds, out as a MIDI file, on the project's own tempo.
 
-    One MTrk per channel, with a conductor in front of them; a channel's name is not written, since
-    a name belongs to this project and not to a MIDI channel. A note is written nearest the tick its
-    time names, so one drawn on the roll's grid lands exactly on the tick that grid stands for and
-    one taken from the audio keeps the time it has.
+    One MTrk per channel, the first of them carrying the conductor's tempo and time signature, so
+    the notes start on track 0; a channel's name is not written, since a name belongs to this
+    project and not to a MIDI channel. A note is written nearest the tick its time names, so one
+    drawn on the roll's grid lands exactly on the tick that grid stands for and one taken from the
+    audio keeps the time it has.
     """
     ppq = PPQ
     grid = max(1.0, float(bpm))
@@ -148,10 +149,10 @@ def write(path: str | Path, channels, notes, bpm: float, *, wavetone: bool = Fal
     lead_in = LEAD_IN_BEATS * ppq if wavetone else 0
 
     mid = mido.MidiFile(type=1, ticks_per_beat=ppq, charset="utf-8")
-    conductor = mido.MidiTrack()
-    conductor.append(mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(grid), time=0))
-    conductor.append(mido.MetaMessage("time_signature", numerator=4, denominator=4, time=0))
-    mid.tracks.append(conductor)
+    head = [
+        mido.MetaMessage("set_tempo", tempo=mido.bpm2tempo(grid), time=0),
+        mido.MetaMessage("time_signature", numerator=4, denominator=4, time=0),
+    ]
 
     for entry in channels:
         events: list[tuple[int, int, int]] = []
@@ -164,6 +165,8 @@ def write(path: str | Path, channels, notes, bpm: float, *, wavetone: bool = Fal
             events.append((max(end, start + 1), 0, note.pitch))
         events.sort()  # a note ending where the next one starts lets go of the pitch first
         written = mido.MidiTrack()
+        if not mid.tracks:
+            written.extend(head)  # the conductor opens track 0, in front of the first channel
         written.append(mido.Message("program_change", channel=entry.channel, program=entry.program, time=0))
         written.append(mido.Message("control_change", channel=entry.channel, control=7, value=entry.volume, time=0))
         previous = 0
@@ -180,6 +183,8 @@ def write(path: str | Path, channels, notes, bpm: float, *, wavetone: bool = Fal
             )
             previous = tick
         mid.tracks.append(written)
+    if not mid.tracks:
+        mid.tracks.append(mido.MidiTrack(head))  # a file with no channel still needs the tempo
     return _save(path, mid)
 
 
