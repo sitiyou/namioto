@@ -19,6 +19,10 @@ from dataclasses import dataclass
 # what a run asks for; the GPU one is turned into a device key by `resolve`
 RUN_CHOICES = ("cpu", "gpu")
 RUN_LABELS = ("CPU", "GPU")
+# the WebGPU provider's own hint for which of the machine's GPUs to put the work on: it defaults to
+# the discrete one, and asking for the integrated one is how a run is made lighter
+POWER_PREFERENCES = ("high-performance", "low-power")
+POWER_LABELS = ("High performance", "Low power")
 # the settings value that lets a GPU run pick the first device whose runtime is installed
 AUTO = ""
 
@@ -71,6 +75,20 @@ def get(key: str) -> Device:
 def providers(key: str) -> tuple[str, ...]:
     """The ONNX Runtime providers a device runs with, its own first and the CPU as the fallback."""
     return get(key).providers
+
+
+def provider_options(name: str) -> dict[str, str]:
+    """The provider options a session opens with, empty for a provider that takes none.
+
+    The WebGPU provider takes `powerPreference`, the hint that decides which of the machine's GPUs
+    actually runs the model: a plugin device does not name one of its own, so which device it is
+    handed says nothing about the GPU behind it.
+    """
+    if name != "WebGpuExecutionProvider":
+        return {}
+    from namioto import settings as store  # the spec table imports this module, so import it late
+
+    return {"powerPreference": store.load().hardware.power}
 
 
 def installed() -> tuple[str, ...]:

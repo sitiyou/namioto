@@ -216,6 +216,7 @@ def test_only_the_settings_without_a_control_keep_a_row() -> None:
         ("general", "language"),
         ("general", "style"),
         ("hardware", "gpu"),
+        ("hardware", "power"),
         ("tempo", "estimator"),
         ("tempo", "window_seconds"),
         ("tempo", "window_hop_seconds"),

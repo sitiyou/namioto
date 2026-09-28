@@ -66,6 +66,16 @@ def test_a_run_choice_resolves_through_the_setting(monkeypatch) -> None:
     assert devices.resolve("gpu") == "webgpu"
 
 
+def test_the_webgpu_provider_is_told_which_gpu_to_prefer(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("NAMIOTO_SETTINGS", str(tmp_path / "settings.json"))
+    saved = store.Settings()
+    store.set_value(saved, "hardware", "power", "low-power")
+    store.save(saved)
+
+    assert devices.provider_options("WebGpuExecutionProvider") == {"powerPreference": "low-power"}
+    assert devices.provider_options("CPUExecutionProvider") == {}
+
+
 def test_a_gpu_that_is_not_there_falls_back_to_the_cpu(monkeypatch) -> None:
     monkeypatch.setattr(devices, "configured_gpu", lambda: "cuda")
     monkeypatch.setattr(devices, "available", lambda key: False)

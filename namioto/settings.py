@@ -300,6 +300,16 @@ SECTIONS: tuple[Section, ...] = (
                 choices=(devices.AUTO, *devices.GPU_KEYS),
                 labels=("Automatic", *devices.GPU_LABELS),
             ),
+            Field(
+                "power",
+                "choice",
+                devices.POWER_PREFERENCES[0],
+                "GPU power",
+                "Which of the machine's GPUs the WebGPU backend runs on: the discrete one, or the "
+                "integrated one to save power",
+                choices=devices.POWER_PREFERENCES,
+                labels=devices.POWER_LABELS,
+            ),
         ),
     ),
     Section(

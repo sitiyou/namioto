@@ -205,7 +205,7 @@ def _plugin_session(ort, device: devices.Device, source: str | pathlib.Path) -> 
     options = ort.SessionOptions()
     for name in device.providers:
         if name in found:
-            options.add_provider_for_devices([found[name]], {})
+            options.add_provider_for_devices([found[name]], devices.provider_options(name))
     return ort.InferenceSession(str(source), options)
 
 
