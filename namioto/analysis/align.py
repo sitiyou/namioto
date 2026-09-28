@@ -74,6 +74,14 @@ SILENCE_RATIO = 0.1
 # a line whose median error against reference times is past this is worth running again, not keeping
 DIVERGE_SECONDS = 0.1
 MODEL_FILE = "model.onnx"
+# the half-precision copy a GPU run prefers, written beside it by `--precision fp16`: the WebGPU
+# provider runs it several times faster than the fp32 graph and nearly as exactly
+FP16_FILE = "model.fp16.onnx"
+# the WebGPU provider holds a reduction's divisor in the element type, so the mean and the variance
+# of a whole utterance - more samples than fp16's 65504 - come back as infinities and normalise the
+# audio by the wrong scale. Those reductions run on the CPU instead: exact, and one copy of four
+# bytes per sample
+FP16_CPU_NODES = "/ReduceMean\n/ReduceMean_1\n/ReduceMean_2"
 VOCAB_FILE = "vocab.json"
 MODEL_ENV = model_store.MODELS["aligner"].env
 LANGUAGES = ("ja",)
@@ -360,11 +368,22 @@ class Backend(Protocol):
     def logits(self, waveform: np.ndarray) -> np.ndarray: ...
 
 
+def model_file(directory: str | pathlib.Path, provider: str) -> pathlib.Path:
+    """The model to load from `directory`: the half-precision one on a GPU, the shipped one else."""
+    directory = pathlib.Path(directory)
+    half = directory / FP16_FILE
+    return half if provider != "cpu" and half.is_file() else directory / MODEL_FILE
+
+
 class OnnxBackend:
     """A converted CTC model: `logits(waveform)` is `[frames, vocabulary]` for one window."""
 
     def __init__(self, path: str | pathlib.Path, provider: str = "cpu"):
-        self.session = model_store.session(path, provider)
+        path = pathlib.Path(path)
+        options = None
+        if path.name == FP16_FILE and provider == "webgpu":
+            options = {"forceCpuNodeNames": FP16_CPU_NODES}
+        self.session = model_store.session(path, provider, options)
         self.input = self.session.get_inputs()[0].name
 
     def logits(self, waveform: np.ndarray) -> np.ndarray:

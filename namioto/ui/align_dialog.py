@@ -74,7 +74,7 @@ class Aligner(LoadingThread):
             self.message.emit(
                 tr("Loading the {model} model on {provider}\u2026", model=self.model, provider=self.provider)
             )
-            backend = align.OnnxBackend(directory / align.MODEL_FILE, provider=self.provider)
+            backend = align.OnnxBackend(align.model_file(directory, self.provider), provider=self.provider)
             if self.chunk:
                 backend = align.ChunkedBackend(backend, progress=self.progress.emit)
                 self.message.emit(tr("Aligning over {seconds:.1f}s of audio in chunks\u2026", seconds=seconds))

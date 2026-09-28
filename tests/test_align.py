@@ -289,6 +289,15 @@ def test_resolve_model_reads_a_file_as_its_directory(tmp_path):
     assert align.resolve_model(model) == tmp_path
 
 
+def test_model_file_prefers_the_half_precision_one_on_a_gpu(tmp_path):
+    (tmp_path / align.MODEL_FILE).write_bytes(b"")
+    assert align.model_file(tmp_path, "webgpu") == tmp_path / align.MODEL_FILE
+    assert align.model_file(tmp_path, "cpu") == tmp_path / align.MODEL_FILE
+    (tmp_path / align.FP16_FILE).write_bytes(b"")
+    assert align.model_file(tmp_path, "webgpu") == tmp_path / align.FP16_FILE
+    assert align.model_file(tmp_path, "cpu") == tmp_path / align.MODEL_FILE
+
+
 def test_resolve_model_rejects_a_directory_without_the_model(tmp_path):
     with pytest.raises(FileNotFoundError):
         align.resolve_model(tmp_path)

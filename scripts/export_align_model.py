@@ -4,10 +4,11 @@
 
 A development tool, not a runtime dependency: it needs torch and, per kind, torchaudio or
 transformers, plus ONNX, none of which the program itself imports. It writes `model.onnx` and
-`vocab.json` into the aligner's data directory, or into `--out`; `--precision int8` (the default)
-quantises the MatMul weights, which is what the CPU wants, while `fp32` leaves the graph as exported,
-which is the only form the WebGPU provider runs whole - its quantised matmuls fall back to the CPU,
-and the activations copied across for each one cost more than the matmul did.
+`vocab.json` into the aligner's data directory, or into `--out`. `--precision int8` (the default)
+quantises the MatMul weights, which is what the CPU wants; `fp16` writes a `model.fp16.onnx` beside
+it, which is what a GPU run loads; `fp32` leaves the graph as exported. The WebGPU provider cannot
+run quantised matmuls whole - it falls back to the CPU and copies their activations across for each
+one, which costs more than the matmul did.
 
     uv run --group export scripts/export_align_model.py --model mms
     uv run --group export scripts/export_align_model.py --model yohane
@@ -46,9 +47,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--out", type=pathlib.Path, help="where to write it (default: the data directory)")
     parser.add_argument(
         "--precision",
-        choices=("int8", "fp32"),
+        choices=("int8", "fp16", "fp32"),
         default="int8",
-        help="int8 (default) quantises the MatMul weights for the CPU; fp32 keeps the exported graph",
+        help="int8 (default) quantises the MatMul weights for the CPU; fp16 halves their width for a "
+        "GPU run; fp32 keeps the exported graph",
     )
     return parser.parse_args(argv)
 
@@ -79,8 +81,8 @@ def drop_nan_guards(graph) -> int:
 def export(module, destination: pathlib.Path, precision: str = "int8") -> None:
     """Write the ONNX graph of `module`, which takes raw audio and returns `logits`.
 
-    `precision` is `int8` for a dynamic quantisation of the MatMul weights or `fp32` for the graph as
-    it was exported; only the second runs whole on the WebGPU provider.
+    `precision` is `int8` for a dynamic quantisation of the MatMul weights, `fp16` for the graph with
+    half-precision weights, or `fp32` for the graph as it was exported.
     """
     import onnx
     import torch
@@ -107,6 +109,11 @@ def export(module, destination: pathlib.Path, precision: str = "int8") -> None:
         drop_nan_guards(model.graph)
         if precision == "fp32":
             onnx.save(model, str(destination))
+            return
+        if precision == "fp16":
+            from onnxruntime.transformers.float16 import convert_float_to_float16
+
+            onnx.save(convert_float_to_float16(model, keep_io_types=True), str(destination))
             return
         onnx.save(model, str(source))
         from onnxruntime.quantization import QuantType, quantize_dynamic
@@ -166,12 +173,13 @@ def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     destination = args.out or align.model_dir(args.model, args.language)
     destination.mkdir(parents=True, exist_ok=True)
+    target = destination / (align.FP16_FILE if args.precision == "fp16" else align.MODEL_FILE)
     if args.model == "yohane":
-        vocab = export_yohane(destination / align.MODEL_FILE, args.hf_model or HF_MODELS["yohane"], args.precision)
+        vocab = export_yohane(target, args.hf_model or HF_MODELS["yohane"], args.precision)
     else:
-        vocab = export_mms(destination / align.MODEL_FILE, args.precision)
+        vocab = export_mms(target, args.precision)
     (destination / align.VOCAB_FILE).write_text(json.dumps(vocab, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"wrote {destination / align.MODEL_FILE} and {destination / align.VOCAB_FILE}")
+    print(f"wrote {target} and {destination / align.VOCAB_FILE}")
     return 0
 
 

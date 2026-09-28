@@ -81,6 +81,43 @@ def test_a_plugin_device_binds_a_session_to_its_device(monkeypatch) -> None:
     ]
 
 
+def test_a_session_carries_its_own_options_on_top_of_the_devices(monkeypatch) -> None:
+    class Device:
+        def __init__(self, ep_name):
+            self.ep_name = ep_name
+
+    class Options:
+        def __init__(self):
+            self.bound = []
+
+        def add_provider_for_devices(self, devices, options):
+            self.bound.append(options)
+
+    class Session:
+        def __init__(self, path, options=None):
+            self.options = options
+
+    monkeypatch.setattr(model_store.devices, "installed", lambda: ("WebGpuExecutionProvider", "CPUExecutionProvider"))
+    monkeypatch.setattr(
+        model_store.devices,
+        "provider_options",
+        lambda name: {"powerPreference": "low-power"} if name == "WebGpuExecutionProvider" else {},
+    )
+    monkeypatch.setattr(
+        "onnxruntime.get_ep_devices",
+        lambda: [Device("WebGpuExecutionProvider"), Device("CPUExecutionProvider")],
+    )
+    monkeypatch.setattr("onnxruntime.SessionOptions", Options)
+    monkeypatch.setattr("onnxruntime.InferenceSession", Session)
+
+    session = model_store.session("/models/x.onnx", "webgpu", {"forceCpuNodeNames": "/ReduceMean"})
+
+    assert session.options.bound == [
+        {"powerPreference": "low-power", "forceCpuNodeNames": "/ReduceMean"},
+        {},
+    ]
+
+
 def test_a_plugin_device_that_found_no_gpu_is_refused(monkeypatch) -> None:
     monkeypatch.setattr(model_store.devices, "installed", lambda: ())
     monkeypatch.setattr("onnxruntime.get_ep_devices", lambda: [])

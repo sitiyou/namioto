@@ -179,17 +179,25 @@ def providers(key: str) -> tuple[str, ...]:
     return PROVIDERS[key]
 
 
-def session(source: str | pathlib.Path, provider: str = "cpu") -> ort.InferenceSession:
-    """A session over one ONNX file, on the device a name stands for."""
+def session(
+    source: str | pathlib.Path, provider: str = "cpu", options: dict[str, str] | None = None
+) -> ort.InferenceSession:
+    """A session over one ONNX file, on the device a name stands for.
+
+    `options` are provider options this one session opens with, on top of the device's own; a device
+    that runs through a built-in provider takes none.
+    """
     import onnxruntime as ort  # the runtime is optional; reach it only where a session is opened
 
     device = devices.get(provider)
     if device.plugin:
-        return _plugin_session(ort, device, source)
+        return _plugin_session(ort, device, source, options)
     return ort.InferenceSession(str(source), providers=list(device.providers))
 
 
-def _plugin_session(ort, device: devices.Device, source: str | pathlib.Path) -> ort.InferenceSession:
+def _plugin_session(
+    ort, device: devices.Device, source: str | pathlib.Path, options: dict[str, str] | None = None
+) -> ort.InferenceSession:
     """A session on a plugin execution provider, which ONNX Runtime reaches only through a device.
 
     The plugin's library has to be registered first, which `installed` does, and the session is bound
@@ -202,11 +210,14 @@ def _plugin_session(ort, device: devices.Device, source: str | pathlib.Path) -> 
         found.setdefault(entry.ep_name, entry)
     if device.providers[0] not in found:
         raise RuntimeError(f"no {device.label} device found; check that its driver is installed")
-    options = ort.SessionOptions()
-    for name in device.providers:
+    session_options = ort.SessionOptions()
+    for index, name in enumerate(device.providers):
         if name in found:
-            options.add_provider_for_devices([found[name]], devices.provider_options(name))
-    return ort.InferenceSession(str(source), options)
+            opened = devices.provider_options(name)
+            if index == 0:
+                opened.update(options or {})
+            session_options.add_provider_for_devices([found[name]], opened)
+    return ort.InferenceSession(str(source), session_options)
 
 
 def _whole(model: Model, candidate: pathlib.Path) -> pathlib.Path:
