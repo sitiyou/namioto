@@ -3,8 +3,11 @@
 """Convert a FA-Kara forced-alignment model to the ONNX file and dictionary `namioto-align` loads.
 
 A development tool, not a runtime dependency: it needs torch and, per kind, torchaudio or
-transformers, plus ONNX, none of which the program itself imports. It writes `model.onnx` (int8,
-from the quantised graph) and `vocab.json` into the aligner's data directory, or into `--out`.
+transformers, plus ONNX, none of which the program itself imports. It writes `model.onnx` and
+`vocab.json` into the aligner's data directory, or into `--out`; `--precision int8` (the default)
+quantises the MatMul weights, which is what the CPU wants, while `fp32` leaves the graph as exported,
+which is the only form the WebGPU provider runs whole - its quantised matmuls fall back to the CPU,
+and the activations copied across for each one cost more than the matmul did.
 
     uv run --group export scripts/export_align_model.py --model mms
     uv run --group export scripts/export_align_model.py --model yohane
@@ -41,6 +44,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--hf-model", help=f"a HuggingFace model id for --model yohane (default: {HF_MODELS['yohane']})"
     )
     parser.add_argument("--out", type=pathlib.Path, help="where to write it (default: the data directory)")
+    parser.add_argument(
+        "--precision",
+        choices=("int8", "fp32"),
+        default="int8",
+        help="int8 (default) quantises the MatMul weights for the CPU; fp32 keeps the exported graph",
+    )
     return parser.parse_args(argv)
 
 
@@ -67,11 +76,14 @@ def drop_nan_guards(graph) -> int:
     return len(dropped)
 
 
-def export(module, destination: pathlib.Path) -> None:
-    """Write the int8 ONNX graph of `module`, which takes raw audio and returns `logits`."""
+def export(module, destination: pathlib.Path, precision: str = "int8") -> None:
+    """Write the ONNX graph of `module`, which takes raw audio and returns `logits`.
+
+    `precision` is `int8` for a dynamic quantisation of the MatMul weights or `fp32` for the graph as
+    it was exported; only the second runs whole on the WebGPU provider.
+    """
     import onnx
     import torch
-    from onnxruntime.quantization import QuantType, quantize_dynamic
 
     with tempfile.TemporaryDirectory() as scratch:
         source = pathlib.Path(scratch) / "fp32.onnx"
@@ -91,13 +103,18 @@ def export(module, destination: pathlib.Path) -> None:
                 # the dynamo exporter ignores dynamic_axes, which the variable-length windows need
                 dynamo=False,
             )
-        graph = onnx.load(str(source))
-        drop_nan_guards(graph)
-        onnx.save(graph, str(source))
+        model = onnx.load(str(source))
+        drop_nan_guards(model.graph)
+        if precision == "fp32":
+            onnx.save(model, str(destination))
+            return
+        onnx.save(model, str(source))
+        from onnxruntime.quantization import QuantType, quantize_dynamic
+
         quantize_dynamic(str(source), str(destination), weight_type=QuantType.QInt8, op_types_to_quantize=["MatMul"])
 
 
-def export_mms(destination: pathlib.Path) -> dict[str, int]:
+def export_mms(destination: pathlib.Path, precision: str = "int8") -> dict[str, int]:
     """Meta's MMS checkpoint: layer norm folded in, log-softmax and the star token left off."""
     import torch
     import torchaudio
@@ -118,13 +135,13 @@ def export_mms(destination: pathlib.Path) -> dict[str, int]:
     # bake into the graph; the manual normalisation above replaces it
     model.normalize_waveform = False
     model.apply_log_softmax = False
-    export(Mms(model), destination)
+    export(Mms(model), destination, precision)
 
     labels = torchaudio.pipelines.MMS_FA.get_labels(star=None)
     return {"[pad]": 0, **{label: index for index, label in enumerate(labels) if index}}
 
 
-def export_yohane(destination: pathlib.Path, name: str) -> dict[str, int]:
+def export_yohane(destination: pathlib.Path, name: str, precision: str = "int8") -> dict[str, int]:
     """The karaoke fine-tune: the feature extractor's layer norm folded into the graph."""
     import torch
     from transformers import Wav2Vec2ForCTC, Wav2Vec2Processor
@@ -141,7 +158,7 @@ def export_yohane(destination: pathlib.Path, name: str) -> dict[str, int]:
             values = (values - values.mean()) / torch.sqrt(values.var(unbiased=False) + 1e-7)
             return self.inner(values).logits
 
-    export(Yohane(model), destination)
+    export(Yohane(model), destination, precision)
     return {char.lower(): int(code) for char, code in processor.tokenizer.get_vocab().items()}
 
 
@@ -150,12 +167,10 @@ def main(argv: list[str] | None = None) -> int:
     destination = args.out or align.model_dir(args.model, args.language)
     destination.mkdir(parents=True, exist_ok=True)
     if args.model == "yohane":
-        vocab = export_yohane(destination / align.MODEL_FILE, args.hf_model or HF_MODELS["yohane"])
+        vocab = export_yohane(destination / align.MODEL_FILE, args.hf_model or HF_MODELS["yohane"], args.precision)
     else:
-        vocab = export_mms(destination / align.MODEL_FILE)
-    (destination / align.VOCAB_FILE).write_text(
-        json.dumps(vocab, ensure_ascii=False, indent=1), encoding="utf-8"
-    )
+        vocab = export_mms(destination / align.MODEL_FILE, args.precision)
+    (destination / align.VOCAB_FILE).write_text(json.dumps(vocab, ensure_ascii=False, indent=1), encoding="utf-8")
     print(f"wrote {destination / align.MODEL_FILE} and {destination / align.VOCAB_FILE}")
     return 0
 
