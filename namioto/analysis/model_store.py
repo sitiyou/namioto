@@ -180,10 +180,33 @@ def providers(key: str) -> tuple[str, ...]:
 
 
 def session(source: str | pathlib.Path, provider: str = "cpu") -> ort.InferenceSession:
-    """A session over one ONNX file, with the providers a name stands for."""
+    """A session over one ONNX file, on the device a name stands for."""
     import onnxruntime as ort  # the runtime is optional; reach it only where a session is opened
 
-    return ort.InferenceSession(str(source), providers=list(providers(provider)))
+    device = devices.get(provider)
+    if device.plugin:
+        return _plugin_session(ort, device, source)
+    return ort.InferenceSession(str(source), providers=list(device.providers))
+
+
+def _plugin_session(ort, device: devices.Device, source: str | pathlib.Path) -> ort.InferenceSession:
+    """A session on a plugin execution provider, which ONNX Runtime reaches only through a device.
+
+    The plugin's library has to be registered first, which `installed` does, and the session is bound
+    to one of the devices the runtime found for it; naming the provider instead would leave the work
+    on the CPU without saying so.
+    """
+    devices.installed()
+    found: dict[str, object] = {}
+    for entry in ort.get_ep_devices():
+        found.setdefault(entry.ep_name, entry)
+    if device.providers[0] not in found:
+        raise RuntimeError(f"no {device.label} device found; check that its driver is installed")
+    options = ort.SessionOptions()
+    for name in device.providers:
+        if name in found:
+            options.add_provider_for_devices([found[name]], {})
+    return ort.InferenceSession(str(source), options)
 
 
 def _whole(model: Model, candidate: pathlib.Path) -> pathlib.Path:

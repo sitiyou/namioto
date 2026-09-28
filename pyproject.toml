@@ -18,14 +18,13 @@ dependencies = [
     "scipy>=1.11",
 ]
 
-# the runtime the analysis jobs open a model with; the builds are mutually exclusive, since they all
-# provide the same `onnxruntime` module, so a machine installs exactly one of them. `rocm` is
-# Microsoft's `onnxruntime-migraphx`: AMD's own `onnxruntime-rocm` carries ROCMExecutionProvider,
-# while the GPU device the program offers runs on MIGraphXExecutionProvider
+# the runtime the analysis jobs open a model with. `cpu` and `webgpu` share the plain `onnxruntime`
+# build, the WebGPU device being a plugin execution provider on top of it, while `cuda` is a build of
+# its own; that build provides the same `onnxruntime` module, so it conflicts with both
 [project.optional-dependencies]
 cpu = ["onnxruntime>=1.20"]
 cuda = ["onnxruntime-gpu>=1.20"]
-rocm = ["onnxruntime-migraphx>=1.20"]
+webgpu = ["onnxruntime>=1.24.4", "onnxruntime-ep-webgpu"]
 
 [project.scripts]
 namioto = "namioto.ui.app:main"
@@ -38,8 +37,8 @@ namioto-align = "namioto.analysis.align:main"
 
 [dependency-groups]
 # the analysis jobs need one of the onnxruntime builds and the tests exercise them, but no default
-# group may carry one: `uv sync` always includes it, so `--extra cuda`/`rocm` would install a second
-# build over it. Development picks its build with `--extra cpu` (or `--extra cuda`/`--extra rocm`)
+# group may carry one: `uv sync` always includes it, so `--extra cuda`/`webgpu` would install a second
+# build over it. Development picks its build with `--extra cpu` (or `--extra cuda`/`--extra webgpu`)
 dev = ["pytest>=8"]
 # torch/torchaudio/transformers/onnx are only for scripts/export_align_model.py; the program runs
 # the converted ONNX graph through onnxruntime and never imports them
@@ -58,7 +57,7 @@ include = ["namioto", "scripts", "build.sh", "LICENSE", "NOTICE", "README.md", "
 [tool.uv]
 # installing two of the onnxruntime builds would overwrite each other's `onnxruntime` module; uv is
 # told they conflict so it refuses the pair instead of producing a broken environment (pip cannot)
-conflicts = [[{ extra = "cpu" }, { extra = "cuda" }, { extra = "rocm" }]]
+conflicts = [[{ extra = "cpu" }, { extra = "cuda" }], [{ extra = "cuda" }, { extra = "webgpu" }]]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

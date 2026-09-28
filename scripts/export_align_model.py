@@ -14,9 +14,8 @@ from the quantised graph) and `vocab.json` into the aligner's data directory, or
 wav2vec2 CTC models trained on romanised kana. The graph bakes in the waveform normalisation
 the models expect, takes `input_values` and returns `logits`; quantisation is limited to `MatMul`,
 because the exporter writes the convolutions' bias outside the initializers and quantising those
-fails. The attention's `where(isnan(softmax), 0, softmax)` guard is dropped: it is redundant for
-finite input, and ONNX Runtime's MIGraphX provider counts `IsNaN` as unsupported - a handful of them
-is enough to put the whole graph back on the CPU.
+fails. The attention's `where(isnan(softmax), 0, softmax)` guard is dropped: it is a dead branch for
+the finite input the graph is handed, and the graph is smaller without it.
 """
 
 from __future__ import annotations

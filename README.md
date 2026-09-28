@@ -14,7 +14,7 @@ resize and delete. Notes play back through a MIDI synth, and the file plays alon
 ## Run
 
 ```bash
-uv sync --extra cpu                       # the onnxruntime build the analysis models use (or --extra cuda/rocm)
+uv sync --extra cpu                       # the onnxruntime build the analysis models use (or --extra cuda/webgpu)
 uv run namioto                            # the editor
 uv run namioto song.mp3                   # the editor with the audio analysed into a spectrum
 uv run namioto song.nto                   # open a project (the notes and the audio together)
@@ -34,10 +34,11 @@ uv run scripts/bench_spectrum.py          # spectrum benchmark
 ```
 
 `uv` creates the virtual environment and installs the dependencies on first run. `--extra cpu` adds
-ONNX Runtime, which the analysis models need and which is optional: its builds are mutually
-exclusive, so an installed copy takes `pip install namioto[cpu]` instead (or `[cuda]`/`[rocm]` for a
-GPU). No model is part of the program: the ones it uses are downloaded from this project's `models`
-release (or GAME's, for GAME's own), so the first run of an analysis is the one that fetches them.
+ONNX Runtime, which the analysis models need and which is optional: `--extra webgpu` puts the WebGPU
+(Vulkan) provider on top of that same build, while a CUDA build is a separate one that replaces it,
+so an installed copy takes `pip install namioto[cpu]` instead (or `[cuda]`/`[webgpu]` for a GPU). No
+model is part of the program: the ones it uses are downloaded from this project's `models` release
+(or GAME's, for GAME's own), so the first run of an analysis is the one that fetches them.
 
 ## Spectrum
 

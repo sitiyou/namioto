@@ -1,18 +1,19 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Where a model runs: one registry of the devices the program can offer.
 
-A device names the ONNX Runtime provider that puts a model on it, the runtime a person would have to
-install, what to do when that runtime is missing and the model flavor it reads. The settings spec
-reads the keys and labels, `model_store` its provider lists, the settings window asks `available` /
-`missing` whether the runtime is there, `validate` says whether a run can open a model at all, and a
-run's CPU/GPU choice is turned into a device key by `resolve`. ONNX Runtime is imported only inside
-`installed` and `validate`, so the GUI's startup path stays free of it. The `flavor` and `arch`
-fields say which model a device reads and whether that model is made per
-GPU architecture; nothing downloads them yet - the per-device model integration is separate.
+A device names the ONNX Runtime providers that put a model on it, the runtime a person would have to
+install and what to do when that runtime is missing. The settings spec reads the keys and labels,
+`model_store` its provider lists, the settings window asks `available` / `missing` whether the
+runtime is there, `validate` says whether a run can open a model at all, and a run's CPU/GPU choice
+is turned into a device key by `resolve`. ONNX Runtime is imported only inside `installed` and
+`validate`, so the GUI's startup path stays free of it. A provider that ships as a plugin is named
+by its module in `plugin`; it has to be registered before the runtime offers it, which `installed`
+does as a side effect.
 """
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass
 
 # what a run asks for; the GPU one is turned into a device key by `resolve`
@@ -30,8 +31,7 @@ class Device:
     providers: tuple[str, ...]
     runtime: str = ""  # the runtime a person would install, named for one
     hint: str = ""  # what to do when that runtime is missing
-    flavor: str = "onnx"  # which model the device reads
-    arch: bool = False  # whether that model is made per GPU architecture
+    plugin: str = ""  # the module a plugin execution provider comes from, empty for a built-in one
 
 
 DEVICES: tuple[Device, ...] = (
@@ -45,14 +45,13 @@ DEVICES: tuple[Device, ...] = (
         hint="install an onnxruntime build with the CUDA provider",
     ),
     Device(
-        "migraphx",
-        "MIGraphX (ROCm)",
+        "webgpu",
+        "WebGPU (Vulkan)",
         "gpu",
-        ("MIGraphXExecutionProvider", "CPUExecutionProvider"),
-        runtime="AMD ROCm",
-        hint="install an onnxruntime build with the MIGraphX provider",
-        flavor="mxr",
-        arch=True,
+        ("WebGpuExecutionProvider", "CPUExecutionProvider"),
+        runtime="Vulkan",
+        hint="install namioto[webgpu] and a working Vulkan driver",
+        plugin="onnxruntime_ep_webgpu",
     ),
 )
 KEYS = tuple(device.key for device in DEVICES)
@@ -75,20 +74,42 @@ def providers(key: str) -> tuple[str, ...]:
 
 
 def installed() -> tuple[str, ...]:
-    """The providers the ONNX Runtime on this machine was built with; imports it, never at startup."""
+    """The providers the ONNX Runtime on this machine can run with; imports it, never at startup.
+
+    A plugin provider is put up here too: the runtime only lists one once its library is registered,
+    so a check that skipped it would call a device that is there missing.
+    """
     try:
         import onnxruntime as ort
     except ImportError:
         return ()
+    _register(ort)
     return tuple(ort.get_available_providers())
+
+
+# the plugin libraries already put up; the runtime refuses a second registration of one
+_REGISTERED: set[str] = set()
+
+
+def _register(ort) -> None:
+    """Bring up the plugin execution providers this registry names; one not installed is left out."""
+    for device in DEVICES:
+        if not device.plugin or device.key in _REGISTERED:
+            continue
+        try:
+            plugin = importlib.import_module(device.plugin)
+        except ImportError:
+            continue
+        ort.register_execution_provider_library(device.key, plugin.get_library_path())
+        _REGISTERED.add(device.key)
 
 
 # what the interface says when a run cannot open a model; kept as the English a catalog can key on,
 # since the interface is the side that translates it
-MISSING_RUNTIME = "ONNX Runtime is not installed; install namioto[cpu], namioto[cuda] or namioto[rocm] and restart"
+MISSING_RUNTIME = "ONNX Runtime is not installed; install namioto[cpu], namioto[cuda] or namioto[webgpu] and restart"
 MIXED_RUNTIME = (
     "two onnxruntime builds are installed; remove all but one and reinstall "
-    "namioto[cpu], namioto[cuda] or namioto[rocm]"
+    "namioto[cpu], namioto[cuda] or namioto[webgpu]"
 )
 
 

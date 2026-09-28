@@ -21,7 +21,7 @@ def test_each_family_keeps_the_directory_it_already_uses(tmp_path, monkeypatch) 
 def test_the_providers_a_name_stands_for() -> None:
     assert model_store.providers("cpu") == ("CPUExecutionProvider",)
     assert model_store.providers("cuda") == ("CUDAExecutionProvider", "CPUExecutionProvider")
-    assert model_store.providers("migraphx") == ("MIGraphXExecutionProvider", "CPUExecutionProvider")
+    assert model_store.providers("webgpu") == ("WebGpuExecutionProvider", "CPUExecutionProvider")
     with pytest.raises(ValueError, match="unknown provider"):
         model_store.providers("gpu")
 
@@ -41,6 +41,43 @@ def test_a_session_is_built_with_the_providers_that_were_asked_for(monkeypatch) 
         ("/models/x.onnx", ["CUDAExecutionProvider", "CPUExecutionProvider"]),
         ("/models/x.onnx", ["CPUExecutionProvider"]),
     ]
+
+
+def test_a_plugin_device_binds_a_session_to_its_device(monkeypatch) -> None:
+    class Device:
+        def __init__(self, ep_name):
+            self.ep_name = ep_name
+
+    class Options:
+        def __init__(self):
+            self.bound = []
+
+        def add_provider_for_devices(self, devices, options):
+            self.bound.append([device.ep_name for device in devices])
+
+    class Session:
+        def __init__(self, path, options=None):
+            self.options = options
+
+    monkeypatch.setattr(model_store.devices, "installed", lambda: ("WebGpuExecutionProvider", "CPUExecutionProvider"))
+    monkeypatch.setattr(
+        "onnxruntime.get_ep_devices",
+        lambda: [Device("CPUExecutionProvider"), Device("WebGpuExecutionProvider")],
+    )
+    monkeypatch.setattr("onnxruntime.SessionOptions", Options)
+    monkeypatch.setattr("onnxruntime.InferenceSession", Session)
+
+    session = model_store.session("/models/x.onnx", "webgpu")
+
+    # the CPU goes in as the fallback, and the plugin's device first
+    assert session.options.bound == [["WebGpuExecutionProvider"], ["CPUExecutionProvider"]]
+
+
+def test_a_plugin_device_that_found_no_gpu_is_refused(monkeypatch) -> None:
+    monkeypatch.setattr(model_store.devices, "installed", lambda: ())
+    monkeypatch.setattr("onnxruntime.get_ep_devices", lambda: [])
+    with pytest.raises(RuntimeError, match="WebGPU"):
+        model_store.session("/models/x.onnx", "webgpu")
 
 
 def test_unpacking_takes_the_folder_holding_the_first_file(tmp_path, monkeypatch) -> None:
