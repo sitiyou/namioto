@@ -58,6 +58,16 @@ include = ["namioto", "scripts", "build.sh", "LICENSE", "NOTICE", "README.md", "
 # installing two of the onnxruntime builds would overwrite each other's `onnxruntime` module; uv is
 # told they conflict so it refuses the pair instead of producing a broken environment (pip cannot)
 conflicts = [[{ extra = "cpu" }, { extra = "cuda" }], [{ extra = "cuda" }, { extra = "webgpu" }]]
+# the export group's torch is taken from a mirror of the PyTorch wheel index instead: the build on
+# PyPI carries the CUDA libraries, which nothing here uses
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://mirror.sjtu.edu.cn/pytorch-wheels/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = { index = "pytorch-cpu" }
+torchaudio = { index = "pytorch-cpu" }
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
