@@ -19,10 +19,11 @@ uv run namioto                            # the editor
 uv run namioto song.mp3                   # the editor with the audio analysed into a spectrum
 uv run namioto song.nto                   # open a project (the notes and the audio together)
 uv run namioto song.mp3 --channels both --gain 300   # analysis options
-uv run namioto-tempo song.mp3             # estimate the tempo of a file (beat tracking + fit)
+uv run namioto-wavetone song.mp3          # WaveTone's own volume-envelope analysis (the editor's default)
+uv run namioto-tempo song.mp3             # the librosa beat tracker + least-squares fit
 uv run namioto-tempo song.mp3 --local     # per-window estimates, 12 s wide, 6 s apart
 uv run namioto-tempo song.mp3 --json      # machine readable, includes every beat
-uv run namioto-tempocnn song.mp3          # the same with the TempoCNN model (runner-up)
+uv run namioto-tempocnn song.mp3          # the TempoCNN model, on the CPU or a GPU backend
 uv run namioto-spectrum song.mp3          # analyse into 84 note bands (C1-B7)
 uv run namioto-spectrum song.mp3 --bench  # plus per-stage timings
 uv run namioto-spectrum song.mp3 --threshold 1.2   # plus auto-filled note spans
@@ -116,10 +117,13 @@ since a file whose notes start before that bar was never WaveTone's and is read 
 ## Settings
 
 The gear at the right end of the Mix row opens the settings window, and it is short on purpose: it
-holds only what has no control in the bars - the two windows the beat tracker fits, **General** (the
-interface **Language**, where the default `Follow system` takes the machine's own and a change takes
-effect on the next run, **Auto-save**, off by default, which writes the open project once editing
-stops and when the window loses focus, and **Style**, the widget style that draws the window),
+holds only what has no control in the bars - **General** (the interface **Language**, where the
+default `Follow system` takes the machine's own and a change takes effect on the next run,
+**Auto-save**, off by default, which writes the open project once editing stops and when the window
+loses focus, and **Style**, the widget style that draws the window), **Devices** (which GPU backend a
+run that asks for the GPU uses; the line under it says whether its runtime is installed), **Tempo**
+(the **Algorithm** that estimates the tempo - `wavetone` by default, or the librosa beat tracker or
+TempoCNN - with the two windows the beat tracker fits under an `ADVANCED` heading),
 **WaveTone compatibility**, and **Lyrics** (the OpenAI-compatible endpoint the lyrics window may
 call - **API base** up to its `/v1`, **API key**, **Model**, the temperature and timeout under an
 `ADVANCED` heading - and the **External editor** command a `.krc` is opened with) - a page per
@@ -159,9 +163,18 @@ data directory, and each keeps its own license — see [NOTICE](NOTICE) and
 ## Layout
 
 ```
-namioto/beats.py      tempo estimation by beat tracking (librosa) + least-squares fit, no Qt
-namioto/tempo.py      TempoCNN tempo estimation (ONNX Runtime) + tempo map helpers, no Qt
-namioto/spectrum.py   note-domain spectrum analysis (STFT → 84 note bands), no Qt
+namioto/analysis/    the analysis engines, each also a CLI, no Qt
+  beats.py            tempo estimation by beat tracking (librosa) + least-squares fit
+  tempo.py            TempoCNN tempo estimation (ONNX Runtime) + tempo map helpers
+  spectrum.py         note-domain spectrum analysis (STFT → 84 note bands)
+  wavetone.py         WaveTone's own volume-envelope tempo analysis
+  bpm.py              the tempo algorithms behind one setting
+  align.py            forced alignment of known lyrics onto the audio (FA-Kara's core, ONNX)
+  game.py             singing-voice note extraction with GAME's ONNX models
+  transcription.py    GAME's parameters, their store and the spawned child entry point
+  model_store.py      where a model comes from: one registry, one download, one session
+  devices.py          the CPU/GPU device registry the models run on
+  choices.py          the values a setting may take
 namioto/playback.py   note synthesis: pitches rendered into one audio buffer, no Qt
 namioto/channels.py   the MIDI channels a note plays on, and the values they play with, no Qt
 namioto/interaction.py the roll's normal/edit mode and its tool, as one value, no Qt
@@ -171,24 +184,20 @@ namioto/project.py    the .nto file: the notes, the audio they were drawn over, 
 namioto/settings.py   the settings spec table, its file and the defaults, no Qt
 namioto/lyrics.py     the .krc sidecar beside a project, and the model call that fills it, no Qt
 namioto/karaoke/      the .krc model, its parser, its writer and its timeline (lark), no Qt
-namioto/align.py      forced alignment of known lyrics onto the audio (FA-Kara's core, ONNX), no Qt
-namioto/model_store.py where a model comes from: one registry, one download, one session, no Qt
-namioto/game.py       singing-voice note extraction with GAME's ONNX models, no Qt
-namioto/transcription.py GAME's parameters, their store and the spawned child entry point, no Qt
-namioto/bpm.py        the tempo algorithms behind one setting, no Qt
-namioto/wavetone.py   WaveTone's own volume-envelope tempo analysis, no Qt
 namioto/utils.py      the app's directories, a file's identity, kana to romaji tokens, no Qt
 namioto/i18n.py       the language catalogs and the language in force, no Qt
 LICENSE-CC-BY-NC-SA-4.0.txt  the license text of the downloaded TempoCNN model
 namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars,
                       roll.py: the view, its items, undo, ruler and keyboard, strips.py: the
-                      lyrics strip and the span geometry it shares with the view,
-                      theme.py: colours, icons.py: glyphs, text.py: shared labels,
-                      loading.py: one-shot worker, spectrogram.py: spectrum colour map, image cache
-                      and loader, audio.py: note playback outputs - an external MIDI synth or the
-                      built-in one, song.py: the audio file streamed to Qt's audio output,
-                      channel_panel.py: the sidebar, and one module per dialog: settings, lyrics,
-                      transcription, align, MIDI import)
+                      lyrics strip, lyric_map.py: the lyrics-to-notes mapping and its thread,
+                      blocks.py: the pointer grammar both editors share, viewport.py: the strips
+                      that share the roll's columns, theme.py: colours, icons.py: glyphs,
+                      text.py: shared labels, loading.py: one-shot worker, spectrogram.py:
+                      spectrum colour map, image cache and loader, audio.py: note playback
+                      outputs - the external MIDI synth, or silence when there is none,
+                      song.py: the audio file streamed to Qt's audio output, channel_panel.py:
+                      the sidebar, and one module per dialog: settings, lyrics, transcription,
+                      align, MIDI import)
 tests/                pytest
 scripts/              developer tools (spectrum benchmark, aligner model export, model upload)
 build.sh              packaging script
@@ -261,19 +270,21 @@ external synth receives the real GM program on the channel's own number.
 The value sliders - **Speed**, **Gain**, **Contrast**, **MIDI** - land on the spot the track is clicked
 and step with the wheel, one notch to a step, turning the value down as the wheel turns up.
 
-Loading an audio file also estimates its tempo in the background (beat tracking plus a
-least-squares fit over the beats, ~1 s for a whole song). It never changes the tempo by itself:
+Loading an audio file also estimates its tempo in the background with the chosen **Algorithm**
+(WaveTone's own volume-envelope analysis by default; the librosa beat tracker also reports how many
+of its 12 s windows agree and the beat-fit residual). It never changes the tempo by itself:
 when it is done, the **Tempo** block shows a suggestion such as `≈93 BPM` next to the BPM field,
-dimmed while few of its 12 s windows agree, with a tick to use it and a cross to drop it. The balloon
+with a tick to use it and a cross to drop it. The balloon
 floats inside the window, so it takes neither the keyboard nor the click: drawing, selecting or
 playing underneath it goes on, and typing a tempo, dropping the suggestion or loading another file
 discards it; the round arrow estimates again.
 Changing the tempo never re-times the notes: they are timed against the audio, so only the beat
 grid re-divides underneath them (and the roll keeps the audio at the same scale on screen, which is
 how the notes stay where they are relative to the spectrum and to the time ruler).
-The TempoCNN model (`namioto/tempo.py`, `namioto-tempocnn`) is the runner-up, on its own command
-line: it is strong on full mixes but its 256 integer-BPM classes and its training data (full mixes
-only) make it a poor fit for stems, where beat tracking wins.
+TempoCNN (`namioto/analysis/tempo.py`, `namioto-tempocnn`) and the librosa beat tracker are the other
+two algorithms the **Algorithm** setting offers, each on its own command line too: TempoCNN is strong
+on full mixes, but its 256 integer-BPM classes and its training data (full mixes only) make it a poor
+fit for stems, where the other two win.
 
 **Extracting notes with GAME.** A singing voice can be transcribed in one pass with
 [GAME](https://github.com/openvpi/GAME)'s ONNX models:
@@ -281,13 +292,13 @@ only) make it a poor fit for stems, where beat tracking wins.
 ```bash
 uv run namioto-game song.wav --language zh          # fetches the small model on first use
 uv run namioto-game song.wav --size medium          # one of small, medium, large
-uv run namioto-game song.wav --provider cuda        # on an NVIDIA GPU, with ONNX Runtime's GPU build
+uv run namioto-game song.wav --device gpu           # on the GPU backend the settings name
 uv run namioto-game song.wav --quantize 4 --tempo 93 --midi out.mid
 uv run namioto-game                                 # only fetch a model, do not transcribe
 ```
 
 The editor can do the same over the file it has open: the wand button in the tools opens a
-window with GAME's options (model size, backend, language, the quantisation grid and its inference
+window with GAME's options (model size, device, language, the quantisation grid and its inference
 parameters), runs the model in a process of its own so a crash cannot take the editor down, and
 watches it there with a progress bar and a log. The notes arrive on a channel of their own, or over
 the active channel's own — the window's **Target** says which, and asks before overwriting a channel
@@ -308,11 +319,12 @@ is.
 | large | 362 MB | 7.1 s, 47 notes |
 
 The notes come back as floating-point pitches with the onsets the model found; `--quantize` snaps
-them to a beat grid first, and `--midi` writes them out. The **Backend** option (the dialog's own
-field, `--provider` on the command line) picks where the models run: `cpu` by default, or `cuda` for
-an NVIDIA GPU, which needs ONNX Runtime's GPU build together with CUDA 12 and cuDNN 9. A CUDA
-provider that cannot be created is not an error - ONNX Runtime says so on stderr and the run carries
-on the CPU. The code is MIT (Team OpenVPI, like GAME
+them to a beat grid first, and `--midi` writes them out. The **Device** option (the dialog's own
+field, `--device` on the command line) picks where the models run: `cpu` by default, or `gpu` for
+the GPU backend named under **Devices** in the settings (CUDA, which needs ONNX Runtime's GPU build
+together with CUDA 12 and cuDNN 9, or WebGPU/Vulkan). A GPU provider that cannot be created is not
+an error - ONNX Runtime says so on stderr and the run carries on the CPU. The code is MIT (Team
+OpenVPI, like GAME
 itself); the models are CC BY-NC-SA 4.0, so anything produced with them is non-commercial, and they
 are downloaded rather than redistributed here - see NOTICE.
 
@@ -416,8 +428,8 @@ song both pick the new speed up at once, carrying on from where they had got to.
 The notes go to a **software MIDI synth** when one is listening on the
 MIDI bus - TiMidity and FluidSynth are recognised by name, and the tooltip of the **MIDI** slider
 says which one is in use, because that is where the sound comes from (patches included). Without
-one, the notes are rendered by a small additive synth inside the program and streamed through Qt's
-audio output instead. **Grid offset (ms)** slides the grid lines - `-` draws them to the left, `+` to
+one, the notes stay silent and the **MIDI** slider is disabled, since there is nowhere for them to
+play. **Grid offset (ms)** slides the grid lines - `-` draws them to the left, `+` to
 the right, and snapping follows them - while the notes and the playback keep their exact
 timestamps. A click in the roll auditions what it lands on - the pitch of the row, whether or
 not it is a note - in either mode, and so does a key on the keyboard: listening and editing are
