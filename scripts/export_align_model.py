@@ -19,7 +19,9 @@ wav2vec2 CTC models trained on romanised kana. The graph bakes in the waveform n
 the models expect, takes `input_values` and returns `logits`; quantisation is limited to `MatMul`,
 because the exporter writes the convolutions' bias outside the initializers and quantising those
 fails. The attention's `where(isnan(softmax), 0, softmax)` guard is dropped: it is a dead branch for
-the finite input the graph is handed, and the graph is smaller without it.
+the finite input the graph is handed, and the graph is smaller without it. So is the attention mask
+the HuggingFace models put on every layer: a window here is exactly what the model attends over, so
+that mask is all zeros, and the add it feeds is quadratic in the frame count.
 """
 
 from __future__ import annotations
@@ -78,6 +80,44 @@ def drop_nan_guards(graph) -> int:
     return len(dropped)
 
 
+def drop_attention_mask(graph) -> int:
+    """Drop the per-layer attention mask of `graph` and return how many of them were removed.
+
+    `transformers` hands every layer a bidirectional mask: a `where` builds a
+    `[batch, 1, frames, frames]` bias over the scores and an `add` puts it on. Every window this
+    program hands the model is exactly the frames the model attends over, so the bias is all zeros
+    and the add is an identity - but it is quadratic in the frame count, and a GPU spends on it more
+    than on the whole encoder. The add goes, and whatever only built the mask with it.
+    """
+    masks = {node.output[0] for node in graph.node if node.op_type == "Where"}
+    replace, dropped = {}, set()
+    for node in graph.node:
+        if node.op_type != "Add" or "/attention/" not in node.name:
+            continue
+        for index, name in enumerate(node.input):
+            if name in masks:
+                replace[node.output[0]] = node.input[1 - index]
+                dropped.add(node.name)
+    if not dropped:
+        return 0
+    for node in graph.node:
+        for index, name in enumerate(node.input):
+            if name in replace:
+                node.input[index] = replace[name]
+    producers = {name: node for node in graph.node for name in node.output}
+    needed, frontier = set(), [output.name for output in graph.output]
+    while frontier:
+        node = producers.get(frontier.pop())
+        if node is None or node.name in needed:
+            continue
+        needed.add(node.name)
+        frontier.extend(node.input)
+    kept = [node for node in graph.node if node.name in needed]
+    graph.ClearField("node")
+    graph.node.extend(kept)
+    return len(dropped)
+
+
 def export(module, destination: pathlib.Path, precision: str = "int8") -> None:
     """Write the ONNX graph of `module`, which takes raw audio and returns `logits`.
 
@@ -106,7 +146,9 @@ def export(module, destination: pathlib.Path, precision: str = "int8") -> None:
                 dynamo=False,
             )
         model = onnx.load(str(source))
-        drop_nan_guards(model.graph)
+        guards = drop_nan_guards(model.graph)
+        masks = drop_attention_mask(model.graph)
+        print(f"dropped {guards} nan guard node(s) and {masks} attention mask node(s)")
         if precision == "fp32":
             onnx.save(model, str(destination))
             return
