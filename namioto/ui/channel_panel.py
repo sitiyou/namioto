@@ -122,7 +122,7 @@ class _Card(QWidget):
         self.set_active(channel.channel == self._panel.view.active_channel)
         self.swatch.setStyleSheet(f"background: {channel.color}; border-radius: 2px;")
         self.id.setText(f"({channel.channel + 1})")
-        self.id.setStyleSheet(f"color: {self._panel.view._channel_color(channel.channel).name()};")
+        self.id.setStyleSheet(f"color: {self._panel.view.channel_color(channel.channel).name()};")
         self.name.setText(channel.name or tr("Channel"))
         self.program.blockSignals(True)
         self.program.setCurrentIndex(channel.program)

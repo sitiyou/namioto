@@ -20,11 +20,11 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
+from PyQt6.QtCore import QPointF, QRect, QRectF, Qt
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen
-from PyQt6.QtWidgets import QWidget
 
 from namioto.ui import theme
+from namioto.ui.viewport import ViewportStrip
 
 if TYPE_CHECKING:
     from namioto.karaoke.timeline import Sound
@@ -42,18 +42,7 @@ SOUND_MARGIN = 5
 SOUND_MAGNET_PX = 4
 
 
-class _ViewportStrip(QWidget):
-    """A strip sharing the roll's columns: the viewport's top left in this widget's coordinates."""
-
-    def __init__(self, view: PianoRollView):
-        super().__init__()
-        self.view = view
-
-    def origin(self) -> QPoint:
-        return self.mapFromGlobal(self.view.viewport().mapToGlobal(QPoint(0, 0)))
-
-
-class SoundStrip(_ViewportStrip):
+class SoundStrip(ViewportStrip):
     """The lyrics as text on the roll's columns and its shared time axis.
 
     Each sound starts with a `|` and its label, green while it sits on its notes, red while the
@@ -172,7 +161,7 @@ class SoundStrip(_ViewportStrip):
         self._base = self.view.lyric_raw[row]
         self._press_x = event.position().x()
         self._press_seconds = self._boundary_seconds(self.view.lyric_raw[row], boundary) or 0.0
-        self.view._begin_gesture("Move lyrics")
+        self.view.begin_gesture("Move lyrics")
         self.update()  # the grabbed `|` drops back to where it really is
 
     def mouseMoveEvent(self, event) -> None:
@@ -195,7 +184,7 @@ class SoundStrip(_ViewportStrip):
             return
         self._drag = None
         self._base = None
-        self.view._commit_gesture()
+        self.view.commit_gesture()
 
     def leaveEvent(self, event) -> None:
         self._update_hover(None)
@@ -208,7 +197,7 @@ class SoundStrip(_ViewportStrip):
         event.accept()
 
     def _x(self, seconds: float) -> float:
-        beats = seconds / self.view.seconds_per_beat
+        beats = self.view.to_beats(seconds)
         return self.origin().x() + self.view.mapFromScene(QPointF(beats, 0.0)).x()
 
     def _here(self, drawn: float | None, fallback: float) -> float:
@@ -246,7 +235,7 @@ class SoundStrip(_ViewportStrip):
         The time is free otherwise - several sounds may sit inside one note cell - so the beat
         divisions are magnets, not the only places an aligned time can land.
         """
-        step = self.view.grid_step() * self.view.seconds_per_beat
+        step = self.view.to_seconds(self.view.grid_step())
         offset = self.view.offset
         nearest = offset + round((seconds - offset) / step) * step
         if abs(self._x(nearest) - x) <= SOUND_MAGNET_PX:

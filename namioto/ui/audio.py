@@ -59,7 +59,9 @@ class NotePlayer(QObject):
         super().__init__(parent)
         self.gain = 1.0
 
-    def set_program(self, notes: Sequence[tuple[int, float, float]], speed: float) -> None:
+    def set_program(self, notes, speed, channels=()) -> None:
+        """Prepare the notes to play: `(pitch, start, duration[, channel])` in seconds, the
+        playback rate, and each channel's `(channel, program, volume)`."""
         raise NotImplementedError
 
     def play(self, seconds: float = 0.0) -> None:

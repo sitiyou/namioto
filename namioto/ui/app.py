@@ -289,6 +289,9 @@ class MainWindow(QMainWindow):
         self.tempo_loader: TempoLoader | None = None
         self._tempo_manual = False
         self.song_loader: SongLoader | None = None
+        # the audio a result belongs to: a loader the window replaced may still report its own
+        self._audio_generation = 0
+        self._workers: set[QThread] = set()
 
         editor = self.settings.editor
         self.view = PianoRollView()
@@ -656,10 +659,9 @@ class MainWindow(QMainWindow):
 
     def _program(self) -> tuple[tuple, tuple]:
         """The notes of every channel that sounds, and each sounding channel's instrument, volume."""
-        beats = self.view.seconds_per_beat
         audible = set(audible_channels(self.view.channels))
         notes = tuple(
-            (note.pitch, note.start * beats, note.duration * beats, note.channel)
+            (note.pitch, self.view.to_seconds(note.start), self.view.to_seconds(note.duration), note.channel)
             for note in self.view.notes()
             if note.channel in audible
         )
@@ -926,10 +928,10 @@ class MainWindow(QMainWindow):
             self._stored_lyrics = opened.lyrics
             self._watch_lyrics(materialize=True)
             missing = self._open_audio(project.resolve_audio(self.project_path, opened.audio))
-            per_beat = self.view.seconds_per_beat  # scene units are beats, the file keeps seconds
             self.view.set_channels(opened.channels)
             self.view.set_notes(
-                (note.pitch, note.start / per_beat, note.duration / per_beat, note.channel) for note in opened.notes
+                (note.pitch, self.view.to_beats(note.start), self.view.to_beats(note.duration), note.channel)
+                for note in opened.notes
             )
             self.view.center_on(self.settings.session.center_x, self.settings.session.center_y)
             self.view.undo_stack.clear()  # another document starts its history over
@@ -946,11 +948,15 @@ class MainWindow(QMainWindow):
         self._remember_configuration()
         self._remember_session()
         target = Path(path)
-        beats = self.view.seconds_per_beat
         # scene order is not a file's order: sorted notes keep a saved project stable to diff
         notes = tuple(
             sorted(
-                project.Note(note.start * beats, note.duration * beats, note.pitch, note.channel)
+                project.Note(
+                    self.view.to_seconds(note.start),
+                    self.view.to_seconds(note.duration),
+                    note.pitch,
+                    note.channel,
+                )
                 for note in self.view.notes()
             )
         )
@@ -1021,10 +1027,12 @@ class MainWindow(QMainWindow):
                 self._merge_midi(imported, mapping)
             else:
                 self.transport.bpm.setValue(imported.bpm)  # scene units are beats, and the file sets them
-                beats = self.view.seconds_per_beat
                 self.view.replace(
                     imported.channels,
-                    [(note.pitch, note.start / beats, note.duration / beats, note.channel) for note in imported.notes],
+                    [
+                        (note.pitch, self.view.to_beats(note.start), self.view.to_beats(note.duration), note.channel)
+                        for note in imported.notes
+                    ],
                     "Import MIDI",
                 )
         finally:
@@ -1071,17 +1079,21 @@ class MainWindow(QMainWindow):
             )
             landing[wanted.channel] = place
         kept = [(note.pitch, note.start, note.duration, note.channel) for note in self.view.notes()]
-        beats = self.view.seconds_per_beat
         arriving = [
-            (note.pitch, note.start / beats, note.duration / beats, landing[note.channel]) for note in imported.notes
+            (note.pitch, self.view.to_beats(note.start), self.view.to_beats(note.duration), landing[note.channel])
+            for note in imported.notes
         ]
         self.view.replace(channels.values(), kept + arriving, "Merge MIDI")
 
     def export_midi(self, path: str | Path) -> bool:
         """Write every channel out as MIDI, on the project's own tempo."""
-        beats = self.view.seconds_per_beat
         notes = tuple(
-            project.Note(note.start * beats, note.duration * beats, note.pitch, note.channel)
+            project.Note(
+                self.view.to_seconds(note.start),
+                self.view.to_seconds(note.duration),
+                note.pitch,
+                note.channel,
+            )
             for note in self.view.notes()
         )
         try:
@@ -1119,9 +1131,9 @@ class MainWindow(QMainWindow):
         if not notes:
             self.statusBar().showMessage(i18n.tr("GAME found no notes in the loaded audio"))
             return
-        beats = self.view.seconds_per_beat
         arriving = [
-            (round(pitch), max(0.0, onset) / beats, max(0.0, offset - onset) / beats) for onset, offset, pitch in notes
+            (round(pitch), self.view.to_beats(max(0.0, onset)), self.view.to_beats(max(0.0, offset - onset)))
+            for onset, offset, pitch in notes
         ]
         channels = list(self.view.channels)
         number = self.view.active_channel
@@ -1279,8 +1291,11 @@ class MainWindow(QMainWindow):
 
     def _mapped_notes(self) -> list[tuple[float, float]]:
         """The notes of the mapped MIDI channel, in time order; the lyrics map to channel 1 for now."""
-        per_beat = self.view.seconds_per_beat
-        found = [(note.start * per_beat, note.end * per_beat) for note in self.view.notes() if note.channel == 0]
+        found = [
+            (self.view.to_seconds(note.start), self.view.to_seconds(note.end))
+            for note in self.view.notes()
+            if note.channel == 0
+        ]
         return sorted(found)
 
     def _open_lyrics(self) -> None:
@@ -1422,6 +1437,7 @@ class MainWindow(QMainWindow):
 
     def _clear_audio(self) -> None:
         """Forget the analysed file, for a project that names one this machine does not have."""
+        self._audio_generation += 1
         self.position_timer.stop()
         self.audio_path = None
         self.view.set_spectrum(None)
@@ -1448,6 +1464,9 @@ class MainWindow(QMainWindow):
         if self._lyric_map_thread is not None:
             self._lyric_map_thread.wait()
             self._lyric_map_thread = None
+        for worker in tuple(self._workers):
+            worker.wait()
+        self._workers.clear()
         self._remember_configuration()
         self._remember_session()
         self.settings_store.flush()
@@ -1467,36 +1486,64 @@ class MainWindow(QMainWindow):
                 chosen[name] = value
         return chosen
 
+    def _start_loader(self, attribute: str, worker: QThread) -> None:
+        """Start a background loader and keep it alive until it finishes.
+
+        A loader the window has replaced still runs to the end, so the window holds every one of
+        them: a `QThread` collected mid-flight takes its callbacks down with it. `_release_loader`
+        drops it once it reports, and `closeEvent` waits for whatever is left.
+        """
+        setattr(self, attribute, worker)
+        self._workers.add(worker)
+        worker.finished.connect(partial(self._release_loader, attribute, worker))
+        worker.start()
+
+    def _release_loader(self, attribute: str, worker: QThread) -> None:
+        self._workers.discard(worker)
+        if getattr(self, attribute, None) is worker:
+            setattr(self, attribute, None)
+        worker.deleteLater()
+
     def load_audio(self, path: str) -> None:
         if not self._loading and str(path) != self.audio_path:
             # another song brings its own tempo and offset; a re-analysis of the same one does not
             self.transport.bpm.setValue(store.FIELD_SPECS[("tempo", "bpm")].default)
             self.transport.latency.setValue(store.FIELD_SPECS[("playback", "latency_ms")].default)
         self.audio_path = path
+        self._audio_generation += 1
+        generation = self._audio_generation
         self.edit.transcribe.setEnabled(True)
         self._mark_dirty()
         store.set_value(self.settings, "paths", "last_audio_dir", str(Path(path).parent))
         self.settings_store.touch()
-        self.loader = SpectrumLoader(path, parent=self, **self._analysis_options())
-        self.loader.progress.connect(self._on_analysis_progress)
-        self.loader.loaded.connect(self._on_spectrum_loaded)
-        self.loader.failed.connect(
-            lambda message: self.statusBar().showMessage(i18n.tr("Spectrum failed: {error}", error=message))
-        )
+        loader = SpectrumLoader(path, parent=self, **self._analysis_options())
+        loader.progress.connect(partial(self._on_analysis_progress, generation))
+        loader.loaded.connect(partial(self._on_spectrum_loaded, generation))
+        loader.failed.connect(partial(self._on_spectrum_failed, generation))
         self.statusBar().showMessage(i18n.tr("Analysing {path} …", path=path))
-        self.loader.start()
-        self.song_loader = SongLoader(path, parent=self)
-        self.song_loader.loaded.connect(self._on_song_loaded)
-        self.song_loader.failed.connect(
-            lambda message: self.statusBar().showMessage(i18n.tr("Playback failed: {error}", error=message))
-        )
-        self.song_loader.start()
+        self._start_loader("loader", loader)
+        song_loader = SongLoader(path, parent=self)
+        song_loader.loaded.connect(partial(self._on_song_loaded, generation))
+        song_loader.failed.connect(partial(self._on_playback_failed, generation))
+        self._start_loader("song_loader", song_loader)
         self._start_tempo()
 
-    def _on_song_loaded(self, samples, sample_rate: int) -> None:
+    def _on_song_loaded(self, generation: int, samples, sample_rate: int) -> None:
+        if generation != self._audio_generation:
+            return
         self.song.load(samples, sample_rate)
         self.song.gain = self.mix.audio_volume.value() / 100.0
         self.song.speed = self.transport.speed.value()
+
+    def _on_spectrum_failed(self, generation: int, message: str) -> None:
+        if generation != self._audio_generation:
+            return
+        self.statusBar().showMessage(i18n.tr("Spectrum failed: {error}", error=message))
+
+    def _on_playback_failed(self, generation: int, message: str) -> None:
+        if generation != self._audio_generation:
+            return
+        self.statusBar().showMessage(i18n.tr("Playback failed: {error}", error=message))
 
     def _on_speed_changed(self, _value: int = 0) -> None:
         # the song retunes in place as the slider travels; the notes follow once it settles
@@ -1535,23 +1582,26 @@ class MainWindow(QMainWindow):
         """
         if self.audio_path is None:
             return
+        generation = self._audio_generation
         self._tempo_manual = manual
         self.transport.suggestion.hide()
         self.transport.detect.setEnabled(False)
         tempo = self.settings.tempo
-        self.tempo_loader = TempoLoader(
+        tempo_loader = TempoLoader(
             self.audio_path,
             algorithm=tempo.estimator,
             window_seconds=tempo.window_seconds,
             window_hop_seconds=tempo.window_hop_seconds,
             parent=self,
         )
-        self.tempo_loader.loaded.connect(self._on_tempo_loaded)
-        self.tempo_loader.failed.connect(self._on_tempo_failed)
-        self.tempo_loader.start()
+        tempo_loader.loaded.connect(partial(self._on_tempo_loaded, generation))
+        tempo_loader.failed.connect(partial(self._on_tempo_failed, generation))
+        self._start_loader("tempo_loader", tempo_loader)
 
-    def _on_tempo_loaded(self, result) -> None:
+    def _on_tempo_loaded(self, generation: int, result) -> None:
         """Offer what was estimated as a candidate, unless the field already holds that tempo."""
+        if generation != self._audio_generation:
+            return
         self.transport.detect.setEnabled(True)
         manual, self._tempo_manual = self._tempo_manual, False
         if not result.bpm:
@@ -1563,7 +1613,9 @@ class MainWindow(QMainWindow):
         self.transport.suggestion.estimate(result.bpm, result.agreement, result.windows, result.source, result.residual)
         self.transport.suggestion.show_under(self.transport.bpm)
 
-    def _on_tempo_failed(self, message: str) -> None:
+    def _on_tempo_failed(self, generation: int, message: str) -> None:
+        if generation != self._audio_generation:
+            return
         self.transport.detect.setEnabled(self.audio_path is not None)
         self.statusBar().showMessage(i18n.tr("Tempo estimation failed: {error}", error=message))
 
@@ -1702,10 +1754,14 @@ class MainWindow(QMainWindow):
         self.view.contrast = self.mix.contrast.value()
         self.view.refresh()
 
-    def _on_analysis_progress(self, done: int, total: int) -> None:
+    def _on_analysis_progress(self, generation: int, done: int, total: int) -> None:
+        if generation != self._audio_generation:
+            return
         self.statusBar().showMessage(i18n.tr("Analysing … {percent}%", percent=done * 100 // max(1, total)))
 
-    def _on_spectrum_loaded(self, spectrum: NoteSpectrum) -> None:
+    def _on_spectrum_loaded(self, generation: int, spectrum: NoteSpectrum) -> None:
+        if generation != self._audio_generation:
+            return
         self.view.set_spectrum(spectrum)
         self.statusBar().showMessage(
             i18n.tr(

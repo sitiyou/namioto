@@ -26,13 +26,14 @@ import numpy as np
 from scipy import fft as sp_fft
 from scipy import sparse
 
+from namioto.analysis.choices import CHANNEL_MODES
+
 NOTE_COUNT = 84
 MIDI_OFFSET = 24
 A4_INDEX = 45
 SEMI_RANGE = 0.667
 LEAK_RANGE = 1.0
 OVERSAMPLE = 32
-CHANNEL_MODES = ("mono", "left", "right", "sum", "side", "both")
 
 
 def freq_table(a4: float = 440.0) -> np.ndarray:

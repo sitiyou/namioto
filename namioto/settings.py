@@ -28,8 +28,7 @@ from pathlib import Path
 from typing import Any
 
 from namioto.analysis import devices
-from namioto.analysis.bpm import ALGORITHMS
-from namioto.analysis.spectrum import CHANNEL_MODES
+from namioto.analysis.choices import ALGORITHMS, CHANNEL_MODES
 from namioto.i18n import LANGUAGE_CODES, LANGUAGE_LABELS, SYSTEM
 from namioto.utils import config_dir, write_text
 

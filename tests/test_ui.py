@@ -611,7 +611,7 @@ def fake_estimate(bpm: float = 96.0, windows: int = 10, agree: int = 6) -> BpmEs
 
 def test_tempo_estimate_is_only_a_suggestion(window) -> None:
     window.transport.bpm.setValue(120.0)
-    window._on_tempo_loaded(fake_estimate())
+    window._on_tempo_loaded(window._audio_generation, fake_estimate())
     assert window.transport.suggestion.isVisible()
     assert window.transport.bpm.value() == 120.0  # nothing is applied by itself
     assert "60% of them agree" in window.transport.suggestion.toolTip()
@@ -624,13 +624,13 @@ def test_tempo_estimate_is_only_a_suggestion(window) -> None:
 
 def test_tempo_already_in_the_field_is_not_offered_again(window) -> None:
     window.transport.bpm.setValue(120.0)
-    window._on_tempo_loaded(fake_estimate(bpm=120.0, agree=10))
+    window._on_tempo_loaded(window._audio_generation, fake_estimate(bpm=120.0, agree=10))
     assert not window.transport.suggestion.isVisible()
 
 
 def test_a_tempo_of_its_own_keeps_the_suggestion_away(window) -> None:
     window.transport.bpm.setValue(96.0)  # the user typed one, or took an earlier estimate
-    window._on_tempo_loaded(fake_estimate(bpm=140.0))
+    window._on_tempo_loaded(window._audio_generation, fake_estimate(bpm=140.0))
     assert not window.transport.suggestion.isVisible()
     assert window.transport.bpm.value() == 96.0
     window.transport.bpm.setValue(120.0)
@@ -644,7 +644,7 @@ def test_a_manual_detect_offers_its_tempo_over_a_tempo_of_its_own(window, monkey
 
     window.transport.detect.click()
     assert window._tempo_manual
-    window._on_tempo_loaded(fake_estimate(bpm=140.0))
+    window._on_tempo_loaded(window._audio_generation, fake_estimate(bpm=140.0))
     assert window.transport.suggestion.isVisible()
     assert window.transport.bpm.value() == 96.0  # still a suggestion
     window.transport.bpm.setValue(120.0)
@@ -652,14 +652,14 @@ def test_a_manual_detect_offers_its_tempo_over_a_tempo_of_its_own(window, monkey
 
 def test_tempo_suggestion_can_be_dismissed_without_applying(window) -> None:
     window.transport.bpm.setValue(120.0)
-    window._on_tempo_loaded(fake_estimate(bpm=100.0))
+    window._on_tempo_loaded(window._audio_generation, fake_estimate(bpm=100.0))
     window.transport.suggestion.dismiss_button.click()
     assert not window.transport.suggestion.isVisible()
     assert window.transport.bpm.value() == 120.0
 
 
 def test_typing_a_tempo_drops_the_suggestion(window) -> None:
-    window._on_tempo_loaded(fake_estimate())
+    window._on_tempo_loaded(window._audio_generation, fake_estimate())
     window.transport.bpm.setValue(140.0)
     assert not window.transport.suggestion.isVisible()
     window.transport.bpm.setValue(120.0)
@@ -667,7 +667,7 @@ def test_typing_a_tempo_drops_the_suggestion(window) -> None:
 
 def test_the_tempo_suggestion_floats_without_widening_the_bar(window) -> None:
     before = window.controls.sizeHint().width()
-    window._on_tempo_loaded(fake_estimate(windows=10, agree=2))
+    window._on_tempo_loaded(window._audio_generation, fake_estimate(windows=10, agree=2))
     assert window.transport.suggestion.isVisible()
     assert window.controls.sizeHint().width() == before, "the suggestion is not worth a wider row"
     window.transport.suggestion.hide()
@@ -677,7 +677,7 @@ def test_the_tempo_suggestion_does_not_take_the_keyboard(window) -> None:
     suggestion = window.transport.suggestion
     QApplication.setActiveWindow(window)
     window.view.setFocus()
-    window._on_tempo_loaded(fake_estimate())
+    window._on_tempo_loaded(window._audio_generation, fake_estimate())
 
     assert suggestion.isVisible()
     assert not suggestion.isWindow(), "a window of its own takes the keyboard and closes on a click"
@@ -688,7 +688,7 @@ def test_the_tempo_suggestion_does_not_take_the_keyboard(window) -> None:
 
 
 def test_working_in_the_roll_leaves_the_suggestion_up(window) -> None:
-    window._on_tempo_loaded(fake_estimate())
+    window._on_tempo_loaded(window._audio_generation, fake_estimate())
     assert window.transport.suggestion.isVisible()
 
     window.edit.set_interaction(Interaction.editing_with(Tool.PEN))  # a drawing gesture, in the spectrum
@@ -724,6 +724,40 @@ def test_tempo_loader_reports_a_bad_file(window, tmp_path) -> None:
     loader.failed.connect(messages.append)
     loader.run()
     assert len(messages) == 1 and "Error" in messages[0]
+
+
+def test_a_spectrum_of_a_replaced_audio_is_left_out(own_window) -> None:
+    own_window._audio_generation = 2
+    own_window._on_spectrum_loaded(1, object())
+    assert own_window.view.spectrum is None
+
+
+def test_a_song_of_a_replaced_audio_is_left_out(own_window) -> None:
+    own_window._audio_generation = 2
+    own_window._on_song_loaded(1, object(), 44100)
+    assert not own_window.song.is_loaded
+
+
+def test_a_tempo_of_a_replaced_audio_is_not_offered(own_window) -> None:
+    own_window.transport.bpm.setValue(120.0)
+    own_window._audio_generation = 2
+    own_window._on_tempo_loaded(1, fake_estimate(bpm=96.0))
+    assert not own_window.transport.suggestion.isVisible()
+
+
+def test_closing_waits_for_the_audio_loaders(own_window, monkeypatch) -> None:
+    fake_loaders(monkeypatch)
+    own_window.load_audio("/tmp/song.wav")
+    waited: list[bool] = []
+
+    class Waited:
+        def wait(self) -> None:
+            waited.append(True)
+
+    own_window._workers = {Waited()}
+    own_window.project_dirty = False
+    own_window.close()
+    assert waited
 
 
 def test_hover_marks_the_row_and_its_overtones(window) -> None:
@@ -1890,6 +1924,16 @@ def test_undo_keeps_a_note_on_the_audio_across_a_tempo_change(window) -> None:
     window.view.clear_notes()
 
 
+def test_the_time_conversion_runs_both_ways(window) -> None:
+    window.transport.bpm.setValue(120.0)
+    assert window.view.to_seconds(2.0) == pytest.approx(1.0)
+    assert window.view.to_beats(1.0) == pytest.approx(2.0)
+    window.transport.bpm.setValue(60.0)
+    assert window.view.to_seconds(0.5) == pytest.approx(0.5)
+    assert window.view.to_beats(2.0) == pytest.approx(2.0)
+    window.transport.bpm.setValue(120.0)
+
+
 def test_ctrl_z_and_ctrl_shift_z_drive_the_history(window) -> None:
     window.edit.pen.click()
     window.view.set_channels((Channel(channel=0),))
@@ -2683,10 +2727,16 @@ def fake_loaders(monkeypatch) -> list[dict]:
 
     class FakeLoader:
         def __init__(self, *args, parent=None, **kwargs):
-            self.progress = self.loaded = self.failed = _Signal()
+            self.progress = self.loaded = self.failed = self.finished = _Signal()
             captured.append(kwargs)
 
         def start(self) -> None:
+            pass
+
+        def wait(self) -> None:
+            pass
+
+        def deleteLater(self) -> None:
             pass
 
     for name in ("SpectrumLoader", "SongLoader", "TempoLoader"):
@@ -3492,9 +3542,9 @@ def test_moving_a_note_counts_as_a_change(own_window) -> None:
     note = own_window.view.add_note(69, 2.0, 2.0)
     own_window.project_dirty = False
 
-    own_window.view._begin_gesture("Move notes")
+    own_window.view.begin_gesture("Move notes")
     note.set_range(3.0, 69)
-    own_window.view._commit_gesture()
+    own_window.view.commit_gesture()
 
     assert own_window.project_dirty is True
 
@@ -3768,9 +3818,9 @@ def test_a_channel_moves_to_another_id_with_its_notes(own_window) -> None:
 def test_moving_a_channel_moves_its_colour_too(own_window) -> None:
     view = own_window.view
     view.set_channels((Channel(channel=0), Channel(channel=1)))
-    assert view._channel_color(1).name() == QColor(theme.NOTE_PALETTE[1]).name()
+    assert view.channel_color(1).name() == QColor(theme.NOTE_PALETTE[1]).name()
     assert view.set_channel_number(1, 4) is True
-    assert view._channel_color(4).name() == QColor(theme.NOTE_PALETTE[4]).name()
+    assert view.channel_color(4).name() == QColor(theme.NOTE_PALETTE[4]).name()
     assert own_window.channel_panel._cards[4].id.styleSheet() == f"color: {QColor(theme.NOTE_PALETTE[4]).name()};"
 
 

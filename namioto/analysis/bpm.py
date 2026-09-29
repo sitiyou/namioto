@@ -14,8 +14,8 @@ from pathlib import Path
 
 from namioto.analysis import beats, wavetone
 from namioto.analysis.beats import WINDOW_HOP_SECONDS, WINDOW_SECONDS
+from namioto.analysis.choices import ALGORITHMS
 
-ALGORITHMS = ("wavetone", "librosa", "tempocnn")
 SOURCES = {
     "wavetone": "WaveTone volume-envelope DFT",
     "librosa": "Librosa beat tracking and least-squares fit",

@@ -4,7 +4,7 @@ the ruler and keyboard round it. The lyrics strip lives in `namioto.ui.strips`.
 
 `PianoRollView` is the editor: it owns the document, the channels, the sounds and their times, and
 the undo stack of whole-document snapshots, and it is where a gesture is begun and committed. The
-ruler and the keyboard are the strips that stay here; all three share `strips._ViewportStrip`, and
+ruler and the keyboard are the strips that stay here; all three share `viewport.ViewportStrip`, and
 read the view's scroll position rather than keeping one of their own.
 
 Undo lives here, never in the document: one `QUndoStack` of whole-document `_RollState` snapshots
@@ -47,8 +47,8 @@ from namioto.karaoke.timeline import SoundLine, contiguous
 from namioto.ui import theme
 from namioto.ui.blocks import CLICK_SLOP_PX, Press, block_part
 from namioto.ui.spectrogram import SpectrumImage
-from namioto.ui.strips import _ViewportStrip
 from namioto.ui.text import format_time, note_name
+from namioto.ui.viewport import ViewportStrip
 
 LENGTH_BEATS = 64
 CONTENT_MARGIN = 4.0
@@ -475,15 +475,14 @@ class PianoRollView(QGraphicsView):
         return True
 
     def note_seconds(self) -> list[tuple[float, float]]:
-        per_beat = self.seconds_per_beat
-        return [(note.start * per_beat, note.end * per_beat) for note in self.notes()]
+        return [(self.to_seconds(note.start), self.to_seconds(note.end)) for note in self.notes()]
 
     def notes(self) -> list[NoteItem]:
         return list(self._items)
 
     def _add_item(self, note: Note) -> NoteItem:
         item = NoteItem(note)
-        item.fill, item.edge_light, item.edge_dark = theme.note_shades(self._channel_color(note.channel))
+        item.fill, item.edge_light, item.edge_dark = theme.note_shades(self.channel_color(note.channel))
         channel = self._channel(note.channel)
         item.setVisible(self.edit_mode and (channel.visible if channel else True))
         self._scene.addItem(item)
@@ -512,11 +511,11 @@ class PianoRollView(QGraphicsView):
         self._stack.redo()
 
     def _capture(self) -> _RollState:
-        per_beat = self.seconds_per_beat
         return _RollState(
             channels=tuple(self.channels),
             notes=tuple(
-                (note.pitch, note.start * per_beat, note.duration * per_beat, note.channel) for note in self.notes()
+                (note.pitch, self.to_seconds(note.start), self.to_seconds(note.duration), note.channel)
+                for note in self.notes()
             ),
             selected=frozenset(index for index, item in enumerate(self._items) if item.isSelected()),
             active_channel=self.active_channel,
@@ -534,7 +533,7 @@ class PianoRollView(QGraphicsView):
     @contextmanager
     def _edit(self, text: str):
         """Record one discrete edit as one step; nested edits join the outer one, and a gesture
-        records itself in `_commit_gesture`."""
+        records itself in `commit_gesture`."""
         if self._history_depth or self._gesture_before is not None:
             yield
             return
@@ -546,12 +545,12 @@ class PianoRollView(QGraphicsView):
             self._history_depth -= 1
         self._push(before, self._capture(), text)
 
-    def _begin_gesture(self, text: str) -> None:
+    def begin_gesture(self, text: str) -> None:
         if self._gesture_before is None:
             self._gesture_before = self._capture()
             self._gesture_text = text
 
-    def _commit_gesture(self) -> None:
+    def commit_gesture(self) -> None:
         before, text = self._gesture_before, self._gesture_text
         if before is None:
             return
@@ -570,11 +569,10 @@ class PianoRollView(QGraphicsView):
         """
         self._history_depth += 1
         try:
-            per_beat = self.seconds_per_beat
             self._lines = state.lyrics
             self._lyric_raw = state.lyric_raw
             self.set_notes(
-                (pitch, start / per_beat, duration / per_beat, channel)
+                (pitch, self.to_beats(start), self.to_beats(duration), channel)
                 for pitch, start, duration, channel in state.notes
             )
             self.set_channels(state.channels)
@@ -597,7 +595,7 @@ class PianoRollView(QGraphicsView):
     def _channel(self, number: int) -> Channel | None:
         return next((channel for channel in self.channels if channel.channel == number), None)
 
-    def _channel_color(self, number: int) -> QColor:
+    def channel_color(self, number: int) -> QColor:
         channel = self._channel(number)
         color = QColor(channel.color) if channel is not None else QColor()
         if not color.isValid():
@@ -608,7 +606,7 @@ class PianoRollView(QGraphicsView):
         """Body colour, bevel, stacking and visibility all come from the channel list; the notes only
         show while editing, the way WaveTone keeps its graph to the spectrum outside note edit mode."""
         for note in self.notes():
-            note.fill, note.edge_light, note.edge_dark = theme.note_shades(self._channel_color(note.channel))
+            note.fill, note.edge_light, note.edge_dark = theme.note_shades(self.channel_color(note.channel))
             channel = self._channel(note.channel)
             note.setVisible(self.edit_mode and (channel.visible if channel else True))
             note.setZValue(note.channel)
@@ -884,6 +882,14 @@ class PianoRollView(QGraphicsView):
     def seconds_per_beat(self) -> float:
         """What one scene unit is worth in time: the one conversion every caller has to get right."""
         return 60.0 / self.bpm
+
+    def to_seconds(self, beats: float) -> float:
+        """A scene-unit length or position in seconds, the unit the files and the players speak."""
+        return beats * self.seconds_per_beat
+
+    def to_beats(self, seconds: float) -> float:
+        """A time in seconds as scene units, the unit the notes are drawn and kept in."""
+        return seconds / self.seconds_per_beat
 
     @property
     def offset(self) -> float:
@@ -1175,7 +1181,7 @@ class PianoRollView(QGraphicsView):
                 return
             pitch = self.pitch_at(scene_pos.y())
             start = max(0.0, self._snap_floor_beats(scene_pos.x()))
-            self._begin_gesture("Draw note")
+            self.begin_gesture("Draw note")
             note = self.add_note(pitch, start, self._cell_beats())
             self._clear_selection()
             note.setSelected(True)
@@ -1194,7 +1200,7 @@ class PianoRollView(QGraphicsView):
             self._mode = "trim"
             self._trim_edge = "start" if scene_pos.x() < note.start + note.duration / 2 else "end"
             self._snapshot = {note: (note.start, note.pitch, note.duration)}
-            self._begin_gesture("Trim note")
+            self.begin_gesture("Trim note")
             return
 
         if ctrl:
@@ -1222,7 +1228,7 @@ class PianoRollView(QGraphicsView):
         else:
             self._mode = "move"
         self._snapshot = {n: (n.start, n.pitch, n.duration) for n in self.selected_notes()}
-        self._begin_gesture("Trim note" if self._mode == "trim" else "Move notes")
+        self.begin_gesture("Trim note" if self._mode == "trim" else "Move notes")
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position().toPoint()
@@ -1308,7 +1314,7 @@ class PianoRollView(QGraphicsView):
             self.note_preview.emit(pitch)
 
     def mouseReleaseEvent(self, event) -> None:
-        self._commit_gesture()
+        self.commit_gesture()
         if self._press is not None and not self._press.dragged:
             # the press stayed a click, and a click is what picks the one note out of the selection
             self._clear_selection()
@@ -1385,7 +1391,7 @@ class PianoRollView(QGraphicsView):
         super().keyPressEvent(event)
 
 
-class TimelineRuler(_ViewportStrip):
+class TimelineRuler(ViewportStrip):
     def __init__(self, view: PianoRollView):
         super().__init__(view)
         self._last_x: float | None = None
@@ -1471,7 +1477,7 @@ class TimelineRuler(_ViewportStrip):
         event.accept()
 
 
-class PianoKeyboard(_ViewportStrip):
+class PianoKeyboard(ViewportStrip):
     """The keys at the left of the roll; clicking one auditions that note."""
 
     key_preview = pyqtSignal(int)
