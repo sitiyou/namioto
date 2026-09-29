@@ -54,7 +54,7 @@ from namioto.analysis.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
 from namioto.channels import set_field as channel_set_field
-from namioto.karaoke import KrcError, export_krc, map_faithful, map_sounds, snap_to_beats, sound_lines, text_key
+from namioto.karaoke import KrcError, export_krc, snap_to_beats, sound_lines, text_key
 from namioto.playback import note_frequency
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner
@@ -62,6 +62,7 @@ from namioto.ui.audio import open_player
 from namioto.ui.channel_panel import ChannelPanel
 from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
 from namioto.ui.loading import LoadingThread
+from namioto.ui.lyric_map import LyricMapper, map_lyrics
 from namioto.ui.lyrics_dialog import LyricsDialog, LyricsWatcher
 from namioto.ui.midi_dialog import MidiImportDialog
 from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler
@@ -186,70 +187,6 @@ class SongLoader(LoadingThread):
 
     def load(self) -> None:
         self.loaded.emit(*load_song(self.path))
-
-
-def _map_lyrics(lines, times, notes, text, aligned, mode="edit"):
-    """The mapping for the mode in force: the `.krc`'s own `.N` and groups in read mode, the
-    aligner's times in edit mode, and the sounds and notes paired in order when there are no times.
-
-    The raw times come back with the tables: read mode has none of its own, so the mapped spans are
-    what the strip draws and edits.
-    """
-    if mode == "read":
-        if notes and text:
-            spans, red, zero, group = _placement_tables(map_faithful(text, notes))
-            return spans, red, zero, group, spans
-        spans = [[(None, None)] * len(line.sounds) for line in lines]
-        return (
-            spans,
-            [[False] * len(row) for row in spans],
-            [[True] * len(row) for row in spans],
-            [[-1] * len(row) for row in spans],
-            spans,
-        )
-    if notes:
-        spans, red, zero, group = _placement_tables(map_sounds(lines, times, notes, text, aligned=aligned))
-        return spans, red, zero, group, times
-    spans = [list(row) for row in times]
-    return (
-        spans,
-        [[False] * len(row) for row in times],
-        [[False] * len(row) for row in times],
-        [[-1] * len(row) for row in times],
-        times,
-    )
-
-
-def _placement_tables(placements):
-    spans = [[placement.span for placement in row] for row in placements]
-    red = [[placement.red for placement in row] for row in placements]
-    zero = [[placement.zero for placement in row] for row in placements]
-    group = [[placement.group for placement in row] for row in placements]
-    return spans, red, zero, group
-
-
-class LyricMapper(QThread):
-    mapped = pyqtSignal(object)
-    failed = pyqtSignal(str)
-
-    def __init__(self, revision, lines, times, notes, text, aligned, mode, parent=None):
-        super().__init__(parent)
-        self.revision = revision
-        self.lines = lines
-        self.times = times
-        self.notes = notes
-        self.text = text
-        self.aligned = aligned
-        self.mode = mode
-
-    def run(self) -> None:
-        try:
-            spans, red, zero, group, raw = _map_lyrics(
-                self.lines, self.times, self.notes, self.text, self.aligned, self.mode
-            )
-            self.mapped.emit((self.revision, self.lines, spans, red, raw, zero, group))
-        except Exception as error:
-            self.failed.emit(f"{type(error).__name__}: {error}")
 
 
 class MainWindow(QMainWindow):
@@ -1216,7 +1153,7 @@ class MainWindow(QMainWindow):
         times = [list(row) for row in self.view.lyric_raw]
         if len(times) != len(lines):
             times = [[(None, None)] * len(line.sounds) for line in lines]
-        spans, red, zero, group, raw = _map_lyrics(
+        spans, red, zero, group, raw = map_lyrics(
             lines,
             times,
             self._mapped_notes(),
