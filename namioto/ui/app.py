@@ -58,7 +58,7 @@ from namioto.karaoke import KrcError, export_krc, snap_to_beats, sound_lines, te
 from namioto.playback import note_frequency
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner
-from namioto.ui.audio import open_player
+from namioto.ui.audio import open_player, warm_audio_output
 from namioto.ui.channel_panel import ChannelPanel
 from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
 from namioto.ui.loading import LoadingThread
@@ -1760,6 +1760,7 @@ def main() -> int:
     window = MainWindow(overrides={"channels": args.channels, "t_num": args.t_num})
     window.apply_overrides(gain=args.gain, contrast=args.contrast)
     window.show()
+    QTimer.singleShot(0, warm_audio_output)  # off the first play, whose sink would enumerate the devices
     if args.audio is not None:
         # a file waits for the window. Naming a project opens the platform's file chooser, and on
         # Linux that is the xdg-desktop-portal one, which is only ready once the event loop has run -

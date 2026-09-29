@@ -496,6 +496,11 @@ class SilentPlayer(NotePlayer):
         return False
 
 
+def warm_audio_output() -> None:
+    """Ask Qt for the default output once, so the first sink does not pay the device enumeration."""
+    QMediaDevices.defaultAudioOutput()
+
+
 def open_player(
     parent=None,
     backend: str = "auto",
