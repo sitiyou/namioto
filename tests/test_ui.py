@@ -1416,6 +1416,74 @@ def test_a_note_trim_that_comes_back_leaves_the_note_as_it_was(window) -> None:
     window.view.clear_notes()
 
 
+def test_a_drag_cannot_drop_a_note_onto_its_own_pitch(window) -> None:
+    window.view.clear_notes()
+    window.edit.pen.click()
+    window.view.snap = 0.5
+    window.view.add_note(69, 2.0, 1.0)  # spans 2.0 to 3.0
+    right = window.view.add_note(69, 4.0, 1.0)  # spans 4.0 to 5.0
+    row = float(PITCH_MAX - 69) + 0.5
+    window.view.centerOn(QPointF(3.0, row))
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(4.5, row))
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(3.5, row))  # one cell left: 3.0 to 4.0, touching
+    assert (right.start, right.end) == (3.0, 4.0)
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(3.0, row))  # another: 2.5 to 3.5 would overlap
+    assert (right.start, right.end) == (3.0, 4.0)  # the drag stays at the last free place
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(1.5, row))  # far enough left to clear it again
+    assert (right.start, right.end) == (1.0, 2.0)
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(1.5, row))
+    window.view.clear_notes()
+
+
+def test_a_note_may_be_dragged_onto_another_channel(window) -> None:
+    window.view.clear_notes()
+    window.edit.pen.click()
+    window.view.snap = 0.5
+    window.view.set_channels((Channel(channel=0), Channel(channel=1)))
+    first = window.view.add_note(69, 2.0, 1.0, 0)
+    window.view.add_note(69, 4.0, 1.0, 1)  # the same pitch over the same time, another channel
+    row = float(PITCH_MAX - 69) + 0.5
+    window.view.centerOn(QPointF(3.0, row))
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(2.5, row))
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(4.5, row))
+    assert (first.start, first.end) == (4.0, 5.0)  # another channel is no obstacle
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(4.5, row))
+    window.view.clear_notes()
+
+
+def test_a_trim_cannot_reach_over_a_note_of_its_own_pitch(window) -> None:
+    window.view.clear_notes()
+    window.edit.pen.click()
+    window.view.snap = 0.5
+    window.view.add_note(69, 2.0, 1.0)  # spans 2.0 to 3.0
+    right = window.view.add_note(69, 4.0, 2.0)  # spans 4.0 to 6.0
+    row = float(PITCH_MAX - 69) + 0.5
+    window.view.centerOn(QPointF(4.0, row))
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(4.05, row))  # the left edge
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(3.5, row))  # 3.5 to 6.0, still clear
+    assert (right.start, right.end) == (3.5, 6.0)
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(2.0, row))  # 2.0 to 6.0 would cross the first
+    assert (right.start, right.end) == (3.5, 6.0)  # the edge stops where it last fit
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(2.0, row))
+    window.view.clear_notes()
+
+
+def test_the_pen_cannot_draw_over_a_note_of_its_own_pitch(window) -> None:
+    window.view.clear_notes()
+    window.edit.pen.click()
+    window.view.snap = 0.5
+    window.view.add_note(69, 2.0, 1.0)  # spans 2.0 to 3.0
+    row = float(PITCH_MAX - 69) + 0.5
+
+    draw_note(window, QPointF(5.0, row), QPointF(2.0, row))  # back over the first note
+    drawn = window.view.notes()[-1]
+    assert (drawn.start, drawn.end) == (5.0, 5.5)  # it never left its first cell
+    window.view.clear_notes()
+
+
 def test_clicking_a_selected_note_leaves_only_it_selected(window) -> None:
     window.view.clear_notes()
     left = window.view.add_note(69, 2.0, 1.0)  # spans 2.0 to 3.0
@@ -1762,6 +1830,23 @@ def test_quantize_puts_the_notes_on_the_snap_grid() -> None:
     assert view.undo_stack.count() == 1
     view.undo()
     assert [(note.start, note.duration) for note in view.notes()] == [(0.6, 0.7), (1.9, 0.2)]
+
+
+def test_quantize_leaves_a_note_off_its_neighbour_rather_than_on_it() -> None:
+    view = PianoRollView()
+    view.apply_interaction(Interaction.editing_with(Tool.PEN))
+    view.set_channels((Channel(channel=0),))
+    view.snap = 0.5
+    view.add_note(60, 1.1, 0.2)  # both 60s round to the cell 1.0-1.5
+    view.add_note(60, 1.2, 0.2)
+    view.add_note(62, 3.1, 0.2)  # another pitch, free to snap
+
+    assert view.quantize_notes()
+    assert [(note.pitch, round(note.start, 2), round(note.duration, 2)) for note in view.notes()] == [
+        (60, 1.1, 0.2),  # the grid would fold it onto the other 60, so it stays
+        (60, 1.2, 0.2),
+        (62, 3.0, 0.5),
+    ]
 
 
 def test_quantize_takes_only_the_selection_when_there_is_one() -> None:

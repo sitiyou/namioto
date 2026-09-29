@@ -79,6 +79,24 @@ class Document:
         self._fill_channels()
         return note
 
+    def collides(self, pitch: int, start: float, duration: float, channel: int, ignore=()) -> bool:
+        """Whether a note of `pitch` on `channel` would share time with one already there.
+
+        Only the same pitch on the same channel is refused - different pitches may sound together,
+        and a note touching another at its edge is not a clash. `ignore` holds the notes being moved
+        or resized, which are not obstacles to themselves.
+        """
+        end = start + duration
+        ignored = set(ignore)
+        return any(
+            note not in ignored
+            and note.pitch == pitch
+            and note.channel == channel
+            and note.start < end
+            and start < note.end
+            for note in self.notes
+        )
+
     def remove_note(self, note: Note) -> None:
         self.notes.remove(note)
 

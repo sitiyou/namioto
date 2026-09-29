@@ -780,6 +780,8 @@ class PianoRollView(QGraphicsView):
                 duration = max(self._snap_beats(note.end), start + cell) - start
                 if (start, duration) == (note.start, note.duration):
                     continue
+                if self._would_collide(note, start, note.pitch, duration, (note.note,)):
+                    continue  # the grid would fold this note onto another of its pitch; leave it be
                 note.set_range(start, note.pitch)
                 note.set_duration(duration)
                 moved = True
@@ -1064,6 +1066,10 @@ class PianoRollView(QGraphicsView):
         """One snap cell, but never shorter than a note can be."""
         return max(self.snap, MIN_DURATION)
 
+    def _would_collide(self, item: NoteItem, start: float, pitch: int, duration: float, ignore=()) -> bool:
+        """Whether putting a note there would sound its pitch twice over the same time on its channel."""
+        return self.document.collides(pitch, start, duration, item.channel, ignore)
+
     def _snap_beats(self, x: float) -> float:
         offset = self.offset_beats
         return round((x - offset) / self.snap) * self.snap + offset
@@ -1278,12 +1284,18 @@ class PianoRollView(QGraphicsView):
         if self._mode == "trim":
             start, pitch, duration = self._snapshot[self._grab_note]
             cell = self._cell_beats()  # one snap cell is the shortest the pointer may leave behind
+            ignore = (self._grab_note.note,)
             if self._trim_edge == "start":
                 new_start = min(max(0.0, self._snap_beats(scene_pos.x())), start + duration - cell)
+                if self._would_collide(self._grab_note, new_start, pitch, start + duration - new_start, ignore):
+                    return  # the edge cannot reach over a note of its own pitch
                 self._grab_note.set_range(new_start, pitch)
                 self._grab_note.set_duration(start + duration - new_start)
             else:
-                self._grab_note.set_duration(max(self._snap_beats(scene_pos.x()), start + cell) - start)
+                new_duration = max(self._snap_beats(scene_pos.x()), start + cell) - start
+                if self._would_collide(self._grab_note, start, pitch, new_duration, ignore):
+                    return
+                self._grab_note.set_duration(new_duration)
             self.view_changed.emit()
             return
 
@@ -1291,7 +1303,10 @@ class PianoRollView(QGraphicsView):
             anchor = self._anchor.x()
             left = max(0.0, self._snap_floor_beats(min(anchor, scene_pos.x())))
             right = max(left + self._cell_beats(), self._snap_ceil_beats(max(anchor, scene_pos.x())))
-            self._grab_note.set_range(left, self.pitch_at(scene_pos.y()))  # the row follows the pointer too
+            pitch = self.pitch_at(scene_pos.y())
+            if self._would_collide(self._grab_note, left, pitch, right - left, (self._grab_note.note,)):
+                return  # the note cannot be drawn over one of its own pitch
+            self._grab_note.set_range(left, pitch)  # the row follows the pointer too
             self._grab_note.set_duration(right - left)
             return
 
@@ -1300,6 +1315,10 @@ class PianoRollView(QGraphicsView):
         moved = scene_pos.x() - self._anchor.x()
         delta_x = self.snap_movement_beats(moved)
         delta_row = round(scene_pos.y() - self._anchor.y())
+        moving = {item.note for item in self._snapshot}
+        for note, (start, pitch, _duration) in self._snapshot.items():
+            if self._would_collide(note, start + delta_x, pitch - delta_row, _duration, moving):
+                return  # the block cannot be dropped onto a note of one of its own pitches
         for note, (start, pitch, _duration) in self._snapshot.items():
             note.set_range(start + delta_x, pitch - delta_row)
         self.view_changed.emit()

@@ -33,6 +33,22 @@ def test_two_notes_that_sound_alike_are_still_two() -> None:
     assert len(document.notes) == 1 and document.notes[0] is first
 
 
+def test_only_the_same_pitch_on_the_same_channel_collides() -> None:
+    document = Document(notes=[Note(60, 1.0, 1.0, channel=0)])
+    assert document.collides(60, 1.5, 1.0, 0) is True
+    assert document.collides(60, 0.5, 1.0, 0) is True
+    assert document.collides(62, 1.0, 1.0, 0) is False  # another pitch may sound with it
+    assert document.collides(60, 1.0, 1.0, 1) is False  # another channel is another track
+    assert document.collides(60, 2.0, 1.0, 0) is False  # touching at the edge is not a clash
+
+
+def test_a_note_is_no_obstacle_to_itself() -> None:
+    note = Note(60, 1.0, 1.0)
+    document = Document(notes=[note])
+    assert document.collides(60, 1.0, 1.0, 0) is True
+    assert document.collides(60, 1.0, 1.0, 0, ignore=(note,)) is False
+
+
 def test_removing_a_channel_takes_its_notes_and_leaves_the_numbers_alone() -> None:
     document = Document(
         channels=[Channel(name="A", channel=0), Channel(name="B", channel=1), Channel(name="C", channel=3)]
