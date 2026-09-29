@@ -7,11 +7,12 @@ baseline, and this reads and writes the sidecar beside it. Nothing here checks t
 file with a mistake in it is still the user's to fix in an editor. `translate` takes its opener as
 an argument, so a call can be exercised without a network.
 
-`mode` is `edit` (the aligner's times lay the sounds out and the strip may drag them) or `read` (the
-`.krc`'s own `.N` and groups do, and the strip is read-only); aligning refuses in `read`. The API
-endpoint and `DEFAULT_PROMPT` are the app's, kept in the settings file. `auto_align` (on by default)
-re-runs the CTC search in the background on an outside `.krc` change when a pass is cached, and
-otherwise leaves the lyrics on the 1:1 mapping until Align is pressed.
+`mode` (`project.Lyrics.mode`) is `edit` (the aligner's times lay the sounds out and the strip may
+drag them) or `read` (the `.krc`'s own `.N` and groups do, and the strip is read-only); aligning
+refuses in `read`. `settings.lyrics.auto_align` (on by default) re-runs the CTC search in the
+background on an outside `.krc` change when a pass is cached, and otherwise leaves the lyrics on the
+1:1 mapping until Align is pressed. The endpoint, the key and the model are the settings'; the
+built-in `DEFAULT_PROMPT` is the one here.
 """
 
 from __future__ import annotations
