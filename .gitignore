@@ -13,3 +13,5 @@ DEV_NOTES.md
 .firecrawl/
 *_PLAN.md
 .envrc
+.agents
+skills-lock.json
