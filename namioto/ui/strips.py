@@ -61,7 +61,8 @@ class SoundStrip(ViewportStrip):
         self._base: tuple | None = None  # the row as the drag found it, so a move is timed from there
         self._press_x = 0.0
         self._press_seconds = 0.0
-        view.view_changed.connect(self.update)
+        self._layouts: dict[int, list[float | None]] = {}  # per row, until the view or the times move
+        view.view_changed.connect(self._refresh)
         view.lyrics_changed.connect(self._invalidate)
         view.notes_changed.connect(self._invalidate)
 
@@ -162,7 +163,7 @@ class SoundStrip(ViewportStrip):
         self._press_x = event.position().x()
         self._press_seconds = self._boundary_seconds(self.view.lyric_raw[row], boundary) or 0.0
         self.view.begin_gesture("Move lyrics")
-        self.update()  # the grabbed `|` drops back to where it really is
+        self._refresh()  # the grabbed `|` drops back to where it really is
 
     def mouseMoveEvent(self, event) -> None:
         if self._drag is None:
@@ -185,6 +186,7 @@ class SoundStrip(ViewportStrip):
         self._drag = None
         self._base = None
         self.view.commit_gesture()
+        self._refresh()  # the `|` snaps back to its stepped place now that it is out of hand
 
     def leaveEvent(self, event) -> None:
         self._update_hover(None)
@@ -211,6 +213,9 @@ class SoundStrip(ViewportStrip):
         sound's own `|` steps one `SOUND_GAP_PX` to the left instead; each then has its own grab spot.
         The one in hand is drawn at its true time, so a drag follows the data and not the step.
         """
+        cached = self._layouts.get(row)
+        if cached is not None:
+            return cached
         spans = self.view.lyric_raw[row]
         true: list[float | None] = []
         for index in range(len(spans) + 1):
@@ -227,6 +232,7 @@ class SoundStrip(ViewportStrip):
             index = self._drag[1]
             if index < len(true):
                 drawn[index] = true[index]
+        self._layouts[row] = drawn
         return drawn
 
     def _magnet_seconds(self, seconds: float, x: float) -> float:
@@ -342,4 +348,9 @@ class SoundStrip(ViewportStrip):
             self.update()
 
     def _invalidate(self) -> None:
+        self._refresh()
+
+    def _refresh(self) -> None:
+        """The view or the times moved, so the cached layouts are stale; they are one transform each."""
+        self._layouts.clear()
         self.update()

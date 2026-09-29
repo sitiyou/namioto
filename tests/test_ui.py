@@ -224,6 +224,22 @@ def test_clicking_the_timeline_moves_the_playhead(window) -> None:
     window.view.set_playhead(None)
 
 
+def test_a_click_with_jitter_on_the_ruler_does_not_scroll(window) -> None:
+    if window.view.edit_mode:
+        window.edit.mode.click()
+    hbar = window.view.horizontalScrollBar()
+    hbar.setValue(200)
+    x = 400.0
+
+    ruler_mouse(window, QEvent.Type.MouseButtonPress, x)
+    ruler_mouse(window, QEvent.Type.MouseMove, x + 2.0)  # within the click slop
+    ruler_mouse(window, QEvent.Type.MouseButtonRelease, x + 2.0)
+
+    assert hbar.value() == 200  # two pixels are a click, not a drag
+    window._stop()
+    window.view.set_playhead(None)
+
+
 def test_a_click_with_the_select_tool_moves_the_playhead(window) -> None:
     window.edit.select.click()  # picking a tool enters edit mode
     assert window.view.edit_mode
@@ -1658,6 +1674,24 @@ def test_deleting_the_selection_is_one_undo_step(window) -> None:
     window.view.clear_notes()
 
 
+def test_escape_takes_back_a_note_that_was_just_drawn(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.undo_stack.clear()
+    window.view.centerOn(QPointF(3.0, 40.0))
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(2.0, 40.0))
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(4.0, 40.0))
+    assert len(window.view.notes()) == 1  # the gesture opened a note
+    window.view.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(4.0, 40.0))
+
+    assert window.view.notes() == []  # and Escape took it back again
+    assert window.view.undo_stack.count() == 0  # with no undo step
+    window.view.clear_notes()
+
+
 def test_ctrl_d_deletes_the_selection(window) -> None:
     window.edit.pen.click()
     window.view.set_channels((Channel(channel=0),))
@@ -1672,6 +1706,23 @@ def test_ctrl_d_deletes_the_selection(window) -> None:
 
     window.view.undo()
     assert len(window.view.notes()) == 1
+    window.view.clear_notes()
+
+
+def test_the_roll_shortcuts_need_the_roll(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.add_note(60, 2.0, 1.0).setSelected(True)
+    QApplication.setActiveWindow(window)
+
+    window.transport.bpm.setFocus()
+    QTest.keyClick(window.transport.bpm, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
+    assert len(window.view.notes()) == 1  # a field keeps its own Ctrl+D
+
+    window.view.setFocus()
+    QTest.keyClick(window.view, Qt.Key.Key_D, Qt.KeyboardModifier.ControlModifier)
+    assert window.view.notes() == []  # in the roll, Ctrl+D is the notes'
     window.view.clear_notes()
 
 
@@ -1704,6 +1755,23 @@ def test_the_note_menu_leaves_a_locked_channel_out(window) -> None:
 
     menu = window.view.channel_menu(QPointF(3.0, PITCH_MAX - 60 + 0.5))
     assert [action.data() for action in menu.actions() if not action.isSeparator()] == [-1]
+    window.view.clear_notes()
+
+
+def test_a_cancelled_note_menu_leaves_the_selection(window, monkeypatch) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.add_note(60, 2.0, 2.0, 0)
+    window.view.add_note(64, 8.0, 1.0, 0)
+    window.view.centerOn(QPointF(8.5, PITCH_MAX - 64 + 0.5))
+    keeper = window.view.notes()[0]
+    keeper.setSelected(True)
+
+    pick_menu(monkeypatch, None)  # the menu opens over the other note, but nothing is picked
+    roll_context_menu(window, QPointF(8.5, PITCH_MAX - 64 + 0.5))
+
+    assert [item.start for item in window.view.selected_notes()] == [2.0]
     window.view.clear_notes()
 
 
@@ -3819,6 +3887,38 @@ def test_a_locked_channel_cannot_be_edited(window) -> None:
     window.view.clear_notes()
 
 
+def test_a_locked_channel_survives_select_all_and_delete(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0, lock=True), Channel(channel=1)))
+    window.view.clear_notes()
+    locked = window.view.add_note(60, 2.0, 1.0, 0)
+    window.view.add_note(64, 4.0, 1.0, 1)
+    window.view.undo_stack.clear()
+
+    window.view.keyPressEvent(QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_A, Qt.KeyboardModifier.ControlModifier))
+    assert not locked.isSelected()  # select-all skips a locked channel
+    window.view.delete_selection()
+    assert [note.pitch for note in window.view.notes()] == [60]
+    window.view.undo()
+    assert [note.pitch for note in window.view.notes()] == [60, 64]
+    reset_channels(window)
+
+
+def test_pasting_leaves_a_locked_channel_alone(window) -> None:
+    window.edit.pen.click()
+    window.view.set_channels((Channel(channel=0),))
+    window.view.clear_notes()
+    window.view.add_note(60, 2.0, 1.0, 0).setSelected(True)
+    window.view.set_playhead(8.0)
+    assert window.view.copy_selection()
+    window.view.set_channel_field(0, lock=True)
+
+    assert window.view.paste_notes() is False  # a locked channel takes no new notes
+    assert len(window.view.notes()) == 1
+    window.view.set_channel_field(0, lock=False)
+    window.view.clear_notes()
+
+
 def test_an_invisible_channel_hides_its_notes(window) -> None:
     window.view.clear_notes()
     note = window.view.add_note(60, 2.0, 2.0)
@@ -4403,6 +4503,30 @@ def test_hovering_a_shared_note_lights_the_whole_group(window) -> None:
     assert window.sound_strip._group_run((0, 0)) == (0, 0, 1)
     assert window.sound_strip._group_run((0, 1)) == (0, 0, 1)
     assert window.sound_strip._group_run(None) is None
+
+
+def test_the_sound_strip_lays_a_row_out_once_per_refresh(window) -> None:
+    window.view.load_lyrics(sound_lines("あい\nうえ"), [[(0.0, 1.0), (1.0, 2.0)], [(3.0, 4.0), (4.0, 5.0)]])
+    window.sound_strip.setVisible(True)
+    QApplication.processEvents()
+    strip = window.sound_strip
+    strip._refresh()
+    x = strip._x(3.5)
+    strip._boundary_at(x)  # fills the cache
+
+    calls: list[float] = []
+    original = strip._x
+    strip._x = lambda seconds: (calls.append(seconds), original(seconds))[1]
+    try:
+        strip._boundary_at(x)
+        assert not calls  # a second hit test reuses the rows already laid out
+        strip._invalidate()
+        strip._boundary_at(x)
+        assert calls  # a refresh lays them out again
+    finally:
+        strip._x = original
+        window.view.load_lyrics((), ())
+        window.sound_strip.setVisible(False)
 
 
 def test_two_bars_never_land_on_each_other(window) -> None:

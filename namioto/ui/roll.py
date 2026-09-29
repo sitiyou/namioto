@@ -12,7 +12,9 @@ stored in seconds (a tempo change rescales beats, so seconds are what a note sti
 gesture one step. A discrete edit goes through `_edit`, whose depth guard makes nested edits one
 step, and opening a project clears the stack. `Ctrl+C`/`Ctrl+V` copy and paste a selection snapped to
 `snap`; `Ctrl+D` and `Delete`/`Backspace` remove it; clearing every note is `Ctrl+A` then `Delete` in
-edit mode, with no button for it. A drag snaps the movement, not the place on the grid
+edit mode, with no button for it. `Escape` drops the gesture in flight - a move or a trim goes back,
+a draw takes back the note it opened - with no undo step. A drag snaps the movement, not the place
+on the grid
 (`round(movement / snap) * snap`), so an off-grid note keeps the offset it had; trimming an edge is
 the exception and lands on the drawn grid.
 
@@ -25,7 +27,8 @@ from __future__ import annotations
 
 import math
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from enum import Enum
 
 from PyQt6.QtCore import QPoint, QPointF, QRect, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QPainter, QPen, QTransform, QUndoCommand, QUndoStack
@@ -226,6 +229,44 @@ class _SelectionBox(QWidget):
         painter.drawRect(self.rect().adjusted(0, 0, -1, -1))
 
 
+class Drag(Enum):
+    """The pointer gesture in flight, from press to release."""
+
+    PAN = "pan"
+    SEEK = "seek"
+    SELECT = "select"
+    DRAW = "draw"
+    MOVE = "move"
+    TRIM = "trim"
+
+
+class Edge(Enum):
+    """Which end of a note a trim gesture moves."""
+
+    START = "start"
+    END = "end"
+
+
+@dataclass
+class Gesture:
+    """The gesture the button is holding, the one value the pointer handlers read and write.
+
+    `origin` is the scene point the press landed on, `target` the note it grabbed, `edge` the end a
+    trim moves, `snapshot` the geometry the gesture measures from, `press` the click/drag boundary
+    `blocks.Press`, and `created` the note a draw opened, which a cancel takes away again.
+    """
+
+    kind: Drag
+    origin: QPointF
+    target: NoteItem | None = None
+    edge: Edge | None = None
+    snapshot: dict[NoteItem, tuple[float, int, float]] = field(default_factory=dict)
+    press: Press | None = None
+    view_origin: QPoint = field(default_factory=QPoint)
+    rubber_origin: QPoint = field(default_factory=QPoint)
+    created: NoteItem | None = None
+
+
 class PianoRollView(QGraphicsView):
     """The roll: the note grid, the interaction with it and the drawn extras (spectrum, cursor)."""
 
@@ -263,13 +304,7 @@ class PianoRollView(QGraphicsView):
         self._zoom_x = 48.0
         self._zoom_y = 16.0
         self._grid_offset = 0.0  # seconds the drawn grid slides by; the notes and the playhead keep their time
-        self._mode: str | None = None
-        self._anchor = QPointF()
-        self._press_pos = QPoint()
-        self._press: Press | None = None  # the note a press landed on, while it stays a click
-        self._trim_edge = ""
-        self._grab_note: NoteItem | None = None
-        self._snapshot: dict[NoteItem, tuple[float, int, float]] = {}
+        self._gesture: Gesture | None = None  # the pointer gesture in flight, from press to release
         self.document = Document(channels=[Channel(channel=0, color=theme.NOTE_PALETTE[0])])
         self._items: list[NoteItem] = []
         self._clipboard: tuple[tuple[int, float, float, int], ...] = ()
@@ -298,7 +333,6 @@ class PianoRollView(QGraphicsView):
 
         self._rubber = _SelectionBox(self.viewport())
         self._rubber.hide()
-        self._rubber_origin = QPoint()
         self._initialized = False
 
     @property
@@ -559,6 +593,31 @@ class PianoRollView(QGraphicsView):
         if self._push(before, self._capture(), text):
             self.notes_changed.emit()  # a move or a trim is a change of the notes like any other
 
+    def cancel_gesture(self) -> None:
+        """Drop the gesture in flight: undo its in-memory effect and record no undo step.
+
+        `Escape` calls this, so a move or a trim goes back to where it started and a draw takes the
+        note it opened away again; `commit_gesture` on the release then finds no gesture to push.
+        """
+        if self._gesture_before is None:
+            return
+        self._gesture_before = None
+        self._gesture_text = ""
+        gesture, self._gesture = self._gesture, None
+        if gesture is None:
+            return
+        if gesture.created is not None and gesture.created in self._items:
+            self.document.remove_note(gesture.created.note)
+            self._drop_item(gesture.created)
+            self.notes_changed.emit()
+        for item, (start, pitch, duration) in gesture.snapshot.items():
+            if item in self._items:
+                item.set_range(start, pitch)
+                item.set_duration(duration)
+        self._update_scene()
+        self._sync_channel_visuals()
+        self.view_changed.emit()
+
     def _restore_state(self, state: _RollState) -> None:
         """Put a snapshot back in one rebuild, selecting the same notes by position again.
 
@@ -720,10 +779,11 @@ class PianoRollView(QGraphicsView):
         return [note for note in self.notes() if note.isSelected()]
 
     def delete_selection(self) -> bool:
-        """Remove the selected notes as one step; nothing outside edit mode."""
+        """Remove the selected notes as one step, leaving a locked channel's notes alone; nothing
+        outside edit mode."""
         if not self.edit_mode:
             return False
-        selection = self.selected_notes()
+        selection = [item for item in self.selected_notes() if not self._locked(item.channel)]
         with self._edit("Delete notes"):
             for item in selection:
                 self.document.remove_note(item.note)
@@ -752,17 +812,23 @@ class PianoRollView(QGraphicsView):
             return False
         known = {channel.channel for channel in self.channels}
         anchor = self._snap_beats((self.playhead or 0.0) * self.bpm / 60.0)
+        placed = False
         with self._edit("Paste notes"):
-            self._clear_selection()
             for pitch, offset, duration, channel in self._clipboard:
                 place = channel if channel in known else self.active_channel
+                if self._locked(place):
+                    continue  # a locked channel takes no new notes
+                if not placed:
+                    self._clear_selection()
+                placed = True
                 note = Note(pitch, anchor + self._snap_beats(offset), duration, place)
                 self.document.add_note(note)
                 self._add_item(note).setSelected(True)
             self._update_scene()
-            self.notes_changed.emit()
+            if placed:
+                self.notes_changed.emit()
             self.view_changed.emit()
-        return True
+        return placed
 
     def quantize_notes(self) -> bool:
         """Put the starts and ends of the notes on the snap grid, so they sit on the current beats.
@@ -1093,16 +1159,17 @@ class PianoRollView(QGraphicsView):
     def channel_menu(self, scene_pos: QPointF) -> QMenu | None:
         """The menu that moves the selected notes onto another channel, a fresh one included.
 
-        A right click over an unselected note selects it first, so a note can be filed without a
-        trip to the select tool. Nothing comes back outside edit mode or with nothing to move.
+        A right click over an unselected note is built for that note alone, so a note can be filed
+        without a trip to the select tool. Nothing comes back outside edit mode or with nothing to
+        move, and the selection is left as it was until an entry is actually picked.
         """
         if not self.edit_mode:
             return None
         note = self._note_at(scene_pos)
         if note is not None and not note.isSelected() and not self._locked(note.channel):
-            self._clear_selection()
-            note.setSelected(True)
-        selection = [item for item in self.selected_notes() if not self._locked(item.channel)]
+            selection = [note]
+        else:
+            selection = [item for item in self.selected_notes() if not self._locked(item.channel)]
         if not selection:
             return None
         current = {item.channel for item in selection}
@@ -1118,13 +1185,20 @@ class PianoRollView(QGraphicsView):
         return menu
 
     def contextMenuEvent(self, event) -> None:
-        menu = self.channel_menu(self.mapToScene(event.pos()))
+        scene_pos = self.mapToScene(event.pos())
+        menu = self.channel_menu(scene_pos)
         if menu is None:
             return
         action = menu.exec(event.globalPos())
-        if action is not None:
-            number = action.data()
-            self.move_selection_to_channel(None if number == NEW_CHANNEL else number)
+        if action is None:
+            return
+        note = self._note_at(scene_pos)
+        if note is not None and not note.isSelected() and not self._locked(note.channel):
+            # the menu was built for this note alone; take the selection over only once it is picked
+            self._clear_selection()
+            note.setSelected(True)
+        number = action.data()
+        self.move_selection_to_channel(None if number == NEW_CHANNEL else number)
 
     def mouseDoubleClickEvent(self, event) -> None:
         # Qt files the second of two quick clicks as a double-click, and that press has to seek and
@@ -1136,8 +1210,7 @@ class PianoRollView(QGraphicsView):
         scene_pos = self.mapToScene(pos)
 
         if event.button() == Qt.MouseButton.MiddleButton:
-            self._mode = "pan"
-            self._press_pos = pos
+            self._gesture = Gesture(Drag.PAN, scene_pos, view_origin=pos)
             self.viewport().setCursor(Qt.CursorShape.ClosedHandCursor)
             return
 
@@ -1152,7 +1225,7 @@ class PianoRollView(QGraphicsView):
             self._preview_pitch = self.pitch_at(scene_pos.y())
             self.note_preview.emit(self._preview_pitch)
             if not self.edit_mode:
-                self._mode = "seek"  # dragging on, the playhead is what follows the pointer
+                self._gesture = Gesture(Drag.SEEK, scene_pos)
                 return
 
         if event.button() == Qt.MouseButton.RightButton:
@@ -1164,11 +1237,10 @@ class PianoRollView(QGraphicsView):
             return
 
         note = self._note_at(scene_pos)
-        self._press = None  # set again below when the press lands on a note that is selected
+        self._gesture = None  # the gesture, if any, is set again below
         modifier = event.modifiers()
         ctrl = bool(modifier & Qt.KeyboardModifier.ControlModifier)
         shift = bool(modifier & Qt.KeyboardModifier.ShiftModifier)
-        self._anchor = scene_pos
         if note is not None and self._locked(note.channel):
             return
         if note is not None:
@@ -1178,8 +1250,7 @@ class PianoRollView(QGraphicsView):
             if ctrl or self.tool is Tool.SELECT:
                 if not shift:
                     self._clear_selection()
-                self._mode = "select"
-                self._rubber_origin = pos
+                self._gesture = Gesture(Drag.SELECT, scene_pos, rubber_origin=pos)
                 self._rubber.setGeometry(QRect(pos, pos))
                 self._rubber.show()
                 return
@@ -1196,9 +1267,13 @@ class PianoRollView(QGraphicsView):
             note = self.add_note(pitch, start, duration)
             self._clear_selection()
             note.setSelected(True)
-            self._grab_note = note
-            self._mode = "draw"
-            self._snapshot = {note: (note.start, note.pitch, note.duration)}
+            self._gesture = Gesture(
+                Drag.DRAW,
+                scene_pos,
+                target=note,
+                snapshot={note: (note.start, note.pitch, note.duration)},
+                created=note,
+            )
             self.view_changed.emit()
             return
 
@@ -1207,13 +1282,18 @@ class PianoRollView(QGraphicsView):
             # end; Ctrl is what adds to the selection.
             self._clear_selection()
             note.setSelected(True)
-            self._grab_note = note
-            self._mode = "trim"
-            self._trim_edge = "start" if scene_pos.x() < note.start + note.duration / 2 else "end"
-            self._snapshot = {note: (note.start, note.pitch, note.duration)}
+            edge = Edge.START if scene_pos.x() < note.start + note.duration / 2 else Edge.END
             self.begin_gesture("Trim note")
+            self._gesture = Gesture(
+                Drag.TRIM,
+                scene_pos,
+                target=note,
+                edge=edge,
+                snapshot={note: (note.start, note.pitch, note.duration)},
+            )
             return
 
+        press = None
         if ctrl:
             note.setSelected(not note.isSelected())
         elif not note.isSelected():
@@ -1222,36 +1302,42 @@ class PianoRollView(QGraphicsView):
         else:
             # the press keeps the selection a drag would carry; if it stays a click, the release
             # narrows it to this one note
-            self._press = Press(note, event.position())
+            press = Press(note, event.position())
             for item in self.selected_notes():
                 if item.channel != note.channel:
                     item.setSelected(False)
         if not note.isSelected():
             return
 
-        self._grab_note = note
         # a press on either edge changes the duration: the left one moves the start, the right one the end
         part = block_part(scene_pos.x(), note.start, note.end, self.GRAB_PX / self._zoom_x)
+        kind, edge = Drag.MOVE, None
         if part == "right":
-            self._mode, self._trim_edge = "trim", "end"
+            kind, edge = Drag.TRIM, Edge.END
         elif part == "left":
-            self._mode, self._trim_edge = "trim", "start"
-        else:
-            self._mode = "move"
-        self._snapshot = {n: (n.start, n.pitch, n.duration) for n in self.selected_notes()}
-        self.begin_gesture("Trim note" if self._mode == "trim" else "Move notes")
+            kind, edge = Drag.TRIM, Edge.START
+        self.begin_gesture("Trim note" if kind is Drag.TRIM else "Move notes")
+        self._gesture = Gesture(
+            kind,
+            scene_pos,
+            target=note,
+            edge=edge,
+            snapshot={n: (n.start, n.pitch, n.duration) for n in self.selected_notes()},
+            press=press,
+        )
 
     def mouseMoveEvent(self, event) -> None:
         pos = event.position().toPoint()
         scene_pos = self.mapToScene(pos)
-        if self._press is not None:
-            self._press.follow(event.position())  # past the slop, the release stops being a click
+        gesture = self._gesture
+        if gesture is not None and gesture.press is not None:
+            gesture.press.follow(event.position())  # past the slop, the release stops being a click
         self.set_hover_pitch(self.pitch_at(scene_pos.y()))
 
-        if self._mode is not None and self._mode != "pan":
+        if gesture is not None and gesture.kind is not Drag.PAN:
             self._follow(pos, scene_pos)
 
-        if self._mode is None:
+        if gesture is None:
             note = self._note_at(scene_pos) if self.edit_mode else None
             if note is None:
                 self.viewport().unsetCursor()
@@ -1262,16 +1348,16 @@ class PianoRollView(QGraphicsView):
                 self.viewport().setCursor(shape)
             return
 
-        if self._mode == "pan":
-            delta = pos - self._press_pos
-            self._press_pos = pos
+        if gesture.kind is Drag.PAN:
+            delta = pos - gesture.view_origin
+            gesture.view_origin = pos
             hbar, vbar = self.horizontalScrollBar(), self.verticalScrollBar()
             hbar.setValue(hbar.value() - delta.x())
             vbar.setValue(vbar.value() - delta.y())
             return
 
-        if self._mode == "select":
-            self._rubber.setGeometry(QRect(self._rubber_origin, pos).normalized())
+        if gesture.kind is Drag.SELECT:
+            self._rubber.setGeometry(QRect(gesture.rubber_origin, pos).normalized())
             region = self.mapToScene(self._rubber.geometry()).boundingRect()
             for item in self._scene.items(region):
                 # only the channel being edited answers a frame, the way noteDigger frames its channels
@@ -1283,48 +1369,48 @@ class PianoRollView(QGraphicsView):
                     item.setSelected(True)
             return
 
-        if self._grab_note is None or self._grab_note not in self._snapshot:
+        if gesture.target is None or gesture.target not in gesture.snapshot:
             return
 
-        if self._mode == "trim":
-            start, pitch, duration = self._snapshot[self._grab_note]
+        if gesture.kind is Drag.TRIM:
+            start, pitch, duration = gesture.snapshot[gesture.target]
             cell = self._cell_beats()  # one snap cell is the shortest the pointer may leave behind
-            ignore = (self._grab_note.note,)
-            if self._trim_edge == "start":
+            ignore = (gesture.target.note,)
+            if gesture.edge is Edge.START:
                 new_start = min(max(0.0, self._snap_beats(scene_pos.x())), start + duration - cell)
-                if self._would_collide(self._grab_note, new_start, pitch, start + duration - new_start, ignore):
+                if self._would_collide(gesture.target, new_start, pitch, start + duration - new_start, ignore):
                     return  # the edge cannot reach over a note of its own pitch
-                self._grab_note.set_range(new_start, pitch)
-                self._grab_note.set_duration(start + duration - new_start)
+                gesture.target.set_range(new_start, pitch)
+                gesture.target.set_duration(start + duration - new_start)
             else:
                 new_duration = max(self._snap_beats(scene_pos.x()), start + cell) - start
-                if self._would_collide(self._grab_note, start, pitch, new_duration, ignore):
+                if self._would_collide(gesture.target, start, pitch, new_duration, ignore):
                     return
-                self._grab_note.set_duration(new_duration)
+                gesture.target.set_duration(new_duration)
             self.view_changed.emit()
             return
 
-        if self._mode == "draw":
-            anchor = self._anchor.x()
+        if gesture.kind is Drag.DRAW:
+            anchor = gesture.origin.x()
             left = max(0.0, self._snap_floor_beats(min(anchor, scene_pos.x())))
             right = max(left + self._cell_beats(), self._snap_ceil_beats(max(anchor, scene_pos.x())))
             pitch = self.pitch_at(scene_pos.y())
-            if self._would_collide(self._grab_note, left, pitch, right - left, (self._grab_note.note,)):
+            if self._would_collide(gesture.target, left, pitch, right - left, (gesture.target.note,)):
                 return  # the note cannot be drawn over one of its own pitch
-            self._grab_note.set_range(left, pitch)  # the row follows the pointer too
-            self._grab_note.set_duration(right - left)
+            gesture.target.set_range(left, pitch)  # the row follows the pointer too
+            gesture.target.set_duration(right - left)
             return
 
         # the movement is what snaps, not the note's place on the grid: the step is always a whole
         # cell, after the same half cell of dragging, and a note sits off the grid stays off it
-        moved = scene_pos.x() - self._anchor.x()
+        moved = scene_pos.x() - gesture.origin.x()
         delta_x = self.snap_movement_beats(moved)
-        delta_row = round(scene_pos.y() - self._anchor.y())
-        moving = {item.note for item in self._snapshot}
-        for note, (start, pitch, _duration) in self._snapshot.items():
+        delta_row = round(scene_pos.y() - gesture.origin.y())
+        moving = {item.note for item in gesture.snapshot}
+        for note, (start, pitch, _duration) in gesture.snapshot.items():
             if self._would_collide(note, start + delta_x, pitch - delta_row, _duration, moving):
                 return  # the block cannot be dropped onto a note of one of its own pitches
-        for note, (start, pitch, _duration) in self._snapshot.items():
+        for note, (start, pitch, _duration) in gesture.snapshot.items():
             note.set_range(start + delta_x, pitch - delta_row)
         self.view_changed.emit()
 
@@ -1339,18 +1425,14 @@ class PianoRollView(QGraphicsView):
 
     def mouseReleaseEvent(self, event) -> None:
         self.commit_gesture()
-        if self._press is not None and not self._press.dragged:
+        gesture, self._gesture = self._gesture, None
+        if gesture is not None and gesture.press is not None and not gesture.press.dragged:
             # the press stayed a click, and a click is what picks the one note out of the selection
             self._clear_selection()
-            self._press.block.setSelected(True)
-        self._press = None
+            gesture.press.block.setSelected(True)
         if self._rubber.isVisible():
             self._rubber.hide()
-        self._mode = None
-        self._grab_note = None
-        self._trim_edge = ""
         self._preview_pitch = None
-        self._snapshot = {}
         self.viewport().unsetCursor()
         self._update_scene()
         self.view_changed.emit()
@@ -1401,16 +1483,11 @@ class PianoRollView(QGraphicsView):
             return
         if key == Qt.Key.Key_A and event.modifiers() & Qt.KeyboardModifier.ControlModifier:
             for note in self.notes():
-                note.setSelected(True)
+                if not self._locked(note.channel):
+                    note.setSelected(True)
             return
-        if key == Qt.Key.Key_Escape and self._snapshot:
-            for note, (start, pitch, duration) in self._snapshot.items():
-                note.set_range(start, pitch)
-                note.set_duration(duration)
-            self._snapshot = {}
-            self._mode = None
-            self._grab_note = None
-            self.view_changed.emit()
+        if key == Qt.Key.Key_Escape and self._gesture_before is not None:
+            self.cancel_gesture()
             return
         super().keyPressEvent(event)
 
@@ -1483,7 +1560,9 @@ class TimelineRuler(ViewportStrip):
         position = event.position().x()
         if self._last_x is None:
             return
-        if abs(position - self._press_x) > CLICK_SLOP_PX:
+        if not self._moved:
+            if abs(position - self._press_x) <= CLICK_SLOP_PX:
+                return  # still a click: a pixel of jitter must not scroll the roll
             self._moved = True
         hbar = self.view.horizontalScrollBar()
         hbar.setValue(hbar.value() - int(position - self._last_x))

@@ -32,7 +32,7 @@ from functools import partial
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import QByteArray, QEvent, QLibraryInfo, QProcess, QThread, QTimer, QTranslator, pyqtSignal
+from PyQt6.QtCore import QByteArray, QEvent, QLibraryInfo, QProcess, Qt, QThread, QTimer, QTranslator, pyqtSignal
 from PyQt6.QtGui import QKeySequence, QShortcut
 from PyQt6.QtWidgets import (
     QApplication,
@@ -355,11 +355,18 @@ class MainWindow(QMainWindow):
             ("Ctrl+O", self._on_open),
             ("Ctrl+S", self._on_save),
             ("Ctrl+Shift+S", self._on_save_as),
+        ):
+            QShortcut(QKeySequence(keys), self).activated.connect(slot)
+        for keys, slot in (
             ("Ctrl+C", self.view.copy_selection),
             ("Ctrl+V", self.view.paste_notes),
             ("Ctrl+D", self.view.delete_selection),
         ):
-            QShortcut(QKeySequence(keys), self).activated.connect(slot)
+            # a widget shortcut, so these mean the notes only while the roll holds the keyboard and a
+            # field keeps its own copy, paste and delete
+            shortcut = QShortcut(QKeySequence(keys), self.view)
+            shortcut.setContext(Qt.ShortcutContext.WidgetShortcut)
+            shortcut.activated.connect(slot)
         for standard, slot in (
             (QKeySequence.StandardKey.Undo, self.view.undo),
             (QKeySequence.StandardKey.Redo, self.view.redo),
