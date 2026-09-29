@@ -215,9 +215,15 @@ LYRIC_TEXT = "#ffffff"
 LYRIC_SELECT = "#ffd52f"
 
 
+_LYRIC_SHADES: dict[bool, tuple[QColor, QColor, QColor]] = {}
+
+
 def lyric_shades(ok: bool) -> tuple[QColor, QColor, QColor]:
     """A lyric block's body and bevels: green when it sits on its notes, red when it does not."""
-    return note_shades(QColor(LYRIC_OK if ok else LYRIC_BAD))
+    shades = _LYRIC_SHADES.get(ok)
+    if shades is None:
+        shades = _LYRIC_SHADES[ok] = note_shades(QColor(LYRIC_OK if ok else LYRIC_BAD))
+    return shades
 
 
 def apply(app: QApplication, style: str = "") -> str:

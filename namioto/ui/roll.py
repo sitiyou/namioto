@@ -271,6 +271,7 @@ class PianoRollView(QGraphicsView):
     """The roll: the note grid, the interaction with it and the drawn extras (spectrum, cursor)."""
 
     view_changed = pyqtSignal()
+    viewport_changed = pyqtSignal()
     notes_changed = pyqtSignal()
     channels_changed = pyqtSignal()
     active_channel_changed = pyqtSignal(int)
@@ -931,12 +932,14 @@ class PianoRollView(QGraphicsView):
         self._zoom_y = min(self.MAX_ZOOM_Y, max(self.MIN_ZOOM_Y, zoom_y))
         self.setTransform(QTransform.fromScale(self._zoom_x, self._zoom_y))
         self.refresh()
+        self.viewport_changed.emit()
 
     def center_on(self, x: float, y: float) -> None:
         """Put (x, y) in the middle of the viewport, the way opening a project restores its view."""
         self.initial_center = (x, y)
         self.centerOn(x, y)
         self.refresh()
+        self.viewport_changed.emit()
 
     def follow_playhead(self, seconds: float) -> None:
         """Leave the page alone until the playhead reaches its right edge, then turn it."""
@@ -977,6 +980,7 @@ class PianoRollView(QGraphicsView):
         """
         self._grid_offset = float(seconds)
         self.refresh()
+        self.viewport_changed.emit()
 
     def seconds_at_viewport_x(self, x: float) -> float:
         """The timeline position under a viewport x, for the widgets that share the roll's columns."""
@@ -1034,10 +1038,12 @@ class PianoRollView(QGraphicsView):
     def scrollContentsBy(self, dx: int, dy: int) -> None:
         super().scrollContentsBy(dx, dy)
         self.view_changed.emit()
+        self.viewport_changed.emit()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self.view_changed.emit()
+        self.viewport_changed.emit()
 
     def drawBackground(self, painter: QPainter, rect: QRectF) -> None:
         first_row = max(0, int(math.floor(rect.top())))
@@ -1132,9 +1138,9 @@ class PianoRollView(QGraphicsView):
         """One snap cell, but never shorter than a note can be."""
         return max(self.snap, MIN_DURATION)
 
-    def _would_collide(self, item: NoteItem, start: float, pitch: int, duration: float, ignore=()) -> bool:
+    def _would_collide(self, item: NoteItem, start: float, pitch: int, duration: float, ignore=(), index=None) -> bool:
         """Whether putting a note there would sound its pitch twice over the same time on its channel."""
-        return self.document.collides(pitch, start, duration, item.channel, ignore)
+        return self.document.collides(pitch, start, duration, item.channel, ignore, index)
 
     def _snap_beats(self, x: float) -> float:
         offset = self.offset_beats
@@ -1407,8 +1413,9 @@ class PianoRollView(QGraphicsView):
         delta_x = self.snap_movement_beats(moved)
         delta_row = round(scene_pos.y() - gesture.origin.y())
         moving = {item.note for item in gesture.snapshot}
+        index = self.document.index_by_voice()  # one pass, then a lookup per moved note
         for note, (start, pitch, _duration) in gesture.snapshot.items():
-            if self._would_collide(note, start + delta_x, pitch - delta_row, _duration, moving):
+            if self._would_collide(note, start + delta_x, pitch - delta_row, _duration, moving, index):
                 return  # the block cannot be dropped onto a note of one of its own pitches
         for note, (start, pitch, _duration) in gesture.snapshot.items():
             note.set_range(start + delta_x, pitch - delta_row)
@@ -1469,6 +1476,7 @@ class PianoRollView(QGraphicsView):
         hbar.setValue(hbar.value() + delta.x())
         vbar.setValue(vbar.value() + delta.y())
         self.view_changed.emit()
+        self.viewport_changed.emit()
 
     def keyPressEvent(self, event) -> None:
         key = event.key()

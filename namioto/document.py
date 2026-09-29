@@ -79,22 +79,35 @@ class Document:
         self._fill_channels()
         return note
 
-    def collides(self, pitch: int, start: float, duration: float, channel: int, ignore=()) -> bool:
+    def index_by_voice(self) -> dict[tuple[int, int], list[Note]]:
+        """The notes grouped by (channel, pitch), for the overlap tests a drag repeats per moved note.
+
+        A drag mutates only the notes it holds and ignores those same ones, so a caller that rebuilds
+        this once per move reads every other note under the voice it still has.
+        """
+        index: dict[tuple[int, int], list[Note]] = {}
+        for note in self.notes:
+            index.setdefault((note.channel, note.pitch), []).append(note)
+        return index
+
+    def collides(self, pitch: int, start: float, duration: float, channel: int, ignore=(), index=None) -> bool:
         """Whether a note of `pitch` on `channel` would share time with one already there.
 
         Only the same pitch on the same channel is refused - different pitches may sound together,
         and a note touching another at its edge is not a clash. `ignore` holds the notes being moved
-        or resized, which are not obstacles to themselves.
+        or resized, which are not obstacles to themselves. `index` is `index_by_voice` read against
+        the notes as they are now, which saves the caller a full scan per moved note.
         """
         end = start + duration
-        ignored = set(ignore)
+        ignored = ignore if isinstance(ignore, (set, frozenset)) else set(ignore)
+        candidates = self.notes if index is None else index.get((channel, pitch), ())
         return any(
             note not in ignored
             and note.pitch == pitch
             and note.channel == channel
             and note.start < end
             and start < note.end
-            for note in self.notes
+            for note in candidates
         )
 
     def remove_note(self, note: Note) -> None:

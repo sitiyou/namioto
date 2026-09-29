@@ -62,7 +62,7 @@ class SoundStrip(ViewportStrip):
         self._press_x = 0.0
         self._press_seconds = 0.0
         self._layouts: dict[int, list[float | None]] = {}  # per row, until the view or the times move
-        view.view_changed.connect(self._refresh)
+        view.viewport_changed.connect(self._refresh)
         view.lyrics_changed.connect(self._invalidate)
         view.notes_changed.connect(self._invalidate)
 
@@ -89,14 +89,14 @@ class SoundStrip(ViewportStrip):
             mapped = self.view.lyric_times[row] if row < len(self.view.lyric_times) else spans
             flags = self.view.lyric_red[row] if row < len(self.view.lyric_red) else ()
             zeros = self.view.lyric_zero[row] if row < len(self.view.lyric_zero) else ()
-            xs = self._layout(row)
+            xs = self._layout(row, left)
             for column, sound in enumerate(line.sounds):
                 if column >= len(spans):
                     break
                 start, _end = spans[column]
                 if start is None:
                     continue
-                x0 = self._here(xs[column], self._x(start))
+                x0 = self._here(xs[column], self._x(start, left))
                 x1 = self._here(xs[column + 1] if column + 1 < len(xs) else None, x0)
                 room = max(int(x1 - x0) - 2 * SOUND_PAD, 0)
                 good = not (column < len(flags) and flags[column])
@@ -106,7 +106,7 @@ class SoundStrip(ViewportStrip):
                 if not zero and column < len(mapped):
                     bstart, bend = mapped[column]
                     if bstart is not None and bend is not None and bend > bstart:
-                        rect = QRectF(self._x(bstart), top, self._x(bend) - self._x(bstart), height)
+                        rect = QRectF(self._x(bstart, left), top, self._x(bend, left) - self._x(bstart, left), height)
                         blocks.append((rect, good, row, column))
                 color = QColor(theme.LYRIC_TEXT) if not zero else QColor(theme.LYRIC_ZERO)
                 labels.append((x0, self._fit_label(sound, metrics, room), color))
@@ -198,14 +198,15 @@ class SoundStrip(ViewportStrip):
         hbar.setValue(hbar.value() - event.angleDelta().y())
         event.accept()
 
-    def _x(self, seconds: float) -> float:
+    def _x(self, seconds: float, origin: float | None = None) -> float:
         beats = self.view.to_beats(seconds)
-        return self.origin().x() + self.view.mapFromScene(QPointF(beats, 0.0)).x()
+        base = self.origin().x() if origin is None else origin
+        return base + self.view.mapFromScene(QPointF(beats, 0.0)).x()
 
     def _here(self, drawn: float | None, fallback: float) -> float:
         return fallback if drawn is None else drawn
 
-    def _layout(self, row: int) -> list[float | None]:
+    def _layout(self, row: int, origin: float | None = None) -> list[float | None]:
         """The drawn x of every boundary: a zero-length sound's own `|` steps left, the rest stay true.
 
         Two starts may share a time - a zero-length sound has the same start twice, and the sound
@@ -220,7 +221,7 @@ class SoundStrip(ViewportStrip):
         true: list[float | None] = []
         for index in range(len(spans) + 1):
             seconds = self._boundary_seconds(spans, index)
-            true.append(self._x(seconds) if seconds is not None else None)
+            true.append(self._x(seconds, origin) if seconds is not None else None)
         drawn = list(true)
         for index in range(len(drawn) - 2, -1, -1):
             if true[index] is None or true[index + 1] is None:

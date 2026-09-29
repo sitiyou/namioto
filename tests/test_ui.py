@@ -4516,7 +4516,7 @@ def test_the_sound_strip_lays_a_row_out_once_per_refresh(window) -> None:
 
     calls: list[float] = []
     original = strip._x
-    strip._x = lambda seconds: (calls.append(seconds), original(seconds))[1]
+    strip._x = lambda seconds, origin=None: (calls.append(seconds), original(seconds, origin))[1]
     try:
         strip._boundary_at(x)
         assert not calls  # a second hit test reuses the rows already laid out
