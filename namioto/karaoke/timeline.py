@@ -613,16 +613,20 @@ def map_faithful(text: str, notes: Sequence[tuple[float, float]]) -> list[list[P
                     continue
                 sounds = sum(1 for item in loc if item[0] == top)
                 taken = notes[at : at + unit.mora]
-                row.extend(_faithful_unit(sounds, taken, at))
+                row.extend(_faithful_unit(sounds, taken, at, notes))
                 at += len(taken)
             found.append(row)
     return found
 
 
-def _faithful_unit(natural: int, taken: Sequence[tuple[float, float]], base: int) -> list[Placement]:
-    """`natural` sounds on the `taken` notes (indices from `base`): a held tail or shared notes."""
+def _faithful_unit(
+    natural: int, taken: Sequence[tuple[float, float]], base: int, notes: Sequence[tuple[float, float]]
+) -> list[Placement]:
+    """`natural` sounds on the `taken` notes (indices from `base`): a held tail, shared notes, or
+    a point where no note is left for them (`.0`)."""
     if not taken:
-        return [Placement(span=(None, None), zero=True) for _ in range(natural)]
+        point = notes[base][0] if base < len(notes) else (notes[-1][1] if notes else None)
+        return [Placement(span=(point, point), zero=True) for _ in range(natural)]
     if len(taken) >= natural:
         out = []
         for index in range(natural):

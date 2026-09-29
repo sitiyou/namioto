@@ -346,7 +346,17 @@ def test_faithful_stops_when_the_notes_run_out():
     assert found[0][0].span == (0.0, 1.0)
     assert found[0][0].notes == (0,)
     assert found[0][1].zero is True
+    assert found[0][1].span == (1.0, 1.0)  # a point at the end the notes ran out on
     assert found[0][2].zero is True
+
+
+def test_faithful_puts_a_dot_n_sound_where_it_holds_off():
+    # あい.0う: the `.0` sound takes no note, so it is a point at the note the next sound begins
+    # on, not (None, None) - the strip has to draw its `|` and label there
+    found = map_faithful("あい.0う", [(0.0, 1.0), (1.0, 2.0)])
+    assert found[0][1].zero is True
+    assert found[0][1].span == (1.0, 1.0)
+    assert found[0][2].span == (1.0, 2.0)
 
 
 @pytest.mark.parametrize("text", ["あん", "季節[き,せつ]", "がっこう", "(幾千)[いくせん]"])

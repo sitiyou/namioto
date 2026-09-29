@@ -4633,6 +4633,25 @@ def test_read_mode_lays_the_krcs_own_dot_n_onto_the_notes(own_window, tmp_path) 
     assert own_window.edit.align.isEnabled() is False
 
 
+def test_read_mode_draws_a_dot_n_sound_where_it_holds_off(own_window, tmp_path) -> None:
+    own_window.transport.bpm.setValue(60.0)  # a beat is a second, so notes read in seconds
+    own_window.view.set_channels((Channel(channel=0),))
+    own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 1.0, 0)))
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._stored_lyrics = project.Lyrics(text="あい.0う\n", key=text_key("あい.0う\n"), mode="read")
+    own_window._watch_lyrics()
+    own_window.sound_strip.setVisible(True)
+    QApplication.processEvents()
+
+    strip = own_window.sound_strip
+    # the `.0` sound takes no note, so its `|` is stepped left of the sound it holds off; the sound
+    # before it keeps its boundary, so its label keeps its room
+    held = strip._boundary_x(0, 1)
+    after = strip._boundary_x(0, 2)
+    assert held is not None and after is not None
+    assert after - held == pytest.approx(SOUND_GAP_PX)
+
+
 def test_read_mode_refuses_to_align(own_window, tmp_path) -> None:
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(text="あい\n", key=text_key("あい\n"), mode="read")
