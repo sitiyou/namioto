@@ -1277,6 +1277,14 @@ class MainWindow(QMainWindow):
         text = lyrics.load(path)
         if text == self.lyrics_text:
             return  # our own save, or a change to another file in the project's folder
+        if text:
+            try:
+                sound_lines(text)
+            except KrcError as error:
+                # keep the open lyrics: a broken file is the user's to fix where it lives
+                self._lyric_error = str(error)
+                self.statusBar().showMessage(i18n.tr("The lyrics could not be read: {error}", error=error))
+                return
         self.lyrics_text = text
         self.statusBar().showMessage(i18n.tr("Lyrics reloaded from {name}", name=path.name))
         self._load_sounds()

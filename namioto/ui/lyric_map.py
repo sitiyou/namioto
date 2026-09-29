@@ -23,7 +23,8 @@ def map_lyrics(lines, times, notes, text, aligned, mode="edit"):
     what the strip draws and edits.
     """
     if mode == "read":
-        if notes and text:
+        # a text that failed to parse has no lines to map, and `map_faithful` would parse it again
+        if notes and text and lines:
             spans, red, zero, group = _placement_tables(map_faithful(text, notes))
             return spans, red, zero, group, spans
         spans = [[(None, None)] * len(line.sounds) for line in lines]
