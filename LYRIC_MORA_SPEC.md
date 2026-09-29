@@ -70,7 +70,7 @@ contiguous(times) -> list[list[(start, end)]]
 不变量：
 - **INV-1** 一行内 mora 首尾相接：`raw[i].end == raw[i+1].start`。
 - 只有 start 携带时间信息；end 是派生量。
-- 作用点：`PianoRollView.load_lyrics`（载入/映射后）与 `set_mora_boundary`（拖动后）。
+- 作用点：`PianoRollView.load_lyrics`（载入/映射后）与 `set_sound_boundary`（拖动后）。
 
 ---
 
@@ -133,10 +133,9 @@ group    # 共享的 NOTE 下标；-1 表示独立
 > 注意：条带的块画的是 **`Placement.span`（映射后）**，与卷帘音符对齐；`|`/标签画的是 raw
 > 起点。`contiguous` 只喂给 `map_sounds`，不决定块宽。
 
-### 4.3 `_groupable(text, times, flat, holders)`（已不参与映射）
+### 4.3 `group_sounds`（不参与映射）
 
-旧算法用它把「能否折成一个 `(...)` 词」当成组条件。现在**不成组只用 share 判**（§13.2），
-`map_sounds` 不再调它；`_groupable`/`group_sounds` 只服务 `.krc` 折叠/导出与测试。
+成组与否只看 share（§13.2），与 `.krc` 能否折成 `(...)` 无关；`group_sounds` 只服务 `.krc` 折叠/导出与测试。
 
 ---
 
@@ -154,17 +153,17 @@ group    # 共享的 NOTE 下标；-1 表示独立
 
 ---
 
-## 6. 条带显示（`ui/strips.py::MoraStrip`）
+## 6. 条带显示（`ui/strips.py::SoundStrip`）
 
-- 与卷帘共用列/时间轴（`_ViewportStrip.origin` + `view.mapFromScene`）。
+- 与卷帘共用列/时间轴（`ViewportStrip.origin` + `view.mapFromScene`）。
 - 每行按 `line.sounds`：
   - `start = raw[row][col][0]`；为 `None` 跳过。
   - 块：**映射后跨度 `lyric_times[row][col]`**（`map_sounds` 的 `Placement.span`）——它贴到 NOTE、
     与卷帘对齐，并且覆盖整个 NOTE（包括旁边 `.0` mora 所处的时段）；仅当 `end > start` 且非 `.0`。
-  - `|`：在边界处画 `MORA_LINE_PX` 宽竖线，颜色 = 白（非 `.0`）/灰（`.0`）。
+  - `|`：在边界处画 `SOUND_LINE_PX` 宽竖线，颜色 = 白（非 `.0`）/灰（`.0`）。
   - **零长 mora 的两条相邻边界不得重合**：`_layout` 让**零长 mora 自己的那条 `|` 向左退一步**
-    `MORA_GAP_PX`，而它后面的 mora（起点在同一时刻）**留在真实位置**——即优先保证非 `.0`
-    的位置正确，牺牲 `.0` 的显示位置。`MORA_GAP_PX` = 一个 CJK 字宽 + 两侧 padding（当前 20px），
+    `SOUND_GAP_PX`，而它后面的 mora（起点在同一时刻）**留在真实位置**——即优先保证非 `.0`
+    的位置正确，牺牲 `.0` 的显示位置。`SOUND_GAP_PX` = 一个 CJK 字宽 + 两侧 padding（当前 20px），
     所以退出来的格子还能显示一个字。
   - 标签（**自适应，不 elide**）：`room` = 本 `|` 到下一个 `|`（按下标计算，至少 0）：
     - `Sound.label` 放得下 → 画整条；
@@ -174,7 +173,7 @@ group    # 共享的 NOTE 下标；-1 表示独立
 - **共享 NOTE 的内部切缝不画边**：两个 mora 同属一个 NOTE（`group[col] >= 0` 且相邻列 `group` 相同）
   时，它们相接的那条竖边不画（`_paint_body` 的 `left_join`/`right_join`），所以两块读起来是一整块。
   条带上只剩两种竖线：带标签的 `|`，以及不同 NOTE 块之间的边界。
-- 悬浮：`_mora_at(x)` 命中某 mora，`_group_run` 取同 `group` 下标的连续 run；`_paint_groups` 给整段
+- 悬浮：`_sound_at(x)` 命中某 mora，`_group_run` 取同 `group` 下标的连续 run；`_paint_groups` 给整段
   半透明 `LYRIC_SELECT` 填充 + 描边。
 - tooltip = 命中 mora 的 `Sound.label`。
 - 滚轮横向滚动。
@@ -183,8 +182,8 @@ group    # 共享的 NOTE 下标；-1 表示独立
 
 ## 7. 拖动编辑
 
-- 把手：`|`。`_boundary_at(x)` 在所有行的边界里取最近、距离 `<= MORA_GRAB_PX` 的；距离相同取
-  先遇到的（低行/低下标）。边界位置用 `_layout`：零长 mora 的 `|` 左退 `MORA_GAP_PX`，其余在
+- 把手：`|`。`_boundary_at(x)` 在所有行的边界里取最近、距离 `<= SOUND_GRAB_PX` 的；距离相同取
+  先遇到的（低行/低下标）。边界位置用 `_layout`：零长 mora 的 `|` 左退 `SOUND_GAP_PX`，其余在
   真实位置，所以重合的对也能各自可抓。**被抓住的那条在拖动时画回它的真实时间**（`_layout`
   对该下标不做退让），拖动跟的是数据而不是显示上的偏移，松手后重新退开。
 - 边界语义：边界 `i` = mora `i` 的 start = mora `i-1` 的 end（**共享边**）；边界 `len` = 最后一个
@@ -192,18 +191,18 @@ group    # 共享的 NOTE 下标；-1 表示独立
 - **拖动量按位移算**：press 时记下 `_press_seconds`（该边界真实秒）与 `_press_x`；move 时
   `travelled = seconds_at(x) - seconds_at(_press_x)`，`value = _press_seconds + travelled`。
   这样被 `_layout` 推开画出的边界不会在起拖时跳。
-- `PianoRollView.set_mora_boundary(row, boundary, seconds, base)`：
+- `PianoRollView.set_sound_boundary(row, boundary, seconds, base)`：
   - `low = raw[boundary-1].start`（boundary 0 时 0.0），`high = raw[boundary].end`（末尾时 ∞）；
   - `value = clamp(seconds, low, high)`；写 `raw[boundary-1].end = value` 与 `raw[boundary].start = value`；
   - 再对整行 `contiguous`；emit `lyrics_changed`。
   - `base` = 拖动开始时该行的快照，每次 move 从 `base` 重算，所以拖回原位完全还原。
 - **平滑**：`seconds` 直接是指针处时间，不做量化。
 - **磁吸**：仅当指针距某条**画出来的节拍线**（`view.grid_step()`，含 `view.offset`）在
-  `MORA_MAGNET_PX` 像素内，才吸到该线（`_magnet_seconds`）。这是「另一套吸附」：不用 note snap，
+  `SOUND_MAGNET_PX` 像素内，才吸到该线（`_magnet_seconds`）。这是「另一套吸附」：不用 note snap，
   因为多个 mora 可能落在同一 note 格内。
-- **撤销**：press 时 `_begin_gesture("Move lyrics")`，release 时 `_commit_gesture()`。一次拖动一步。
+- **撤销**：press 时 `begin_gesture("Move lyrics")`，release 时 `commit_gesture()`。一次拖动一步。
   `_RollState` 存 `lyric_raw`，`_state_data` 含它，所以歌词拖动会被 `_push` 识别。
-- **提交后**：`_commit_gesture` emit `notes_changed` → app `_remap_lyrics_async` 重跑 `map_sounds`
+- **提交后**：`commit_gesture` emit `notes_changed` → app `_remap_lyrics_async` 重跑 `map_sounds`
   → 刷新绿/红/灰/group；同时 `_mark_dirty` 置 dirty。
 - 拖动只改 `lyric_raw`，**不动 NOTE**（A 方案）。
 
@@ -223,7 +222,7 @@ group    # 共享的 NOTE 下标；-1 表示独立
 
 - `.nto` 的 `lyrics: Lyrics{text, key, model, mode, lines}`；`key` = `.krc` 文本 hash，`model` = 对齐模型。
   `lines` 每 mora `(start, end)`。
-- 载入：`_load_mora` 用 `Lyrics` 还原 raw（再过 `contiguous`）。
+- 载入：`MainWindow._watch_lyrics` 用 `Lyrics` 还原 raw（再过 `contiguous`）。
 - 保存：`save_project` 写 `view.lyric_raw`。
 - dirty：歌词编辑经 `notes_changed` 触发 `_mark_dirty`；`_state_data` 含 `lyric_raw`。
 - **`.krc` 永不因编辑被写回。**
@@ -239,7 +238,7 @@ group    # 共享的 NOTE 下标；-1 表示独立
 - **R5** 短但占住自己 NOTE 的 mora 是绿的，不灰。
 - **R6** 共享 NOTE 的 mora：`share >= SHARE`（1/4）的**每个**都留下并成组；不足 1/4 的落 `.0`；
   若全不足则只留最大 share 的。两个 sharer 时等价于「边界落在 [1/4, 3/4]」。
-  **不再要求 `_groupable`（见 R14）。**
+  **与能否折成 `.krc` 的 `(...)` 无关（见 R14）。**
 - **R16** 判定是「逐个达标」，不是「全体达标」：一个 share 很小的 sharer 只能自己落 `.0`，
   不得让同一 NOTE 上 share 已经 ≥ 1/4 的其他 mora 也落 `.0`。
 - **R7** `group` 仅在成组时 ≥ 0；悬浮高亮覆盖同一 `group` 的连续 run。
@@ -247,15 +246,15 @@ group    # 共享的 NOTE 下标；-1 表示独立
 - **R8d** 同一 NOTE 的 group 成员之间不画竖边，两块读成一整块；条带竖线只有「带标签的 `|`」与
   「不同 NOTE 块的边界」两种。
 - **R8b** 标签自适应：放不下整条 → ruby 只留读音 → 再放不下就不画。
-- **R8c** 零长 mora 的两条 `|` 不重合：它自己的那条左退 `MORA_GAP_PX`，它后面的 mora 留在真实
+- **R8c** 零长 mora 的两条 `|` 不重合：它自己的那条左退 `SOUND_GAP_PX`，它后面的 mora 留在真实
   位置（优先非 `.0`）；被抓住的那条在拖动时画回真实位置，拖动按位移计算，不跳。
-- **R9** 拖动：共享边、平滑、磁吸到画出的节拍线（`MORA_MAGNET_PX`）；一次拖动一步撤销。
+- **R9** 拖动：共享边、平滑、磁吸到画出的节拍线（`SOUND_MAGNET_PX`）；一次拖动一步撤销。
 - **R10** 拖动只改 `lyric_raw`，不改 NOTE；提交重映射 + 置 dirty。
 - **R11** 条带与卷帘共列（缩放/滚动/offset 对齐）。
 - **R12** `_row` 读 `(...)` 按成员字拆 mora（忽略 `.N`）；读它和读同一串未分组，token 流逐字相同。
 - **R13** mora 数由读音/字面决定，`total_mora` 与 `_row` 的 mora 数一致。
-- **R14** 显示成组只看 share（近且 `min>=SHARE`），ruby 词也能成组；不得用 `_groupable`/`group_sounds`
-  把关（它们只服务 `.krc` 折叠）。
+- **R14** 显示成组只看 share（近且 `min>=SHARE`），ruby 词也能成组；不得用 `group_sounds`
+  把关（它只服务 `.krc` 折叠）。
 - **R15** 跨 `]` 的组合（`A[B(C]D)`）非法；显示 group 不必可写成 `.krc`。
 
 ---
@@ -290,10 +289,10 @@ group    # 共享的 NOTE 下标；-1 表示独立
 
 ## 12. 当前偏差 / 待清理（不是行为，改前先处理）
 
-- `ui/roll.py::PianoRollView._lyric_times`（映射后跨度）条带在用；`load_lyrics` 的 `times`
+- `ui/roll.py::PianoRollView.lyric_times`（映射后跨度）条带在用；`load_lyrics` 的 `times`
   （映射后）与 `raw`（onset 链）并存，别混用：`times` 只给块，`raw` 给映射输入与 `|`。
 - §13 已实现：`_row(line, split_groups=True)` 把 `(...)` 拆成成员 Sound；`map_sounds` 成组只看
-  share。`_groupable` 已不再被 `map_sounds` 调用；`group_sounds` 在 flatten 视图上折叠（§14）。
+  share。`group_sounds` 在 flatten 视图上折叠（§14）。
 
 ---
 
@@ -319,10 +318,10 @@ group    # 共享的 NOTE 下标；-1 表示独立
 ### 13.2 group 是显示概念
 
 - 多个 Sound 共享同一个 NOTE → `map_sounds` 成组（`group >= 0`），条带悬浮高亮整段。
-- 成组判定只看 **share**（`share >= SHARE`）；**不得**用 `_groupable` /
-  `group_sounds`（尝试折成 `(...)`）把关，因为：
+- 成组判定只看 **share**（`share >= SHARE`）；**不得**用 `group_sounds`
+  （尝试折成 `(...)`）把关，因为：
   - ruby 词、跨 `]` 的组合可能无法写成 `.krc`，但仍应显示为 group。
-- `group_sounds` / `_groupable` 只服务 `.krc` 折叠/导出，不参与显示判定。
+- `group_sounds` 只服务 `.krc` 折叠/导出，不参与显示判定。
 
 ### 13.3 `.krc` 能表示 / 不能表示
 

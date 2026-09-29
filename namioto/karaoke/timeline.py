@@ -792,23 +792,6 @@ def _share(flat: Sequence[tuple], note: tuple[float, float], index: int) -> floa
     return (max(right, left) - left) / (high - low)
 
 
-def _groupable(text: str, times, flat: Sequence[tuple], holders: Sequence[int]) -> bool:
-    """Whether a note's sharers may be folded into one word, by the same rules a group obeys."""
-    if not text:
-        return False
-    rows = {flat[index][0] for index in holders}
-    if len(rows) != 1:
-        return False
-    columns = sorted(flat[index][1] for index in holders)
-    if len(columns) < 2 or columns != list(range(columns[0], columns[-1] + 1)):
-        return False
-    try:
-        group_sounds(text, rows.pop(), columns[0], columns[-1])
-    except KrcError:
-        return False
-    return True
-
-
 def _zero_point(start: float | None, notes: Sequence[tuple[float, float]]) -> float | None:
     """Where a sound of no length is drawn: its own onset, else the nearest note's."""
     if start is not None:
