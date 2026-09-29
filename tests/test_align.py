@@ -298,6 +298,30 @@ def test_model_file_prefers_the_half_precision_one_on_a_gpu(tmp_path):
     assert align.model_file(tmp_path, "cpu") == tmp_path / align.MODEL_FILE
 
 
+def test_a_gpu_run_fetches_the_half_precision_model(tmp_path, monkeypatch):
+    fetched = []
+    monkeypatch.setattr(align.model_store, "install", lambda name, parts, progress=None: fetched.append((name, parts)))
+    directory = align.model_dir("mms", "ja")
+
+    align.fetch_fp16(directory, "webgpu", "mms")
+    align.fetch_fp16(directory, "cpu", "mms")
+    align.fetch_fp16(tmp_path, "webgpu", "mms")  # a conversion of one's own, not the store's copy
+
+    assert fetched == [(align.FP16_KEY, ("mms", "ja"))]
+
+
+def test_a_fetch_that_fails_leaves_the_shipped_model(tmp_path, monkeypatch):
+    def refuse(*args, **kwargs):
+        raise OSError("no network")
+
+    monkeypatch.setattr(align.model_store, "install", refuse)
+    directory = align.model_dir("mms", "ja")
+
+    align.fetch_fp16(directory, "webgpu", "mms")
+
+    assert align.model_file(directory, "webgpu") == directory / align.MODEL_FILE
+
+
 def test_resolve_model_rejects_a_directory_without_the_model(tmp_path):
     with pytest.raises(FileNotFoundError):
         align.resolve_model(tmp_path)

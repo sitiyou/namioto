@@ -13,13 +13,17 @@ TAG="models"
 TITLE="ONNX models"
 NOTES="ONNX models, downloaded on demand by namioto.
 
-- mms-onnx.zip — Meta MMS forced aligner, Japanese (CC-BY-NC 4.0); conversion by
+- mms-onnx-int8.zip — Meta MMS forced aligner, Japanese (CC-BY-NC 4.0); conversion by
   scripts/export_align_model.py
-- yohane-onnx.zip — NextFire mms-300m forced aligner, Japanese (CC BY-NC-SA 4.0); conversion by
+- yohane-onnx-int8.zip — NextFire mms-300m forced aligner, Japanese (CC BY-NC-SA 4.0); conversion by
   scripts/export_align_model.py
+- mms-onnx-fp16.zip, yohane-onnx-fp16.zip — those two graphs in half precision, which a GPU run
+  loads in place of the quantised one
+- mms-onnx.zip, yohane-onnx.zip — the int8 packages under the names releases before the rename ask
+  for, kept so those installs can still fetch them
 - tempocnn-onnx.zip — Essentia/TempoCNN deeptemp-k16-3 (CC BY-NC-SA 4.0)
 
-All three carry non-commercial licenses: they are redistributed for use with namioto only. See NOTICE."
+All of them carry non-commercial licenses: they are redistributed for use with namioto only. See NOTICE."
 DATA_DIR="${XDG_DATA_HOME:-$HOME/.local/share}/namioto/models"
 LANGUAGE="ja"
 TEMPOCNN=""
@@ -33,8 +37,9 @@ usage() {
     cat <<'EOF'
 Usage: ./scripts/upload_models.sh [options]
 
-Publishes mms-onnx.zip, yohane-onnx.zip and tempocnn-onnx.zip as the assets of one GitHub
-release - one zip per ONNX model - and prints the registry lines that point the program at them.
+Publishes mms-onnx-int8.zip, yohane-onnx-int8.zip and tempocnn-onnx.zip as the assets of one
+GitHub release - one zip per ONNX model, with the aligners' half-precision packages beside them when
+they have been exported - and prints the registry lines that point the program at them.
 `gh` must be logged in with a token that carries the `repo` scope for the repository's owner.
 
   --tag TAG          the release tag (default: models). A re-export wants a new one: the program
@@ -49,8 +54,10 @@ release - one zip per ONNX model - and prints the registry lines that point the 
   --out DIR          where the zips are built (default: dist/models)
   --title TEXT       release title (default: "ONNX models")
   --notes TEXT       release notes (default: attribution and license summary)
-  --reuse            upload into an existing release instead of refusing it
-  --clobber          replace assets that are already there (breaks a published download)
+  --reuse            upload into an existing release instead of refusing it; an asset that release
+                     already holds is left as it is, so a package can be added beside it
+  --clobber          replace assets the release already holds, instead of leaving them as they are
+                     (breaks a published download)
   --dry-run          print what would run, touch nothing
 EOF
 }
@@ -132,7 +139,8 @@ command -v zip >/dev/null || die "zip is needed and is not installed"
 command -v sha256sum >/dev/null || die "sha256sum is needed and is not installed"
 if [ "$DRY" == 0 ]; then
     command -v gh >/dev/null || die "gh is needed and is not installed"
-    gh auth status >/dev/null 2>&1 || die "gh is not logged in; run: gh auth login"
+    # the active account, not `gh auth status`: that one also fails on another account's dead token
+    gh api user >/dev/null 2>&1 || die "gh is not logged in; run: gh auth login"
     gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1 && {
         [ "$REUSE" == 1 ] || die "release $TAG already exists; a re-export wants a new tag, or --reuse to add to it"
     } || true
@@ -163,7 +171,14 @@ for model in $ONLY; do
     case "$model" in
         mms | yohane)
             directory="$DATA_DIR/$model/$LANGUAGE"
-            build_zip "$model-onnx.zip" "$directory/model.onnx" "$directory/vocab.json"
+            build_zip "$model-onnx-int8.zip" "$directory/model.onnx" "$directory/vocab.json"
+            # the half-precision copy a GPU run loads: published apart, because it is twice the size
+            # and a CPU-only install would pay for it
+            if [ -f "$directory/model.fp16.onnx" ]; then
+                build_zip "$model-onnx-fp16.zip" "$directory/model.fp16.onnx"
+            else
+                say "no $directory/model.fp16.onnx: no half-precision package for $model"
+            fi
             ;;
         tempocnn)
             source="$TEMPOCNN"
@@ -203,7 +218,25 @@ upload=(gh release upload "$TAG" --repo "$REPO")
 if [ "$CLOBBER" == 1 ]; then
     upload+=(--clobber)
 fi
-run "${upload[@]}" "${assets[@]}"
+
+# an asset the release already holds is left alone, so a package can be added beside the ones it was
+# published with; --clobber is how a published one is replaced instead
+published=""
+if [ "$DRY" == 0 ]; then
+    published="$(gh api "repos/$REPO/releases/tags/$TAG" --jq '.assets[].name')"
+fi
+fresh=()
+for asset in "${assets[@]}"; do
+    name="$(basename "$asset")"
+    if [ "$CLOBBER" == 0 ] && printf '%s\n' "$published" | grep -qxF -- "$name"; then
+        say "$TAG already holds $name; leaving it as it is"
+    else
+        fresh+=("$asset")
+    fi
+done
+if [ "${#fresh[@]}" -gt 0 ]; then
+    run "${upload[@]}" "${fresh[@]}"
+fi
 
 registry_hint() {
     cat <<EOF
@@ -215,7 +248,13 @@ Point the registry at the release (namioto/model_store.py, MODELS):
       env="NAMIOTO_ALIGN_MODEL",
       files=("model.onnx", "vocab.json"),
       hint="convert one with scripts/export_align_model.py",
-      asset="https://github.com/$REPO/releases/download/$TAG/{model}-onnx.zip",
+      asset="https://github.com/$REPO/releases/download/$TAG/{model}-onnx-int8.zip",
+  ),
+  "aligner_fp16": Model(
+      name="aligner_fp16",
+      env="NAMIOTO_ALIGN_MODEL",
+      files=("model.fp16.onnx",),
+      asset="https://github.com/$REPO/releases/download/$TAG/{model}-onnx-fp16.zip",
   ),
   "tempocnn": Model(
       name="tempocnn",
@@ -241,11 +280,11 @@ gh api "repos/$REPO/releases/tags/$TAG" \
     --jq '.assets[] | "\(.name)\t\(.size)\t\(.browser_download_url)"' |
     tee "$OUT/assets.txt"
 
-for asset in "${assets[@]}"; do
+for asset in "${fresh[@]}"; do
     name="$(basename "$asset")"
     local_size="$(stat -c%s "$asset")"
     remote_size="$(awk -v name="$name" '$1 == name { print $2 }' "$OUT/assets.txt")"
     [ "$remote_size" == "$local_size" ] || die "$name is $remote_size bytes on the release, not $local_size"
 done
-say "every asset matches its local zip"
+say "every asset this run uploaded matches its local zip"
 registry_hint

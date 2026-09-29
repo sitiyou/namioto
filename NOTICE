@@ -82,8 +82,10 @@ Third-party code and assets
   caller. The module loads a converted ONNX graph from the data directory
   (`~/.local/share/namioto/models/<model>/<language>`, via `platformdirs`), from
   `$NAMIOTO_ALIGN_MODEL`, or, when neither has one, from this project's `models` release
-  (`mms-onnx.zip`, `yohane-onnx.zip`), which it downloads. `scripts/export_align_model.py` produces
-  those graphs from the two models below, and `scripts/upload_models.sh` publishes them.
+  (`mms-onnx-int8.zip`, `yohane-onnx-int8.zip`, and a half-precision `mms-onnx-fp16.zip` or
+  `yohane-onnx-fp16.zip` that a GPU run loads in its place), which it downloads.
+  `scripts/export_align_model.py` produces those graphs from the two models below, and
+  `scripts/upload_models.sh` publishes them.
 
 ### torchaudio (CTC forced alignment)
 - Upstream: pytorch/audio, https://github.com/pytorch/audio
@@ -97,7 +99,8 @@ Third-party code and assets
 - License: Creative Commons Attribution-NonCommercial 4.0 International
   (https://creativecommons.org/licenses/by-nc/4.0/) — NOT AGPL-3.0
 - Namioto's default aligner (`--model mms`). `scripts/export_align_model.py` converts it from the
-  network, and this project publishes the converted graph as `mms-onnx.zip` on its `models` release;
+  network, and this project publishes the converted graph as `mms-onnx-int8.zip` on its `models`
+  release;
   the original checkpoint is never shipped. Conversion changes nothing about the license, so the
   published graph stays non-commercial, with the attribution above.
 
@@ -107,7 +110,7 @@ Third-party code and assets
 - License: Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
   (https://creativecommons.org/licenses/by-nc-sa/4.0/) — NOT AGPL-3.0
 - Namioto's `--model yohane`, converted from HuggingFace by `scripts/export_align_model.py` and
-  published as `yohane-onnx.zip` on this project's `models` release, under the same terms as MMS.
+  published as `yohane-onnx-int8.zip` on this project's `models` release, under the same terms as MMS.
 - Consequence: an alignment produced with a converted aligner is non-commercial, like TempoCNN's and
   GAME's models.
 

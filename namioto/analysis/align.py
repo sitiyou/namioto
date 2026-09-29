@@ -35,7 +35,9 @@ import math
 import pathlib
 import sys
 import time
+import zipfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
+from contextlib import suppress
 from dataclasses import dataclass
 from typing import Any, Protocol
 
@@ -77,6 +79,8 @@ MODEL_FILE = "model.onnx"
 # the half-precision copy a GPU run prefers, written beside it by `--precision fp16`: the WebGPU
 # provider runs it several times faster than the fp32 graph and nearly as exactly
 FP16_FILE = "model.fp16.onnx"
+# the registry entry that copy is published under
+FP16_KEY = "aligner_fp16"
 # the WebGPU provider holds a reduction's divisor in the element type, so the mean and the variance
 # of a whole utterance - more samples than fp16's 65504 - come back as infinities and normalise the
 # audio by the wrong scale. Those reductions run on the CPU instead: exact, and one copy of four
@@ -373,6 +377,25 @@ def model_file(directory: str | pathlib.Path, provider: str) -> pathlib.Path:
     directory = pathlib.Path(directory)
     half = directory / FP16_FILE
     return half if provider != "cpu" and half.is_file() else directory / MODEL_FILE
+
+
+def fetch_fp16(
+    directory: str | pathlib.Path,
+    provider: str,
+    model: str = DEFAULT_MODEL,
+    language: str = "ja",
+    progress: Callable[[int, int], None] | None = None,
+) -> None:
+    """Fetch the half-precision model a GPU run prefers, if the store's copy is not there yet.
+
+    Only the store's own directory is filled: a directory the caller pointed at is used as it stands,
+    so a conversion of one's own needs no download. A fetch that fails - offline, or while nothing is
+    published - leaves the shipped model in place, which runs slower rather than not at all.
+    """
+    if provider == "cpu" or pathlib.Path(directory) != model_dir(model, language):
+        return
+    with suppress(OSError, ValueError, zipfile.BadZipFile):
+        model_store.install(FP16_KEY, (model, language), progress=progress)
 
 
 class OnnxBackend:
@@ -769,8 +792,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
     try:
+        provider = devices.resolve(args.device)
         directory = resolve_model(args.dir, args.model, args.language)
-        backend = OnnxBackend(directory / MODEL_FILE, provider=devices.resolve(args.device))
+        fetch_fp16(directory, provider, args.model, args.language)
+        backend = OnnxBackend(model_file(directory, provider), provider=provider)
         dictionary, blank_id = load_dictionary(directory / VOCAB_FILE)
         segments = read_segments(args.segments)
     except (OSError, ValueError, KeyError) as error:

@@ -69,7 +69,15 @@ MODELS: dict[str, Model] = {
         env="NAMIOTO_ALIGN_MODEL",
         files=("model.onnx", "vocab.json"),
         hint="convert one with scripts/export_align_model.py",
-        asset="https://github.com/sitiyou/namioto/releases/download/models/{model}-onnx.zip",
+        asset="https://github.com/sitiyou/namioto/releases/download/models/{model}-onnx-int8.zip",
+    ),
+    # the aligner's half-precision copy of the same graphs, published apart: it is twice the size of
+    # the quantised model a CPU run loads, and only a device that can run it fetches it
+    "aligner_fp16": Model(
+        name="aligner_fp16",
+        env="NAMIOTO_ALIGN_MODEL",
+        files=("model.fp16.onnx",),
+        asset="https://github.com/sitiyou/namioto/releases/download/models/{model}-onnx-fp16.zip",
     ),
     "tempocnn": Model(
         name="tempocnn",

@@ -74,6 +74,7 @@ class Aligner(LoadingThread):
             self.message.emit(
                 tr("Loading the {model} model on {provider}\u2026", model=self.model, provider=self.provider)
             )
+            align.fetch_fp16(directory, self.provider, self.model, progress=self._downloading)
             backend = align.OnnxBackend(align.model_file(directory, self.provider), provider=self.provider)
             if self.chunk:
                 backend = align.ChunkedBackend(backend, progress=self.progress.emit)
@@ -101,6 +102,8 @@ class Aligner(LoadingThread):
         if not total:
             return
         percent = done * 100 // total
+        if percent < self._downloaded:  # the half-precision package starts a second download
+            self._downloaded = -10
         if percent >= self._downloaded + 10:
             self._downloaded = percent
             self.message.emit(tr("Downloading the {model} model\u2026 {percent}%", model=self.model, percent=percent))

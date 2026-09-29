@@ -18,6 +18,14 @@ def test_each_family_keeps_the_directory_it_already_uses(tmp_path, monkeypatch) 
     assert model_store.path("aligner", "mms", "ja") == tmp_path / "namioto" / "models" / "mms" / "ja"
 
 
+def test_the_aligner_packages_land_where_their_model_is(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+
+    assert model_store.path("aligner_fp16", "mms", "ja") == model_store.path("aligner", "mms", "ja")
+    assert model_store.MODELS["aligner"].url(("mms", "ja")).endswith("/models/mms-onnx-int8.zip")
+    assert model_store.MODELS["aligner_fp16"].url(("mms", "ja")).endswith("/models/mms-onnx-fp16.zip")
+
+
 def test_the_providers_a_name_stands_for() -> None:
     assert model_store.providers("cpu") == ("CPUExecutionProvider",)
     assert model_store.providers("cuda") == ("CUDAExecutionProvider", "CPUExecutionProvider")
