@@ -1187,8 +1187,13 @@ class PianoRollView(QGraphicsView):
                 return
             pitch = self.pitch_at(scene_pos.y())
             start = max(0.0, self._snap_floor_beats(scene_pos.x()))
+            duration = self._cell_beats()
+            # the inset leaves a strip above and below a note that the hit test misses, yet the
+            # click still reads as that note's pitch: without this the pen opens a note over it
+            if self.document.collides(pitch, start, duration, self.active_channel):
+                return
             self.begin_gesture("Draw note")
-            note = self.add_note(pitch, start, self._cell_beats())
+            note = self.add_note(pitch, start, duration)
             self._clear_selection()
             note.setSelected(True)
             self._grab_note = note

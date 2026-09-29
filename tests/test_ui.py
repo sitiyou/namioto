@@ -1484,6 +1484,22 @@ def test_the_pen_cannot_draw_over_a_note_of_its_own_pitch(window) -> None:
     window.view.clear_notes()
 
 
+def test_the_pen_cannot_open_a_note_over_one_of_its_pitch(window) -> None:
+    window.view.clear_notes()
+    window.edit.pen.click()
+    window.view.snap = 0.5
+    window.view.set_channels((Channel(channel=0),))
+    window.view.add_note(69, 2.1, 1.0)  # spans 2.1 to 3.1, off the grid
+    row = float(PITCH_MAX - 69) + 0.5  # the note's row, so a click misses the note but reads its pitch
+    window.view.centerOn(QPointF(2.1, row))
+
+    draw_note(window, QPointF(2.0, row))  # off the note, yet the cell it would open reaches into it
+    assert len(window.view.notes()) == 1  # the pen refuses instead of doubling the pitch
+    draw_note(window, QPointF(1.5, row))  # a cell that stops at the note's edge
+    assert len(window.view.notes()) == 2
+    window.view.clear_notes()
+
+
 def test_clicking_a_selected_note_leaves_only_it_selected(window) -> None:
     window.view.clear_notes()
     left = window.view.add_note(69, 2.0, 1.0)  # spans 2.0 to 3.0
