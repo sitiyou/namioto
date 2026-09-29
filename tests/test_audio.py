@@ -134,6 +134,41 @@ def test_the_notes_are_played_on_their_own_channel() -> None:
     ]
 
 
+def test_two_note_ons_for_one_pitch_are_both_released_on_stop() -> None:
+    port = FakePort()
+    player = MidiPortOut(port)
+
+    player.set_program([(69, 0.0, 1.0, 0), (69, 0.0, 1.0, 0)], 1.0, ((0, 0, 100),))
+    port.messages.clear()
+    player.play()
+    time.sleep(0.1)  # both note-ons of the one pitch are sounding
+    player.pause()
+
+    assert note_messages(port) == [
+        [NOTE_ON, 69, VELOCITY],
+        [NOTE_ON, 69, VELOCITY],
+        [NOTE_OFF, 69, 0],
+        [NOTE_OFF, 69, 0],  # one note-off per note-on, not one for the pitch
+    ]
+
+
+def test_a_note_ending_where_the_next_begins_is_released_first() -> None:
+    port = FakePort()
+    player = MidiPortOut(port)
+
+    player.set_program([(69, 0.1, 0.2, 0), (69, 0.3, 0.2, 0)], 1.0, ((0, 0, 100),))
+    port.messages.clear()
+    player.play()
+    time.sleep(0.35)  # 0.1 + 0.2 lands a bit past 0.3, where the next note starts
+    player.stop()
+
+    assert note_messages(port)[:3] == [
+        [NOTE_ON, 69, VELOCITY],
+        [NOTE_OFF, 69, 0],  # the pitch is let go before it is struck again
+        [NOTE_ON, 69, VELOCITY],
+    ]
+
+
 def test_the_external_synth_is_preferred_when_one_is_listening() -> None:
     player, name = open_player()
     assert isinstance(player, MidiPortOut)  # the machine's own patches beat the built-in synth

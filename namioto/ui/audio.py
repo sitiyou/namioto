@@ -20,6 +20,7 @@ NOTE_ON, NOTE_OFF, VELOCITY = 0x90, 0x80, 100
 PROGRAM_CHANGE = 0xC0  # program change per channel: which instrument the synth should use
 DEFAULT_PROGRAM = 0  # a grand piano
 CHANNEL_VOLUME = (0xB0, 0x07)  # control change 7: the volume of a channel, 0 to 127
+ALL_NOTES_OFF = 123  # control change 123: releases every note of a channel, the sweep's safety net
 DEFAULT_CHANNEL = (0, DEFAULT_PROGRAM, 100)  # what a program without channels still plays on
 SYNTH_NAMES = ("timidity", "fluidsynth", "qsynth", "wavetable")
 
@@ -312,7 +313,7 @@ class MidiPortOut(NotePlayer):
         self._start = 0.0
         self._started: float | None = None
         self._stopping = False
-        self._sounding: set[tuple[int, int]] = set()
+        self._sounding: dict[tuple[int, int], int] = {}  # (channel, pitch) -> note-ons still owed an off
         self._previews: dict[int, threading.Timer] = {}
         self._thread: threading.Thread | None = None
 
@@ -389,9 +390,12 @@ class MidiPortOut(NotePlayer):
         for timer in self._previews.values():
             timer.cancel()
         self._previews.clear()
-        for channel, pitch in tuple(self._sounding):  # a synth keeps sounding until it is told to stop
-            self._send(NOTE_OFF, pitch, 0, channel)
+        for (channel, pitch), count in tuple(self._sounding.items()):  # a synth keeps sounding until it is told to stop
+            for _ in range(count):
+                self._send(NOTE_OFF, pitch, 0, channel)
         self._sounding.clear()
+        for channel in tuple(self._programs):  # catches a voice the bookkeeping lost, which an exact sweep cannot
+            self.port.send_message([CHANNEL_VOLUME[0] | channel, ALL_NOTES_OFF, 0])
         self._started = None
         self._start = 0.0
 
@@ -422,7 +426,9 @@ class MidiPortOut(NotePlayer):
             begin = max(start, self._start)
             events.append(((begin - self._start) / self._speed, NOTE_ON, pitch, channel))
             events.append(((start + duration - self._start) / self._speed, NOTE_OFF, pitch, channel))
-        for offset, kind, pitch, channel in sorted(events, key=lambda event: event[0]):
+        # at one tick the previous note's off goes before the next note's on; rounding to the
+        # microsecond makes a start+duration that lost a bit against the next start count as one tick
+        for offset, kind, pitch, channel in sorted(events, key=lambda event: (round(event[0], 6), event[1])):
             if not self._wait_until(started + offset):
                 return
             self._send(kind, pitch, self.velocity if kind == NOTE_ON else 0, channel)
@@ -441,10 +447,13 @@ class MidiPortOut(NotePlayer):
 
     def _send(self, status: int, pitch: int, velocity: int, channel: int = 0) -> None:
         self.port.send_message([status | channel, pitch, velocity])
-        if status == NOTE_ON:
-            self._sounding.add((channel, pitch))
-        else:
-            self._sounding.discard((channel, pitch))
+        key = (channel, pitch)
+        if status == NOTE_ON:  # a synth voices every note-on of a pitch, so each is owed its own note-off
+            self._sounding[key] = self._sounding.get(key, 0) + 1
+        elif self._sounding.get(key):
+            self._sounding[key] -= 1
+            if not self._sounding[key]:
+                del self._sounding[key]
 
 
 class SilentPlayer(NotePlayer):
