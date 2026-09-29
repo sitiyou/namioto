@@ -7,7 +7,7 @@ the roll works in; the seconds a file or the audio uses are a conversion at that
 second home for the data.
 
 `MIN_DURATION` (a 64th note) is the floor this model keeps, so only a file may bring a note shorter
-than that.
+than that. `OVERLAP_SLACK` is the resolution below which two notes of one voice count as touching.
 """
 
 from __future__ import annotations
@@ -21,6 +21,12 @@ PITCH_MIN = 21
 PITCH_MAX = 108
 PITCH_COUNT = PITCH_MAX - PITCH_MIN + 1
 MIN_DURATION = 0.0625
+# A project keeps its times in seconds rounded to a tenth of a millisecond; at the fastest tempo
+# (300 bpm) that lets a note drift half a thousandth of a beat off the grid, its start and its end
+# alike. An exact overlap test then refuses an edit the grid calls legal, so anything under this is
+# touching. It is smaller than the 1/480 beat an exported MIDI tick stands for, so the two are the
+# same instant wherever they leave the editor.
+OVERLAP_SLACK = 1e-3
 
 
 @dataclass(eq=False)
@@ -94,9 +100,10 @@ class Document:
         """Whether a note of `pitch` on `channel` would share time with one already there.
 
         Only the same pitch on the same channel is refused - different pitches may sound together,
-        and a note touching another at its edge is not a clash. `ignore` holds the notes being moved
-        or resized, which are not obstacles to themselves. `index` is `index_by_voice` read against
-        the notes as they are now, which saves the caller a full scan per moved note.
+        and two notes whose spans overlap by less than `OVERLAP_SLACK` are touching, not clashing.
+        `ignore` holds the notes being moved or resized, which are not obstacles to themselves.
+        `index` is `index_by_voice` read against the notes as they are now, which saves the caller a
+        full scan per moved note.
         """
         end = start + duration
         ignored = ignore if isinstance(ignore, (set, frozenset)) else set(ignore)
@@ -105,8 +112,8 @@ class Document:
             note not in ignored
             and note.pitch == pitch
             and note.channel == channel
-            and note.start < end
-            and start < note.end
+            and note.start < end - OVERLAP_SLACK
+            and start < note.end - OVERLAP_SLACK
             for note in candidates
         )
 

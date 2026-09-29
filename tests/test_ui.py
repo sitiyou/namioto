@@ -1487,6 +1487,37 @@ def test_a_trim_cannot_reach_over_a_note_of_its_own_pitch(window) -> None:
     window.view.clear_notes()
 
 
+def test_a_trim_reaches_a_grid_line_a_hair_past_its_neighbour(window) -> None:
+    window.view.clear_notes()
+    window.edit.pen.click()
+    window.view.snap = 0.5
+    left = window.view.add_note(69, 2.0, 0.5)  # spans 2.0 to 2.5
+    # the neighbour lands a hair past the 3.0 line, the way a note comes back from a project file
+    # that rounded its seconds; the snap line the grid offers must still be reachable
+    window.view.add_note(69, 2.9999, 1.0)
+    row = float(PITCH_MAX - 69) + 0.5
+    window.view.centerOn(QPointF(2.5, row))
+
+    roll_mouse(window, QEvent.Type.MouseButtonPress, QPointF(2.45, row))  # the right edge
+    roll_mouse(window, QEvent.Type.MouseMove, QPointF(2.9, row))  # 2.0 to 3.0, the next snap line
+    assert (left.start, left.end) == (2.0, 3.0)  # the hair it overlaps is below the model's slack
+    roll_mouse(window, QEvent.Type.MouseButtonRelease, QPointF(2.9, row))
+    window.view.clear_notes()
+
+
+def test_the_pen_opens_a_cell_that_overlaps_its_neighbour_by_a_hair(window) -> None:
+    window.view.clear_notes()
+    window.edit.pen.click()
+    window.view.snap = 0.5
+    window.view.add_note(69, 2.0, 0.5)  # spans 2.0 to 2.5
+    window.view.add_note(69, 2.9999, 1.0)  # a hair off the 3.0 line, as a project file leaves it
+    row = float(PITCH_MAX - 69) + 0.5
+
+    draw_note(window, QPointF(2.7, row), QPointF(2.7, row))  # one cell: 2.5 to 3.0
+    assert (window.view.notes()[-1].start, window.view.notes()[-1].end) == (2.5, 3.0)
+    window.view.clear_notes()
+
+
 def test_the_pen_cannot_draw_over_a_note_of_its_own_pitch(window) -> None:
     window.view.clear_notes()
     window.edit.pen.click()
