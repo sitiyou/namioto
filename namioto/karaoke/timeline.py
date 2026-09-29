@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import hashlib
 import math
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 
 from namioto.karaoke.model import Group, KrcError, Line, Lyrics, Unit, Word
@@ -600,7 +600,9 @@ def map_faithful(text: str, notes: Sequence[tuple[float, float]]) -> list[list[P
     The `.krc` carries no times, so the notes are the times: a unit of `mora` notes takes that many
     in reading order, and everything stops when the notes run out. Its sounds share those notes - a
     unit with more notes than sounds holds one over several (`あ.2`), one with fewer puts several on
-    a note (`(あい).1`), which shows as a group. This is a reading of the file, not an edit of it.
+    a note (`(あい).1`), which shows as a group. A ruby is read part by part, so an inner `.N` or
+    group (`確信犯[かく,(しん).1,はん]`) speaks for its own sounds. This is a reading of the file, not
+    an edit of it.
     """
     found: list[list[Placement]] = []
     at = 0
@@ -611,43 +613,81 @@ def map_faithful(text: str, notes: Sequence[tuple[float, float]]) -> list[list[P
             for top, unit in enumerate(line.units):
                 if not unit.natural_mora:
                     continue
-                sounds = sum(1 for item in loc if item[0] == top)
-                taken = notes[at : at + unit.mora]
-                row.extend(_faithful_unit(sounds, taken, at, notes))
-                at += len(taken)
+                members = [index for index, item in enumerate(loc) if item[0] == top]
+                for leaf, owned in _faithful_leaves(unit, loc, members):
+                    taken = notes[at : at + leaf.mora]
+                    row.extend(_faithful_unit(len(owned), taken, at, notes, leaf.mora))
+                    at += len(taken)
             found.append(row)
     return found
 
 
+def _faithful_leaves(unit: Unit, loc: Sequence[tuple], members: Sequence[int]) -> Iterator[tuple[Unit, list[int]]]:
+    """The leaf Units of one parsed Unit, each with the sound indices it owns, in reading order.
+
+    A ruby is descended into part by part, so an inner `.N` or group divides the notes for its own
+    sounds; a unit that carries a `.N` itself speaks for all of its sounds at once, so it is a leaf
+    and its parts cannot divide it.
+    """
+    if unit.ruby is None or unit.override is not None:
+        yield unit, list(members)
+        return
+    for part_index, part in enumerate(unit.ruby.parts):
+        for inner_index, inner in enumerate(part):
+            owned = [index for index in members if loc[index][2] == part_index and loc[index][3] == inner_index]
+            yield inner, owned
+
+
 def _faithful_unit(
-    natural: int, taken: Sequence[tuple[float, float]], base: int, notes: Sequence[tuple[float, float]]
+    natural: int, taken: Sequence[tuple[float, float]], base: int, notes: Sequence[tuple[float, float]], slots: int
 ) -> list[Placement]:
-    """`natural` sounds on the `taken` notes (indices from `base`): a held tail, shared notes, or
-    a point where no note is left for them (`.0`)."""
-    if not taken:
-        point = notes[base][0] if base < len(notes) else (notes[-1][1] if notes else None)
+    """`natural` sounds over `slots` note slots from `base`: held, shared, or run out.
+
+    `taken` is the notes actually there. A slot past its end has no note to sit on, so its sounds
+    come back zero at the point the notes ran out on.
+    """
+    if slots <= 0:
+        point = _faithful_point(base, notes)
         return [Placement(span=(point, point), zero=True) for _ in range(natural)]
-    if len(taken) >= natural:
-        out = []
+    out: list[Placement] = []
+    if slots >= natural:
         for index in range(natural):
-            low = index * len(taken) // natural
-            high = (index + 1) * len(taken) // natural
+            low = index * slots // natural
+            high = (index + 1) * slots // natural
             part = taken[low:high]
-            out.append(Placement(span=(part[0][0], part[-1][1]), notes=tuple(range(base + low, base + high))))
+            if part:
+                held = tuple(range(base + low, base + low + len(part)))
+                out.append(Placement(span=(part[0][0], part[-1][1]), notes=held))
+            else:
+                point = _faithful_point(base + low, notes)
+                out.append(Placement(span=(point, point), zero=True))
         return out
-    low, high = taken[0][0], taken[-1][1]
-    width = (high - low) / natural
-    spans = [(low + index * width, low + (index + 1) * width) for index in range(natural)]
-    covered: list[list[int]] = [[] for _ in range(natural)]
-    group = [-1] * natural
-    for offset, note in enumerate(taken):
-        holders = [index for index, (start, end) in enumerate(spans) if start < note[1] and end > note[0]]
-        for index in holders:
-            covered[index].append(base + offset)
-        if len(holders) > 1:
-            for index in holders:
-                group[index] = base + offset
-    return [Placement(span=spans[i], notes=tuple(covered[i]), group=group[i]) for i in range(natural)]
+    for slot in range(slots):
+        low = slot * natural // slots
+        high = (slot + 1) * natural // slots
+        if slot < len(taken) and high > low:
+            start, end = taken[slot]
+            width = (end - start) / (high - low)
+            for index in range(low, high):
+                out.append(
+                    Placement(
+                        span=(start + (index - low) * width, start + (index - low + 1) * width),
+                        notes=(base + slot,),
+                        group=base + slot if high - low > 1 else -1,
+                    )
+                )
+        else:
+            point = _faithful_point(base + slot, notes)
+            for _index in range(low, high):
+                out.append(Placement(span=(point, point), zero=True))
+    return out
+
+
+def _faithful_point(index: int, notes: Sequence[tuple[float, float]]) -> float | None:
+    """Where a sound with no note is drawn: a slot's own onset, else the end the notes ran out on."""
+    if not notes:
+        return None
+    return notes[index][0] if index < len(notes) else notes[-1][1]
 
 
 def map_sounds(

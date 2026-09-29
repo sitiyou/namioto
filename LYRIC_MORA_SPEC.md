@@ -282,8 +282,9 @@ group    # 共享的 NOTE 下标；-1 表示独立
 | 标签自适应 | `tests/test_ui.py::test_a_label_is_dropped_when_it_does_not_fit` |
 | `(...)` 按字拆 Sound | `tests/test_timeline.py::test_a_group_reads_back_its_own_sounds` |
 | Sound 折回 `.krc`（ruby 内 / 拆旧 group） | `tests/test_timeline.py::test_a_group_folds_inside_one_ruby_part`、`test_a_group_dissolves_a_group_it_starts_inside`、`test_grouping_refuses_a_crossing_run_and_a_lone_sound` |
-| 忠实模式映射 | `tests/test_timeline.py::test_faithful_holds_a_word_with_more_notes_than_sounds`、`test_faithful_shares_a_note_between_sounds`、`test_faithful_stops_when_the_notes_run_out`、`test_faithful_puts_a_dot_n_sound_where_it_holds_off` |
+| 忠实模式映射 | `tests/test_timeline.py::test_faithful_holds_a_word_with_more_notes_than_sounds`、`test_faithful_shares_a_note_between_sounds`、`test_faithful_stops_when_the_notes_run_out`、`test_faithful_puts_a_dot_n_sound_where_it_holds_off`、`test_faithful_reads_a_ruby_part_by_part`、`test_faithful_confines_a_shared_sound_to_its_note` |
 | 只读 `.0` 可画 | `tests/test_ui.py::test_read_mode_draws_a_dot_n_sound_where_it_holds_off` |
+| 只读 ruby 逐 part | `tests/test_ui.py::test_read_mode_reads_a_ruby_part_by_part` |
 | ruby 词也能成组（显示） | `tests/test_timeline.py::test_rubied_sounds_that_share_a_note_group_on_it`、`tests/test_ui.py::test_a_grouped_run_is_marked_on_the_strip` |
 
 ---
@@ -398,6 +399,11 @@ flatten（`_row(split_groups=True)`）后，每个 Sound 来自四类容器之�
   NOTE 槽数；按顺序把这些槽与 MIDI NOTE 一一对应，**一方不够就停**（不重排、不重叠、不 doubt）。
   槽分给 `natural_mora` 个 Sound：`mora > Sound 数` 是 held（一个 Sound 跨多个 NOTE），
   `mora < Sound 数` 是 group（多个 Sound 共用一个 NOTE）。
+- ruby 词**逐 part 下钻**：每个 inner `Unit` 的 `mora`（含 inner `.N`/group）管它自己的 Sound
+  —— `確信犯[かく,(しん).1,はん]` 的 `(しん).1` 只吃第 3 个槽，两个 Sound 在该 NOTE 内对半分。
+  整个词带 `override`（`.N` 落在词本身）时不再下钻，直接在整个词的槽里分。
+- 共用一个 NOTE 的 Sound，其 span **只在该 NOTE 内切分**，不跨到下一个 NOTE、也不越过 rest。
+- NOTE 用尽时其槽里的 Sound 落 `.0`（灰、点），不借前一个 NOTE 的空间。
 - 一个 Sound 占多个 NOTE 时，它的 span = 这些 NOTE 从第一个 start 到最后一个 end 的并集
   （`あ.2`：あ 从 NOTE1.start 到 NOTE2.end）。
 - `.0`（`mora == 0`）或 NOTE 用尽的 Sound 不占 NOTE，但 span 是一个**点**（让位给的下一个

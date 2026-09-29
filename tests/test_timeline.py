@@ -359,6 +359,31 @@ def test_faithful_puts_a_dot_n_sound_where_it_holds_off():
     assert found[0][2].span == (1.0, 2.0)
 
 
+def test_faithful_reads_a_ruby_part_by_part():
+    # 確信犯[かく,(しん).1,はん]: five notes for six sounds, so the `.1` group gets one note of
+    # its own and its two sounds share that third slot - not the whole span spread over time
+    text = "確信犯[かく,(しん).1,はん]"
+    found = map_faithful(text, [(i * 1.0, i * 1.0 + 1.0) for i in range(5)])
+    assert [placement.span for placement in found[0]] == [
+        (0.0, 1.0),
+        (1.0, 2.0),
+        (2.0, 2.5),
+        (2.5, 3.0),
+        (3.0, 4.0),
+        (4.0, 5.0),
+    ]
+    assert [placement.notes for placement in found[0]] == [(0,), (1,), (2,), (2,), (3,), (4,)]
+    assert [placement.group for placement in found[0]] == [-1, -1, 2, 2, -1, -1]
+
+
+def test_faithful_confines_a_shared_sound_to_its_note():
+    # (あいう).2: three sounds over two notes, so two share the second note and none reaches into
+    # the rest between the notes
+    found = map_faithful("(あいう).2", [(0.0, 1.0), (2.0, 3.0)])
+    assert [placement.span for placement in found[0]] == [(0.0, 1.0), (2.0, 2.5), (2.5, 3.0)]
+    assert [placement.notes for placement in found[0]] == [(0,), (1,), (1,)]
+
+
 @pytest.mark.parametrize("text", ["あん", "季節[き,せつ]", "がっこう", "(幾千)[いくせん]"])
 def test_with_counts_leaves_the_readings_alone(text):
     counts = [[1] * len(line.sounds) for line in sound_lines(text)]

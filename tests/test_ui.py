@@ -4652,6 +4652,19 @@ def test_read_mode_draws_a_dot_n_sound_where_it_holds_off(own_window, tmp_path) 
     assert after - held == pytest.approx(SOUND_GAP_PX)
 
 
+def test_read_mode_reads_a_ruby_part_by_part(own_window, tmp_path) -> None:
+    own_window.transport.bpm.setValue(60.0)  # a beat is a second, so notes read in seconds
+    own_window.view.set_channels((Channel(channel=0),))
+    own_window.view.set_notes(tuple((60 + i, float(i), 1.0, 0) for i in range(5)))
+    own_window.project_path = tmp_path / "song.nto"
+    text = "確信犯[かく,(しん).1,はん]\n"
+    own_window._stored_lyrics = project.Lyrics(text=text, key=text_key(text), mode="read")
+    own_window._watch_lyrics()
+
+    # the `.1` group's two sounds share the third note; か, く, は and ん take one each
+    assert own_window.view.lyric_times == (((0.0, 1.0), (1.0, 2.0), (2.0, 2.5), (2.5, 3.0), (3.0, 4.0), (4.0, 5.0)),)
+
+
 def test_read_mode_refuses_to_align(own_window, tmp_path) -> None:
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(text="あい\n", key=text_key("あい\n"), mode="read")
