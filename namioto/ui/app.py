@@ -149,6 +149,7 @@ class _Binding:
     signal: Any
     show: Callable[[], None] | None = None
     override: str = ""
+    remember: Callable[[], bool] | None = None
 
 
 class TempoLoader(LoadingThread):
@@ -440,6 +441,7 @@ class MainWindow(QMainWindow):
                 self.mix.midi_volume.set_value,
                 self.mix.midi_volume.value_changed,
                 self._on_midi_volume,
+                remember=lambda: not self.player.silent,
             ),
             _Binding(
                 "playback",
@@ -615,8 +617,14 @@ class MainWindow(QMainWindow):
         self.player.set_program(notes, self.transport.speed.value(), programs)
 
     def _remember_configuration(self) -> None:
-        """The bar values are the settings, so what is on screen is what comes back next time."""
+        """The bar values are the settings, so what is on screen is what comes back next time.
+
+        A bar the program filled in rather than the user - the silent MIDI volume - is not on
+        screen either, so its binding is left alone.
+        """
         for binding in self._bindings:
+            if binding.remember is not None and not binding.remember():
+                continue
             if binding.override and binding.override in self._display_overrides:
                 continue
             store.set_value(self.settings, binding.section, binding.name, binding.read())

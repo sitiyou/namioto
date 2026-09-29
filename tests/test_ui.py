@@ -2206,6 +2206,17 @@ def test_a_silent_player_takes_the_midi_slider_out_of_reach(window) -> None:
     assert window.mix.midi_volume.isEnabled()
 
 
+def test_a_silent_player_keeps_the_midi_volume_out_of_the_settings(window) -> None:
+    window.mix.midi_volume.set_value(70.0)
+    window.player.silent = True
+    window._sync_midi_volume()
+    window._remember_configuration()
+    assert window.settings.playback.midi_volume == 70
+    window.player.silent = False
+    window.mix.midi_volume.set_value(70.0)
+    window._sync_midi_volume()
+
+
 def test_midi_sink_keeps_the_position_without_playing() -> None:
     sink = MidiSink()
     sink.set_program([(69, 0.0, 1.0)], 1.0)
