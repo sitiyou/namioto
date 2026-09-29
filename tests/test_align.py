@@ -310,6 +310,18 @@ def test_a_gpu_run_fetches_the_half_precision_model(tmp_path, monkeypatch):
     assert fetched == [(align.FP16_KEY, ("mms", "ja"))]
 
 
+def test_an_installed_half_precision_model_is_not_fetched_again(tmp_path, monkeypatch):
+    fetched = []
+    monkeypatch.setattr(align.model_store, "install", lambda name, parts, progress=None: fetched.append((name, parts)))
+    directory = align.model_dir("mms", "ja")
+    directory.mkdir(parents=True, exist_ok=True)
+    (directory / align.FP16_FILE).write_bytes(b"")
+
+    align.fetch_fp16(directory, "webgpu", "mms")
+
+    assert fetched == []
+
+
 def test_a_fetch_that_fails_leaves_the_shipped_model(tmp_path, monkeypatch):
     def refuse(*args, **kwargs):
         raise OSError("no network")

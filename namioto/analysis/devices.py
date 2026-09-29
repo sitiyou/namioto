@@ -116,9 +116,10 @@ def _register(ort) -> None:
             continue
         try:
             plugin = importlib.import_module(device.plugin)
-        except ImportError:
+            library = plugin.get_library_path()
+        except (ImportError, RuntimeError):
             continue
-        ort.register_execution_provider_library(device.key, plugin.get_library_path())
+        ort.register_execution_provider_library(device.key, library)
         _REGISTERED.add(device.key)
 
 

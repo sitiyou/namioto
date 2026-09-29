@@ -394,6 +394,8 @@ def fetch_fp16(
     """
     if provider == "cpu" or pathlib.Path(directory) != model_dir(model, language):
         return
+    if model_store.installed(FP16_KEY, model, language):
+        return
     with suppress(OSError, ValueError, zipfile.BadZipFile):
         model_store.install(FP16_KEY, (model, language), progress=progress)
 

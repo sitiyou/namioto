@@ -104,15 +104,16 @@ def drop_attention_mask(graph) -> int:
         for index, name in enumerate(node.input):
             if name in replace:
                 node.input[index] = replace[name]
-    producers = {name: node for node in graph.node for name in node.output}
+    nodes = list(graph.node)
+    producers = {name: index for index, node in enumerate(nodes) for name in node.output}
     needed, frontier = set(), [output.name for output in graph.output]
     while frontier:
-        node = producers.get(frontier.pop())
-        if node is None or node.name in needed:
+        index = producers.get(frontier.pop())
+        if index is None or index in needed:
             continue
-        needed.add(node.name)
-        frontier.extend(node.input)
-    kept = [node for node in graph.node if node.name in needed]
+        needed.add(index)
+        frontier.extend(nodes[index].input)
+    kept = [node for index, node in enumerate(nodes) if index in needed]
     graph.ClearField("node")
     graph.node.extend(kept)
     return len(dropped)

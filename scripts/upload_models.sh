@@ -286,5 +286,9 @@ for asset in "${fresh[@]}"; do
     remote_size="$(awk -v name="$name" '$1 == name { print $2 }' "$OUT/assets.txt")"
     [ "$remote_size" == "$local_size" ] || die "$name is $remote_size bytes on the release, not $local_size"
 done
-say "every asset this run uploaded matches its local zip"
+if [ "${#fresh[@]}" -gt 0 ]; then
+    say "every asset this run uploaded matches its local zip"
+else
+    say "nothing to upload; the release already holds every asset"
+fi
 registry_hint
