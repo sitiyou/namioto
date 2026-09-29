@@ -20,7 +20,8 @@ barely supports - which is what `problems()` is for.
 
 A whole song is not run in one pass: `ChunkedBackend` walks it in overlapping chunks, because a
 wav2vec2 graph attends over its whole input and one pass is quadratic in frames; the `chunk`
-parameter of `PARAMETERS` (on by default) turns that off. The model's pass is cached on its own
+parameter of `PARAMETERS` picks between one pass, fixed chunks, and chunks whose seams are cut in
+the silences (the default). The model's pass is cached on its own
 (`save_emissions`/`load_emissions`, keyed without the lyrics, since the encoder never sees them) and
 the raw run beside it (`save_alignment`/`find_alignment`), so a changed lyric re-runs only the CTC
 search. The run is fitted to the voice the way FA-Kara does (`correct_times`).
@@ -46,6 +47,7 @@ import numpy as np
 
 from namioto import settings as store
 from namioto.analysis import devices, model_store
+from namioto.analysis.slicing import Slicer
 from namioto.settings import Field
 from namioto.utils import config_dir, data_dir, file_stamp, resolved
 
@@ -66,6 +68,11 @@ COLLAPSE_RUN = 3
 # global CTC path.
 CHUNK_SECONDS = 60.0
 CHUNK_OVERLAP_SECONDS = 4.0
+# where the seam of a silence-aware chunk lands: the thresholds and run lengths GAME's `Slicer` takes
+SLICE_THRESHOLD_DB = -40.0
+SLICE_MIN_LENGTH_MS = 1000
+SLICE_MIN_INTERVAL_MS = 200
+SLICE_MAX_SIL_KEPT_MS = 100
 # the energy windows the voice detector reads: a short one finds the tail a sound ends in, a wide
 # one the stretch a line's head sits in; a frame counts as voice above a fraction of the loud
 # percentile
@@ -91,6 +98,11 @@ MODEL_ENV = model_store.MODELS["aligner"].env
 LANGUAGES = ("ja",)
 MODELS = ("mms", "yohane")
 DEFAULT_MODEL = "mms"
+# the ways the model's pass can be cut up: one pass over the whole song, fixed-length chunks, or
+# chunks whose seams are pulled into the silences
+SLICE_MODES = ("off", "fixed", "silence")
+SLICE_LABELS = ("Off", "Fixed chunks", "Silence-aware chunks")
+DEFAULT_MODE = "silence"
 # the cells per quarter note the window offers to snap with; a label is the note that cell is
 QUANTIZE_CELLS = (0, 1, 2, 4, 8, 16, 32)
 QUANTIZE_LABELS = ("Off", "1/4", "1/8", "1/16", "1/32", "1/64", "1/128")
@@ -120,10 +132,13 @@ PARAMETERS: tuple[Field, ...] = (
     ),
     Field(
         "chunk",
-        "bool",
-        True,
+        "choice",
+        DEFAULT_MODE,
         "Chunked inference",
-        "Run the model in overlapping chunks instead of one pass over the whole song, which bounds memory",
+        "Run the model in overlapping chunks instead of one pass over the whole song, which bounds memory; "
+        "the silence-aware cut puts the seams in the rests, the fixed one every minute",
+        choices=SLICE_MODES,
+        labels=SLICE_LABELS,
     ),
 )
 
@@ -245,13 +260,13 @@ def _store_path(audio: str | pathlib.Path) -> pathlib.Path:
     return alignments_root() / f"{digest}.json"
 
 
-def alignment_key(audio: str | pathlib.Path, model: str, provider: str, text: str, chunk: bool = True) -> str:
+def alignment_key(audio: str | pathlib.Path, model: str, provider: str, text: str, chunk: str = DEFAULT_MODE) -> str:
     """What makes two alignments the same one: the audio, the model, where it runs, the lyrics and
-    whether the model ran in chunks.
+    how the model's pass was cut up.
 
     The tempo and the grid offset are not part of it: they only snap the result, so changing either
-    re-snaps a stored alignment instead of running the model again. Chunking is, because it is part
-    of how the model ran and so of the times it found.
+    re-snaps a stored alignment instead of running the model again. The cutting mode is, because it
+    is part of how the model ran and so of the times it found.
     """
     identity = {
         "audio": list(file_stamp(audio)),
@@ -287,7 +302,7 @@ def load_alignments(audio: str | pathlib.Path) -> dict[str, dict]:
     return {key: entry for key, entry in entries.items() if isinstance(entry, dict)}
 
 
-def find_alignment(audio: str | pathlib.Path, model: str, provider: str, text: str, chunk: bool = True):
+def find_alignment(audio: str | pathlib.Path, model: str, provider: str, text: str, chunk: str = DEFAULT_MODE):
     """The lines and doubts an alignment with these exact inputs already found, or None when there is none."""
     entry = load_alignments(audio).get(alignment_key(audio, model, provider, text, chunk))
     if not entry:
@@ -300,7 +315,7 @@ def find_alignment(audio: str | pathlib.Path, model: str, provider: str, text: s
 
 
 def save_alignment(
-    audio: str | pathlib.Path, model: str, provider: str, text: str, rows, problems, chunk: bool = True
+    audio: str | pathlib.Path, model: str, provider: str, text: str, rows, problems, chunk: str = DEFAULT_MODE
 ) -> pathlib.Path:
     """Keep one entry per alignment key: running the same one again replaces what it found last time."""
     entries = load_alignments(audio)
@@ -328,8 +343,8 @@ def _emissions_path(key: str) -> pathlib.Path:
     return emissions_root() / f"{key}.npy"
 
 
-def emissions_key(audio: str | pathlib.Path, model: str, provider: str, chunk: bool = True) -> str:
-    """What makes two model passes the same: the audio, the model, where it runs and chunking.
+def emissions_key(audio: str | pathlib.Path, model: str, provider: str, chunk: str = DEFAULT_MODE) -> str:
+    """What makes two model passes the same: the audio, the model, where it runs and how it was cut.
 
     The lyrics are not part of it, and neither are the tempo and the grid offset: the model never
     sees them, so a changed `.krc` reuses the pass and only the search runs again.
@@ -343,7 +358,9 @@ def emissions_key(audio: str | pathlib.Path, model: str, provider: str, chunk: b
     return hashlib.sha1(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def load_emissions(audio: str | pathlib.Path, model: str, provider: str, chunk: bool = True) -> np.ndarray | None:
+def load_emissions(
+    audio: str | pathlib.Path, model: str, provider: str, chunk: str = DEFAULT_MODE
+) -> np.ndarray | None:
     """The model's log-softmax pass over the whole audio, or None when it was never kept."""
     try:
         return np.load(_emissions_path(emissions_key(audio, model, provider, chunk)))
@@ -352,7 +369,7 @@ def load_emissions(audio: str | pathlib.Path, model: str, provider: str, chunk: 
 
 
 def save_emissions(
-    audio: str | pathlib.Path, model: str, provider: str, chunk: bool, emission: np.ndarray
+    audio: str | pathlib.Path, model: str, provider: str, chunk: str, emission: np.ndarray
 ) -> pathlib.Path:
     """Keep the pass so a changed lyric re-runs only the search, not the model."""
     target = _emissions_path(emissions_key(audio, model, provider, chunk))
@@ -361,7 +378,7 @@ def save_emissions(
     return target
 
 
-def has_emissions(audio: str | pathlib.Path, model: str, provider: str, chunk: bool = True) -> bool:
+def has_emissions(audio: str | pathlib.Path, model: str, provider: str, chunk: str = DEFAULT_MODE) -> bool:
     """Whether a pass with these inputs was kept, without reading it back."""
     return _emissions_path(emissions_key(audio, model, provider, chunk)).exists()
 
@@ -423,7 +440,9 @@ class ChunkedBackend:
     only its frames with `overlap` of audio on either side are kept, so consecutive chunks tile the
     one long pass's grid exactly and each kept frame still had its neighbours in the window. The
     frames at the seam are the ones a long pass would have seen with less context, which is the
-    price of bounding memory.
+    price of bounding memory. With `silence` a seam is pulled back to the lowest point of a rest the
+    `Slicer` found, so a rest is not charged to two windows; a stretch with no rest worth cutting
+    still falls back to the fixed `step`.
     """
 
     def __init__(
@@ -432,35 +451,70 @@ class ChunkedBackend:
         *,
         chunk_seconds: float = CHUNK_SECONDS,
         overlap_seconds: float = CHUNK_OVERLAP_SECONDS,
+        silence: bool = False,
         progress: Callable[[int, int], None] | None = None,
     ):
         self.backend = backend
         self.chunk = max(FRAME_SAMPLES, int(chunk_seconds * SAMPLE_RATE) // FRAME_SAMPLES * FRAME_SAMPLES)
         overlap = max(0, int(overlap_seconds * SAMPLE_RATE) // FRAME_SAMPLES * FRAME_SAMPLES)
         self.overlap = min(overlap, self.chunk - FRAME_SAMPLES)
+        self.silence = silence
         self.progress = progress
+
+    def _silence_cuts(self, values: np.ndarray) -> list[int]:
+        """The frame-aligned samples a `Slicer` cuts at, ascending; the audio's ends are left out."""
+        slicer = Slicer(
+            sr=SAMPLE_RATE,
+            threshold=SLICE_THRESHOLD_DB,
+            min_length=SLICE_MIN_LENGTH_MS,
+            min_interval=SLICE_MIN_INTERVAL_MS,
+            max_sil_kept=SLICE_MAX_SIL_KEPT_MS,
+        )
+        cuts = {
+            min(int(round(chunk["offset"] * SAMPLE_RATE)), values.size) // FRAME_SAMPLES * FRAME_SAMPLES
+            for chunk in slicer.slice(values)
+            if chunk["offset"] > 0
+        }
+        return sorted(cuts)
+
+    def _regions(self, values: np.ndarray) -> list[tuple[int, int]]:
+        """The sample range each pass keeps, tiling `[0, values.size)`.
+
+        A region is at most `step` long and carries `pad` of context on either side, so every window
+        fits `chunk`; the first region has no audio to its left, so it may keep `pad` more.
+        """
+        step = self.chunk - self.overlap
+        pad = self.overlap // 2
+        cuts = self._silence_cuts(values) if self.silence else []
+        regions = []
+        start, limit = 0, step + pad
+        while values.size - start > limit:
+            target = start + limit
+            end = max((cut for cut in cuts if start < cut <= target), default=target)
+            regions.append((start, end))
+            start, limit = end, step
+        regions.append((start, values.size))
+        return regions
 
     def logits(self, waveform: np.ndarray) -> np.ndarray:
         values = np.asarray(waveform, dtype=np.float32)
         if values.size <= self.chunk:
             return self.backend.logits(values)
-        step = self.chunk - self.overlap
         pad = self.overlap // 2
-        starts = list(range(0, values.size, step))
+        regions = self._regions(values)
         pieces = []
-        for index, start in enumerate(starts):
-            end = min(start + self.chunk, values.size)
-            window = values[start:end]
+        for index, (start, end) in enumerate(regions):
+            first = max(0, start - pad)
+            window = values[first : min(values.size, end + pad)]
             if window.size < MIN_SAMPLES:
                 window = np.pad(window, (0, MIN_SAMPLES - window.size))
             found = self.backend.logits(window)
-            base = start // FRAME_SAMPLES
-            first = base if index == 0 else (start + pad) // FRAME_SAMPLES
-            last = (values.size if end >= values.size else start + step + pad) // FRAME_SAMPLES
-            low, high = max(first, base), min(last, base + found.shape[0])
+            base = first // FRAME_SAMPLES
+            low = start // FRAME_SAMPLES
+            high = min(end // FRAME_SAMPLES, base + found.shape[0])
             pieces.append(found[low - base : high - base])
             if self.progress is not None:
-                self.progress(index + 1, len(starts))
+                self.progress(index + 1, len(regions))
         return np.concatenate(pieces, axis=0)
 
 

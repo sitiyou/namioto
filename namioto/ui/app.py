@@ -1292,7 +1292,7 @@ class MainWindow(QMainWindow):
         choices = align.load_parameters()
         model = choices["model"]
         provider = devices.resolve(choices["device"])
-        chunk = bool(choices["chunk"])
+        chunk = choices["chunk"]
         if not align.is_installed(model) or not align.has_emissions(self.audio_path, model, provider, chunk):
             self.statusBar().showMessage(i18n.tr("The lyrics changed — align again to move them onto the notes"))
             return

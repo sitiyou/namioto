@@ -4754,10 +4754,10 @@ def test_a_cached_alignment_is_reused_and_resnapped(own_window, monkeypatch) -> 
 
 
 def test_a_cached_whole_song_alignment_is_reused_when_chunking_is_off(own_window, monkeypatch) -> None:
-    align.save_alignment("/tmp/vocal.wav", "mms", "cpu", "あん\n", [[(0.1, 0.6), (0.6, 1.1)]], [], chunk=False)
+    align.save_alignment("/tmp/vocal.wav", "mms", "cpu", "あん\n", [[(0.1, 0.6), (0.6, 1.1)]], [], chunk="off")
     monkeypatch.setattr(align, "align", lambda *args, **kwargs: pytest.fail("must not run the model"))
     dialog = AlignDialog("/tmp/vocal.wav", "あん\n", 120.0, parent=own_window)
-    parameter_writer(dialog, "chunk")(False)
+    parameter_writer(dialog, "chunk")("off")
     got: list = []
     dialog.aligned.connect(lambda times, model: got.append(times))
 
@@ -4772,16 +4772,16 @@ def test_the_align_dialog_remembers_what_was_chosen(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
     parameter_writer(dialog, "model")("yohane")
     parameter_writer(dialog, "quantize")(4)
-    parameter_writer(dialog, "chunk")(False)
+    parameter_writer(dialog, "chunk")("off")
     dialog.reject()
 
     again = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
-    assert again.parameters() == {"model": "yohane", "device": "cpu", "quantize": 4, "chunk": False}
+    assert again.parameters() == {"model": "yohane", "device": "cpu", "quantize": 4, "chunk": "off"}
 
 
 def test_the_align_dialog_runs_chunked_unless_told_otherwise(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
-    assert dialog.parameters()["chunk"] is True
+    assert dialog.parameters()["chunk"] == align.DEFAULT_MODE
 
 
 def test_the_align_dialog_leaves_the_times_alone_by_default(own_window) -> None:
@@ -4893,7 +4893,7 @@ def test_auto_align_reuses_the_cached_pass(lyrics_window, monkeypatch, tmp_path)
 
     lyrics_window._auto_align()
 
-    assert _FakeAligner.calls == [(str(tmp_path / "vocal.wav"), "あい\n", "mms", "cpu", True)]
+    assert _FakeAligner.calls == [(str(tmp_path / "vocal.wav"), "あい\n", "mms", "cpu", align.DEFAULT_MODE)]
     assert lyrics_window.view.lyric_raw == (((0.0, 1.0), (1.0, 2.0)),)
     assert lyrics_window._auto_align_thread is None
 

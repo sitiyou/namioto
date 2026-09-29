@@ -55,8 +55,8 @@ DICTIONARY = {"[pad]": 0, "a": 1, "b": 2}
 def test_the_alignment_parameters_are_remembered_and_checked():
     assert align.load_parameters() == align.default_parameters()
 
-    align.save_parameters({"model": "yohane", "device": "gpu", "quantize": 4, "chunk": False})
-    assert align.load_parameters() == {"model": "yohane", "device": "gpu", "quantize": 4, "chunk": False}
+    align.save_parameters({"model": "yohane", "device": "gpu", "quantize": 4, "chunk": "off"})
+    assert align.load_parameters() == {"model": "yohane", "device": "gpu", "quantize": 4, "chunk": "off"}
 
     align.save_parameters({"model": "nope", "device": 7, "quantize": "eight"})
     assert align.load_parameters() == align.default_parameters()  # every value goes through its check
@@ -76,12 +76,12 @@ def test_the_alignment_cache_holds_the_raw_lines_and_reuses_them_by_their_inputs
     assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "うえ\n") is None
 
 
-def test_the_alignment_cache_tells_chunked_and_whole_song_apart():
+def test_the_alignment_cache_tells_the_cutting_modes_apart():
     rows = [[(0.0, 0.5)]]
-    align.save_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", rows, [], chunk=False)
+    align.save_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", rows, [], chunk="off")
 
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk=False) == (rows, [])
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk=True) is None
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk="off") == (rows, [])
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk="silence") is None
 
 
 def test_a_broken_alignment_cache_is_no_alignment():
@@ -127,6 +127,40 @@ def test_every_chunk_of_a_long_window_is_reported():
 
     assert [done for done, _total in seen] == list(range(1, len(seen) + 1))
     assert all(total == len(backend.windows) for _done, total in seen)
+
+
+def _tone_with_rest(seconds: float, rest: tuple[float, float]) -> np.ndarray:
+    audio = np.full(int(align.SAMPLE_RATE * seconds), 0.5, dtype=np.float32)
+    audio[int(rest[0] * align.SAMPLE_RATE) : int(rest[1] * align.SAMPLE_RATE)] = 0.0
+    return audio
+
+
+def test_silence_chunking_pulls_a_seam_into_the_rest():
+    chunked = align.ChunkedBackend(WindowBackend(), chunk_seconds=2.0, overlap_seconds=0.2, silence=True)
+
+    regions = chunked._regions(_tone_with_rest(5.0, (1.0, 1.5)))
+
+    assert align.SAMPLE_RATE <= regions[0][1] <= int(1.5 * align.SAMPLE_RATE)
+
+
+def test_silence_chunking_keeps_the_one_pass_frame_grid():
+    backend = WindowBackend()
+    chunked = align.ChunkedBackend(backend, chunk_seconds=2.0, overlap_seconds=0.2, silence=True)
+    audio = _tone_with_rest(5.0, (1.0, 1.5))
+
+    got = chunked.logits(audio)
+
+    assert got.shape[0] == audio.size // align.FRAME_SAMPLES - 1
+    assert len(backend.windows) > 1
+    assert max(backend.windows) <= chunked.chunk
+
+
+def test_silence_chunking_without_a_rest_cuts_like_the_fixed_one():
+    audio = np.full(align.SAMPLE_RATE * 5, 0.5, dtype=np.float32)
+    fixed = align.ChunkedBackend(WindowBackend(), chunk_seconds=2.0, overlap_seconds=0.2)
+    silence = align.ChunkedBackend(WindowBackend(), chunk_seconds=2.0, overlap_seconds=0.2, silence=True)
+
+    assert silence._regions(audio) == fixed._regions(audio)
 
 
 def test_forced_align_visits_every_target_in_order():
@@ -356,15 +390,15 @@ def test_resolve_model_downloads_what_is_not_installed(tmp_path, monkeypatch):
 
 def test_the_model_pass_is_cached_apart_from_the_lyrics():
     emission = np.zeros((6, 3), dtype=np.float32)
-    align.save_emissions("/tmp/song.wav", "mms", "cpu", True, emission)
+    align.save_emissions("/tmp/song.wav", "mms", "cpu", "silence", emission)
 
-    assert align.has_emissions("/tmp/song.wav", "mms", "cpu", True)
-    assert not align.has_emissions("/tmp/song.wav", "yohane", "cpu", True)
-    assert not align.has_emissions("/tmp/song.wav", "mms", "cuda", True)
-    assert not align.has_emissions("/tmp/song.wav", "mms", "cpu", False)
-    found = align.load_emissions("/tmp/song.wav", "mms", "cpu", True)
+    assert align.has_emissions("/tmp/song.wav", "mms", "cpu", "silence")
+    assert not align.has_emissions("/tmp/song.wav", "yohane", "cpu", "silence")
+    assert not align.has_emissions("/tmp/song.wav", "mms", "cuda", "silence")
+    assert not align.has_emissions("/tmp/song.wav", "mms", "cpu", "off")
+    found = align.load_emissions("/tmp/song.wav", "mms", "cpu", "silence")
     assert found is not None and found.shape == (6, 3)
-    assert align.load_emissions("/tmp/song.wav", "mms", "cpu", False) is None
+    assert align.load_emissions("/tmp/song.wav", "mms", "cpu", "off") is None
 
 
 def test_align_whole_matches_a_live_pass_over_the_same_audio():

@@ -51,7 +51,7 @@ class Aligner(LoadingThread):
         text: str,
         model: str = align.DEFAULT_MODEL,
         provider: str = "cpu",
-        chunk: bool = True,
+        chunk: str = align.DEFAULT_MODE,
         parent=None,
     ):
         super().__init__(audio, parent)
@@ -76,11 +76,11 @@ class Aligner(LoadingThread):
             )
             align.fetch_fp16(directory, self.provider, self.model, progress=self._downloading)
             backend = align.OnnxBackend(align.model_file(directory, self.provider), provider=self.provider)
-            if self.chunk:
-                backend = align.ChunkedBackend(backend, progress=self.progress.emit)
-                self.message.emit(tr("Aligning over {seconds:.1f}s of audio in chunks\u2026", seconds=seconds))
-            else:
+            if self.chunk == "off":
                 self.message.emit(tr("Aligning over {seconds:.1f}s of audio in one pass\u2026", seconds=seconds))
+            else:
+                backend = align.ChunkedBackend(backend, silence=self.chunk == "silence", progress=self.progress.emit)
+                self.message.emit(tr("Aligning over {seconds:.1f}s of audio in chunks\u2026", seconds=seconds))
             emission = align.whole_emissions(backend, audio)
             with suppress(OSError):
                 align.save_emissions(self.path, self.model, self.provider, self.chunk, emission)
@@ -193,7 +193,7 @@ class AlignDialog(QDialog):
         provider = devices.resolve(self._parameters["device"])
         if self._parameters["device"] == "gpu" and provider == "cpu":
             self.log.appendPlainText(tr("No GPU backend is available; running on the CPU"))
-        chunk = bool(self._parameters["chunk"])
+        chunk = self._parameters["chunk"]
         cached = align.find_alignment(self.audio, model, provider, self.text, chunk)
         if cached is not None:
             rows, problems = cached
