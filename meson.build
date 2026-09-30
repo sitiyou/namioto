@@ -7,9 +7,7 @@ project(
 
 py = import('python').find_installation(pure: false)
 
-pybind11_inc = run_command(
-  py, '-c', 'import pybind11; print(pybind11.get_include())', check: true
-).stdout().strip()
+pybind11_dep = dependency('pybind11')
 
 vendor = include_directories(
   'vendor',
@@ -25,7 +23,8 @@ py.extension_module(
     'audio/stretcher.cpp',
     'audio/miniaudio_impl.cpp',
   ),
-  include_directories: [vendor, include_directories(pybind11_inc)],
+  include_directories: vendor,
+  dependencies: pybind11_dep,
   install: true,
   subdir: 'namioto',
 )

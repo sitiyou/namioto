@@ -39,7 +39,8 @@ namioto-align = "namioto.analysis.align:main"
 # the analysis jobs need one of the onnxruntime builds and the tests exercise them, but no default
 # group may carry one: `uv sync` always includes it, so `--extra cuda`/`webgpu` would install a second
 # build over it. Development picks its build with `--extra cpu` (or `--extra cuda`/`--extra webgpu`)
-dev = ["pytest>=8"]
+# the build tools are here because build isolation is disabled for namioto (see tool.uv)
+dev = ["pytest>=8", "meson-python>=0.16", "pybind11>=2.12", "meson>=1.2.3"]
 # torch/torchaudio/transformers/onnx are only for scripts/export_align_model.py; the program runs
 # the converted ONNX graph through onnxruntime and never imports them
 export = ["torch", "torchaudio", "transformers", "onnx"]
@@ -49,6 +50,10 @@ requires = ["meson-python>=0.16", "pybind11>=2.12"]
 build-backend = "mesonpy"
 
 [tool.uv]
+# meson-python rebuilds the extension on import, and meson bakes its own path into build.ninja: under
+# build isolation that path points into a temporary build environment that is deleted by then, so the
+# build tools have to come from this venv instead
+no-build-isolation-package = ["namioto"]
 # installing two of the onnxruntime builds would overwrite each other's `onnxruntime` module; uv is
 # told they conflict so it refuses the pair instead of producing a broken environment (pip cannot)
 conflicts = [[{ extra = "cpu" }, { extra = "cuda" }], [{ extra = "cuda" }, { extra = "webgpu" }]]
