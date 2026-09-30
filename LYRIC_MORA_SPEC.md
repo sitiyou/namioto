@@ -111,19 +111,19 @@ NOTE 的 share 之和 ≈ 1（onset 链在 NOTE 内不重叠），所以「留�
        即：一个弱的 sharer 不得把强的那些一起拖落（R16）。
 4. **落空的 NOTE**：对每个没有 owner 的 NOTE，交给**前一个**有 owner 的 mora（若前面没有则交给
    后面的），并把该 mora 记入 `doubted`（→ 红）。保证每个 NOTE 都被覆盖（§2）。
-5. **covered / pieces**：
+5. **covered / span**：
    - `covered[mora]` = 它拥有的 NOTE 列表；
-   - 单 owner 的 NOTE：该 mora 拿到整段 `(low, high)`；
-   - 多 owner（group）的 NOTE：按 share/total 把 NOTE 切成相邻的片，每个 owner 一片。
+   - 每个 mora 的 `span` = 它拥有的 NOTE 的并集，即从第一个 NOTE 的 start 到最后一个 NOTE 的 end——
+     **整段 NOTE，边落在 NOTE 边上**；多 owner（group）的 NOTE 每个 owner 都覆盖整段，所以两块重叠。
 6. **Placement**：每个 mora 输出
-   - 有 `covered` → `Placement(span=覆盖片段的并集, notes=拥有的 NOTE, red=flagged 或 doubted, group=grouped 或 -1)`；
+   - 有 `covered` → `Placement(span=覆盖的整段 NOTE 的并集, notes=拥有的 NOTE, red=flagged 或 doubted, group=grouped 或 -1)`；
    - 无 → `Placement(span=(point, point), zero=True, red=flagged)`，`point` = 自身 start（没有则
      第一个 NOTE 的 start）。
 
 ### 4.2 `Placement` 字段
 
 ```
-span     # 映射后跨度（覆盖 NOTE 的并集，group 的切片，或 .0 的点）——**不是**条带画的东西
+span     # 映射后跨度（覆盖的整段 NOTE 的并集，边落在 NOTE 边上，或 .0 的点）——**条带画的是它**
 notes    # 覆盖的 NOTE 下标
 zero     # 没分到 NOTE（→ .0）
 red      # 被怀疑（行被 flagged，或 NOTE 是交回前一个 mora 的）
@@ -243,8 +243,8 @@ group    # 共享的 NOTE 下标；-1 表示独立
   不得让同一 NOTE 上 share 已经 ≥ 1/4 的其他 mora 也落 `.0`。
 - **R7** `group` 仅在成组时 ≥ 0；悬浮高亮覆盖同一 `group` 的连续 run。
 - **R8** 块 = 映射后的 `Placement.span`（贴 NOTE、与卷帘对齐、覆盖整个 NOTE）；`|`/标签 = raw 起点。
-- **R8d** 同一 NOTE 的 group 成员之间不画竖边，两块读成一整块；条带竖线只有「带标签的 `|`」与
-  「不同 NOTE 块的边界」两种。
+- **R8d** 同一 NOTE 的 group 成员两块重叠，画成一个整块（成员之间不画竖边）；条带竖线只有
+  「带标签的 `|`」与「不同 NOTE 块的边界」两种。
 - **R8b** 标签自适应：放不下整条 → ruby 只留读音 → 再放不下就不画。
 - **R8c** 零长 mora 的两条 `|` 不重合：它自己的那条左退 `SOUND_GAP_PX`，它后面的 mora 留在真实
   位置（优先非 `.0`）；被抓住的那条在拖动时画回真实位置，拖动按位移计算，不跳。
@@ -270,7 +270,7 @@ group    # 共享的 NOTE 下标；-1 表示独立
 | 2–4 morae 分一个 NOTE | `test_a_note_split_a_quarter_to_three_quarters_still_groups`、`test_a_note_split_past_a_quarter_falls_to_no_length`、`test_four_sounds_each_holding_a_quarter_all_keep_the_note`、`test_four_sounds_under_a_quarter_fall_to_no_length` |
 | NOTE 全被覆盖 | `test_a_note_no_mora_reaches_is_given_to_the_one_before_and_doubted` 等 |
 | 块 = 映射 NOTE（全覆盖/贴节拍线） | `tests/test_ui.py::test_a_block_is_the_note_the_mora_maps_to` |
-| 共享 NOTE 内部无竖边 | `tests/test_ui.py::test_the_pieces_of_a_shared_note_draw_no_edge_between_them` |
+| 共享 NOTE 重叠块之间无竖边 | `tests/test_ui.py::test_the_overlapping_blocks_of_a_shared_note_draw_no_edge_between_them` |
 | 灰 ⟺ `.0`（app 级） | `tests/test_ui.py::test_a_mora_that_covers_no_note_is_marked_grey`、`test_a_mora_that_loses_a_shared_note_is_marked_grey` |
 | group 元数据 | `test_a_grouped_run_is_marked_on_the_strip` |
 | 拖动/共享边/撤销 | `test_dragging_a_mora_boundary_moves_the_shared_edge`、`test_a_boundary_drag_stops_at_its_own_mora_end` |

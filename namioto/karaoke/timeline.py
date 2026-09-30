@@ -580,7 +580,7 @@ def _onset_distance(span: tuple[float | None, float | None], note: tuple[float, 
 class Placement:
     """Where one sound sits once the notes are read: its span, the notes it covers, and its doubt.
 
-    `span` is what the strip draws - the note(s) it covers, a group's slice of a shared note, or a
+    `span` is what the strip draws - the whole notes it owns, so its edges sit on theirs - or a
     point for a sound of no length. `notes` are the note indices it covers, `zero` a sound that fell
     on none, and `red` one whose time the aligner cannot be trusted for.
     """
@@ -764,22 +764,6 @@ def map_sounds(
         for sound in owners:
             covered.setdefault(sound, []).append(note)
 
-    pieces: dict[int, list[tuple[float, float]]] = {}
-    for note, owners in enumerate(owner):
-        if not owners:
-            continue
-        low, high = notes[note]
-        if len(owners) == 1:
-            pieces.setdefault(owners[0], []).append((low, high))
-            continue
-        shares = [_share(flat, notes[note], sound) for sound in owners]
-        total = sum(shares) or float(len(owners))
-        edge = low
-        for sound, share in zip(owners, shares, strict=True):
-            width = (high - low) * share / total
-            pieces.setdefault(sound, []).append((edge, edge + width))
-            edge += width
-
     marked = list(flagged) if flagged is not None else []
     found: list[list[Placement]] = []
     index = 0
@@ -789,8 +773,8 @@ def map_sounds(
         for _sound in line.sounds:
             notes_of = covered.get(index)
             if notes_of:
-                chunks = pieces[index]
-                span = (min(chunk[0] for chunk in chunks), max(chunk[1] for chunk in chunks))
+                # the block is the whole notes it owns, so its edges land on the notes' own
+                span = (notes[notes_of[0]][0], notes[notes_of[-1]][1])
                 placements.append(
                     Placement(
                         span=span,

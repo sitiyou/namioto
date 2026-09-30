@@ -4883,7 +4883,7 @@ def test_an_alignment_puts_each_sound_on_the_note_its_time_covers(own_window, tm
     own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", lines=(((0.0, 1.0), (1.0, 2.0)),))
     own_window._load_sounds()
 
-    assert own_window.view.lyric_times == (((0.0, 1.0), (1.0, 2.0)),)  # split across the one note
+    assert own_window.view.lyric_times == (((0.0, 2.0), (0.0, 2.0)),)  # both cover the one note whole
     assert own_window.view.lyric_red == ((False, False),)
 
 
@@ -4900,16 +4900,16 @@ def test_a_grouped_run_is_marked_on_the_strip(own_window, tmp_path) -> None:
     assert own_window.view.lyric_group == ((0, 0),)
 
 
-def test_the_pieces_of_a_shared_note_draw_no_edge_between_them(window) -> None:
-    # あ and い share one note; their common edge is inside the note, so it must not read as one
-    text = "あいう"
+def test_the_overlapping_blocks_of_a_shared_note_draw_no_edge_between_them(window) -> None:
+    # あ and い share note 1-2; い's block begins inside あ's, so that edge must not read as a split
+    text = "あい"
     window.transport.bpm.setValue(60.0)
     window.view.load_lyrics(
         sound_lines(text),
-        [[(0.0, 0.5), (0.5, 1.0), (0.8, 0.8)]],
-        raw=[[(0.0, 0.4), (0.4, 0.8), (0.8, 1.0)]],
-        zero=[[False, False, True]],
-        group=[[0, 0, -1]],
+        [[(0.0, 2.0), (1.0, 2.0)]],
+        raw=[[(0.0, 1.5), (1.5, 2.0)]],
+        zero=[[False, False]],
+        group=[[1, 1]],
     )
     window.view.set_zoom(300.0, 16.0)
     window.view.horizontalScrollBar().setValue(0)
@@ -4920,7 +4920,7 @@ def test_the_pieces_of_a_shared_note_draw_no_edge_between_them(window) -> None:
     strip = window.sound_strip
     strip._hover = None  # a live pointer may have tinted the group; the plain body is what it tested
     body = theme.lyric_shades(True)[0]
-    seam = round(strip._x(0.5))  # where the two pieces meet, 30px from every bar
+    seam = round(strip._x(1.0))  # い's left edge, inside あ's block
     image = strip.grab().toImage()
     mid = strip.height() // 2
     colors = [image.pixelColor(seam + dx, mid).name() for dx in (-1, 0, 1)]

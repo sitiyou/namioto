@@ -484,7 +484,8 @@ def test_two_sounds_that_share_a_note_equally_group_on_it():
     times = [[(0.0, 1.0), (1.0, 2.0)]]
     found = map_sounds(sound_lines("あい"), times, [(0.0, 2.0)], "あい")
     assert [placement.notes for placement in found[0]] == [(0,), (0,)]
-    assert [placement.span for placement in found[0]] == [(0.0, 1.0), (1.0, 2.0)]
+    # both cover the whole note they share, so the block lands on the note's own edges
+    assert [placement.span for placement in found[0]] == [(0.0, 2.0), (0.0, 2.0)]
     assert [placement.group for placement in found[0]] == [0, 0]
 
 
