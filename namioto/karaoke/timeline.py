@@ -78,7 +78,7 @@ class SoundLine:
 def sound_lines(text: str) -> list[SoundLine]:
     """Every line of a `.krc`, as its sounds.
 
-    A kanji without a ruby, or a long vowel or sokuon with no sound to lean on, raises `KrcError`.
+    A kanji without a ruby raises `KrcError`: there is no sound to align it to.
     """
     return [_row(line)[0] for chapter in parse(text).chapters for line in chapter.lines]
 
@@ -452,8 +452,8 @@ def _row(line: Line, split_groups: bool = True) -> tuple[SoundLine, list[Word], 
                         locations[-1] = (*old[:1], top, *old[2:])
                     else:
                         locations[-1] = (*old[:5], inner, old[6])
-                continue
-            if word.natural_mora == 0:
+                    continue
+            elif word.natural_mora == 0:
                 continue
             units.append([base, kana, rubied, first])
             sources.append(source)
@@ -461,8 +461,6 @@ def _row(line: Line, split_groups: bool = True) -> tuple[SoundLine, list[Word], 
 
     folded = [char for token in kana_tokens("".join(kana for _base, kana, _rubied, _first in units)) for char in token]
     sizes = [_size(kana) for _base, kana, _rubied, _first in units]
-    if sum(sizes) != len(folded):
-        raise KrcError(f"'{text}' has a long vowel or a sokuon with no sound to lean on")
 
     sounds = []
     at = 0

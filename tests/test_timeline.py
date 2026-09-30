@@ -56,6 +56,17 @@ def test_a_sokuon_gets_a_token_of_its_own():
     assert _tokens("ちょっと") == ["cho", "t", "to"]
 
 
+def test_a_sokuon_or_long_vowel_with_nothing_to_lean_on_stands_alone():
+    assert _tokens("コガネムシはあこがれさっ")[-2:] == ["sa", "'"]
+    assert _tokens("んー") == ["n", "n"]
+    assert _tokens("ーあ") == ["-", "a"]
+    assert _tokens("あっっ") == ["a", "'", "'"]
+
+
+def test_a_leading_small_kana_is_not_dropped():
+    assert _tokens("ゃあ") == ["ya", "a"]
+
+
 def test_a_small_kana_stays_with_the_sound_before_it():
     assert _tokens("きょう") == ["kyo", "u"]
     assert _tokens("ヴァイオリン") == ["va", "i", "o", "ri", "n"]
@@ -149,13 +160,6 @@ def test_the_tokens_are_the_folded_kana(text):
 def test_a_kanji_without_a_ruby_is_refused():
     with pytest.raises(KrcError):
         sound_lines("世界")
-
-
-def test_a_long_vowel_or_sokuon_with_nothing_to_lean_on_is_refused():
-    with pytest.raises(KrcError):
-        sound_lines("ーあ")
-    with pytest.raises(KrcError):
-        sound_lines("あっ")
 
 
 class Token(NamedTuple):

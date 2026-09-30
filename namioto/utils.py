@@ -70,6 +70,9 @@ def write_json(data: dict, path: str | Path) -> Path:
 
 
 _VOWELS = "aiueo"
+# A sokuon or a long vowel mark with nothing after it is still a mora, so it stands as itself.
+_LONE_SOKUON = "'"
+_LONE_LONG_VOWEL = "-"
 
 # the gojuuon, dakuten and handakuten, after katakana is normalised to hiragana
 _KANA = {
@@ -225,11 +228,10 @@ def _normalize(text: str) -> str:
     return "".join(folded)
 
 
-def _geminate(token: str) -> str:
+def _geminate(token: str, count: int) -> str:
     """A sokuon doubles the next token's consonant; `ch` becomes `tch`, Hepburn's own spelling."""
-    if token.startswith("ch"):
-        return "t" + token
-    return token[0] + token if token[:1] not in _VOWELS else "t" + token
+    head = "t" if token.startswith("ch") or token[:1] in _VOWELS else token[0]
+    return head * count + token
 
 
 def kana_tokens(text: str) -> list[str]:
@@ -240,24 +242,33 @@ def kana_tokens(text: str) -> list[str]:
     """
     folded = _normalize(text)
     found: list[str] = []
-    geminate = False
+    geminate = 0
     index = 0
     while index < len(folded):
         char = folded[index]
         if char == "っ":
-            geminate = True
+            geminate += 1
             index += 1
             continue
         if char == "ー":
+            if geminate:
+                found.append(_LONE_SOKUON * geminate)
+                geminate = 0
             if found and found[-1][-1:] in _VOWELS:
                 found[-1] += found[-1][-1]
+            elif found:
+                found.append(found[-1][-1])
+            else:
+                found.append(_LONE_LONG_VOWEL)
             index += 1
             continue
         if char.isascii() and char.isalnum():
             end = index + 1
             while end < len(folded) and folded[end].isascii() and folded[end].isalnum():
                 end += 1
-            found.append(folded[index:end].lower())
+            run = folded[index:end].lower()
+            found.append(_geminate(run, geminate) if geminate else run)
+            geminate = 0
             index = end
             continue
         pair = folded[index : index + 2]
@@ -268,6 +279,8 @@ def kana_tokens(text: str) -> list[str]:
         else:
             index += 1
             continue
-        found.append(_geminate(token) if geminate else token)
-        geminate = False
+        found.append(_geminate(token, geminate) if geminate else token)
+        geminate = 0
+    if geminate:
+        found.append(_LONE_SOKUON * geminate)
     return found

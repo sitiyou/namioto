@@ -14,6 +14,13 @@ def test_kana_tokens_doubles_a_sokuon_onto_the_next_sound():
     assert utils.kana_tokens("ちょっと") == ["cho", "tto"]
 
 
+def test_kana_tokens_gives_a_sokuon_or_long_vowel_with_nothing_to_lean_on_a_token_of_its_own():
+    assert utils.kana_tokens("あっ") == ["a", "'"]
+    assert utils.kana_tokens("あっっ") == ["a", "''"]
+    assert utils.kana_tokens("んー") == ["n", "n"]
+    assert utils.kana_tokens("ーあ") == ["-", "a"]
+
+
 def test_kana_tokens_repeats_the_vowel_after_the_long_vowel_mark():
     assert utils.kana_tokens("コーヒー") == ["koo", "hii"]
     assert utils.kana_tokens("ふぁんたじー") == ["fa", "n", "ta", "jii"]
