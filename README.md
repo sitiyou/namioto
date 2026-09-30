@@ -52,8 +52,9 @@ coloured from dark
 blue through green to red as the energy rises, with the octave lines of the pitch axis. The
 **Spectrum** block sets the two display parameters — gain (how much energy reaches full red) and
 contrast (the exponent applied to the energy). The analysis runs in a background thread and reports
-progress in the status bar; `--channels` picks the channels to analyse (mono, left, right, sum,
-side, both), `--t-num` the frames per second.
+progress in the status bar. The channels, the frames per second, the FFT window and the tuning are
+chosen in the window that opens an audio file, filled in from the habits the last one left;
+`--channels` and `--t-num` only start that window off with the values they name.
 
 ![spectrum](docs/spectrum.png)
 
@@ -67,9 +68,10 @@ that piece of work: the audio file, the tempo, the analysis parameters, the spec
 grid and the view. It is a few kilobytes, so it is diffable, searchable and editable by hand.
 
 Opening an audio file is how a project starts: namioto asks where its `.nto` goes, defaulting to the
-audio's own name beside it, and writes it there. A MIDI file is imported into the project that is
-open, never opened on its own, and switching to another project or another audio file asks about
-unsaved notes first.
+audio's own name beside it, and how the audio is analysed - the channels, the frames per second, the
+FFT window and the tuning - then writes the project there. A MIDI file is imported into the project
+that is open, never opened on its own, and switching to another project or another audio file asks
+about unsaved notes first.
 
 Notes are kept in seconds, so a different tempo moves the grid and never the notes, and the file
 lists them in time order. The audio is recorded as a path - relative to the project when it sits
@@ -208,7 +210,8 @@ namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars,
                       outputs - the external MIDI synth, or the built-in synth on the native engine,
                       song.py: the audio file streamed to the native engine, channel_panel.py:
                       the sidebar, form.py: the pieces a settings form is built from, and one
-                      module per dialog: settings, lyrics, transcription, align, MIDI import)
+                      module per dialog: settings, lyrics, transcription, align, MIDI import,
+                      open audio)
 audio/                the native audio backend (C++17): Signalsmith Stretch for the speed, miniaudio
                       for the output device; built as the namioto._audio extension
 vendor/               the backend's vendored dependencies (miniaudio, Signalsmith Stretch and

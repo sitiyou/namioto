@@ -65,6 +65,7 @@ from namioto.ui.loading import LoadingThread
 from namioto.ui.lyric_map import LyricMapper, map_lyrics
 from namioto.ui.lyrics_dialog import LyricsDialog, LyricsWatcher
 from namioto.ui.midi_dialog import MidiImportDialog
+from namioto.ui.open_dialog import OpenAudioDialog
 from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler
 from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
 from namioto.ui.song import SongPlayer, load_song
@@ -776,32 +777,39 @@ class MainWindow(QMainWindow):
     def open_audio(self, path: str) -> bool:
         """Open audio as part of a project: the sibling project if there is one, else a new one.
 
-        The project has to be named before the sound is analysed, because the notes and the
-        analysis all belong to that file; a cancelled chooser leaves the audio untouched.
+        A new one is asked about first - where its project is saved, and how the audio is analysed -
+        because the notes and the analysis all belong to that file; a cancelled window leaves the
+        audio untouched, and only the values the user changed carry on to the next document.
         """
         beside = Path(path).with_suffix(project.SUFFIX)
         if beside.exists():
             return self.load_project(beside)
-        target = self._new_project_path(path)
-        if target is None:
+        document = self._seed_analysis()
+        dialog = OpenAudioDialog(path, document, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
-        self.project_settings = project.default_settings(self.state.project)
+        chosen = dialog.document()
+        if project.remember_changes(self.state.project, document, chosen):
+            self._save_state()
+        self._consume_analysis()
+        self.project_settings = chosen
         self._apply_project_settings()
         self.load_audio(path)
-        return self.save_project(target)
+        return self.save_project(dialog.target())
 
-    def _new_project_path(self, audio: str) -> Path | None:
-        """Where a new project for an audio file is saved: its own name, in the audio's folder."""
-        chosen, _filter = QFileDialog.getSaveFileName(
-            self,
-            i18n.tr("Save project"),
-            str(Path(audio).with_suffix(project.SUFFIX)),
-            _project_filter(),
-        )
-        if not chosen:
-            return None
-        target = Path(chosen)
-        return target if project.looks_like_project(target) else target.with_name(target.name + project.SUFFIX)
+    def _seed_analysis(self) -> project.ProjectSettings:
+        """What a new document starts from, with the analysis values the command line asked for."""
+        document = project.default_settings(self.state.project)
+        for name, value in self.overrides.items():
+            if value is not None and ("analysis", name) in project.FIELD_SPECS:
+                params.set_value(document, "analysis", name, value)
+        return document
+
+    def _consume_analysis(self) -> None:
+        """The dialog took the command line's analysis values over: they are the document's now."""
+        for name in tuple(self.overrides):
+            if ("analysis", name) in project.FIELD_SPECS:
+                del self.overrides[name]
 
     def _on_save(self) -> bool:
         if self.project_path is None:

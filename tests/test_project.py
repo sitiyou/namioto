@@ -275,6 +275,18 @@ def test_remembering_a_habit_checks_it_like_any_other_value() -> None:
     assert remembered["editor"]["zoom_x"] == 72.0
 
 
+def test_remembering_changes_keeps_only_the_reusable_fields_that_moved() -> None:
+    before = project.default_settings()
+    after = project.default_settings()
+    after.analysis.fft_points = 4096
+    after.analysis.a4 = 442.0  # the song's own, so not a habit
+    remembered: dict[str, dict] = {}
+
+    assert project.remember_changes(remembered, before, after) is True
+    assert remembered == {"analysis": {"fft_points": 4096}}
+    assert project.remember_changes(remembered, before, before) is False
+
+
 def test_a_remembered_map_that_is_not_a_map_gives_the_defaults() -> None:
     assert project.default_settings(None) == project.default_settings()
     assert project.default_settings("nonsense") == project.default_settings()

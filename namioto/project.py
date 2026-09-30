@@ -262,6 +262,24 @@ def remember(remembered: dict[str, dict], section: str, name: str, value: Any) -
     remembered.setdefault(section, {})[name] = params.coerce(FIELD_SPECS[(section, name)], value)
 
 
+def remember_changes(remembered: dict[str, dict], before: ProjectSettings, after: ProjectSettings) -> bool:
+    """Keep every reusable field that differs between two documents, and say whether one did.
+
+    Only what the user changed carries over: a field left at the value an earlier document or a
+    dialog filled in says nothing about how they want the next one.
+    """
+    changed = False
+    for section in PROJECT_SECTIONS:
+        for item in section.fields:
+            if not item.reuse:
+                continue
+            value = params.get_value(after, section.name, item.name)
+            if value != params.get_value(before, section.name, item.name):
+                remember(remembered, section.name, item.name, value)
+                changed = True
+    return changed
+
+
 def settings_from_dict(data: Any) -> ProjectSettings:
     """The project-scoped values a parsed file holds, with every one checked as it is read."""
     settings = ProjectSettings()

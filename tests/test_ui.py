@@ -61,6 +61,7 @@ from namioto.ui.controls import Cluster, EditBar, TransportBar, ValueSlider
 from namioto.ui.form import WrappedLabel, _show_device_status, field_editor
 from namioto.ui.lyrics_dialog import LyricsDialog, LyricsTranslator
 from namioto.ui.midi_dialog import MidiImportDialog
+from namioto.ui.open_dialog import OpenAudioDialog
 from namioto.ui.roll import (
     CONTENT_MARGIN,
     LENGTH_BEATS,
@@ -4555,12 +4556,100 @@ def test_opening_an_audio_file_analyses_it(own_window, monkeypatch, tmp_path) ->
     path.write_bytes(b"")
     fake_loaders(monkeypatch)
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(path), ""))
-    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "song.nto"), ""))
+    monkeypatch.setattr(OpenAudioDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
 
     own_window._on_open()
 
     assert own_window.audio_path == str(path)
     assert own_window.project_path == tmp_path / "song.nto"  # a sound is a project, and it has a file
+
+
+def open_editor(dialog, name: str):
+    """The widget one row of the open dialog edits, to change it the way a user would."""
+    return next(widget for field, widget, _read in dialog._rows if field == name)
+
+
+def test_the_open_dialog_starts_from_the_document_and_the_audio(own_window, tmp_path) -> None:
+    document = project.default_settings()
+    document.analysis.channels = "left"
+    document.analysis.fft_points = 4096
+    dialog = OpenAudioDialog(str(tmp_path / "song.flac"), document, parent=own_window)
+    try:
+        assert dialog.path.text() == str(tmp_path / "song.nto")
+        assert dialog.document().analysis.channels == "left"
+        assert dialog.document().analysis.fft_points == 4096
+    finally:
+        dialog.close()
+
+
+def test_the_open_dialog_reads_an_edited_widget_back(own_window, tmp_path) -> None:
+    dialog = OpenAudioDialog(str(tmp_path / "song.flac"), project.default_settings(), parent=own_window)
+    try:
+        open_editor(dialog, "a4").setValue(442.0)
+        assert dialog.document().analysis.a4 == 442.0
+    finally:
+        dialog.close()
+
+
+def test_the_open_dialog_adds_the_project_suffix(own_window, tmp_path) -> None:
+    dialog = OpenAudioDialog(str(tmp_path / "song.flac"), project.default_settings(), parent=own_window)
+    try:
+        dialog.path.setText(str(tmp_path / "mysong"))
+        assert dialog.target() == tmp_path / "mysong.nto"
+    finally:
+        dialog.close()
+
+
+def test_opening_audio_keeps_the_analysis_habits_the_user_changed(own_window, monkeypatch, tmp_path) -> None:
+    audio = tmp_path / "song.flac"
+    audio.write_bytes(b"")
+    fake_loaders(monkeypatch)
+
+    def accept(self):
+        open_editor(self, "fft_points").setValue(4096)
+        open_editor(self, "a4").setValue(442.0)  # the song's tuning is not a habit
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(OpenAudioDialog, "exec", accept)
+
+    assert own_window.open_audio(str(audio)) is True
+
+    assert own_window.state.project["analysis"] == {"fft_points": 4096}
+    assert own_window.project_settings.analysis.fft_points == 4096
+    assert own_window.project_settings.analysis.a4 == 442.0
+
+
+def test_the_command_line_analysis_values_start_the_dialog_and_stop_there(own_window, monkeypatch, tmp_path) -> None:
+    audio = tmp_path / "song.flac"
+    audio.write_bytes(b"")
+    fake_loaders(monkeypatch)
+    own_window.overrides["channels"] = "left"
+    seen: list[str] = []
+
+    def accept(self):
+        seen.append(self.document().analysis.channels)
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(OpenAudioDialog, "exec", accept)
+
+    assert own_window.open_audio(str(audio)) is True
+
+    assert seen == ["left"]  # the window opened on the value the command line asked for
+    assert own_window.overrides == {}  # and the document owns it from there
+    assert own_window.project_settings.analysis.channels == "left"
+
+
+def test_cancelling_the_open_dialog_leaves_the_audio_alone(own_window, monkeypatch, tmp_path) -> None:
+    audio = tmp_path / "song.flac"
+    audio.write_bytes(b"")
+    captured = fake_loaders(monkeypatch)
+    monkeypatch.setattr(OpenAudioDialog, "exec", lambda self: QDialog.DialogCode.Rejected)
+
+    assert own_window.open_audio(str(audio)) is False
+
+    assert own_window.audio_path is None
+    assert own_window.project_path is None
+    assert not captured
 
 
 def test_the_command_line_takes_audio_and_projects_but_not_a_midi_alone(qt_app, monkeypatch, tmp_path) -> None:
@@ -4574,7 +4663,7 @@ def test_the_command_line_takes_audio_and_projects_but_not_a_midi_alone(qt_app, 
         project.Project(settings=project.default_settings(), notes=(project.Note(1.0, 0.5, 62),)),
         project_path,
     )
-    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "clip.nto"), ""))
+    monkeypatch.setattr(OpenAudioDialog, "exec", lambda self: QDialog.DialogCode.Accepted)
 
     opened = [MainWindow(), MainWindow(), MainWindow()]
     for window, path in zip(opened, (audio, midi_path, project_path), strict=True):
