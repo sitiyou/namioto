@@ -275,6 +275,8 @@ CATALOGS: dict[str, dict[str, str]] = {
         "Transcribe": "转录",
         "Transcribing …": "正在转录…",
         "Close": "关闭",
+        "Cancel": "取消",
+        "Cancelled": "已取消",
         "Transcribe with GAME": "用 GAME 转录",
         "The active channel already has notes. Replace them with the transcription?": "当前通道已有音符，要用转录结果覆盖吗？",
         "A run with these exact parameters already found {count} notes.\n"

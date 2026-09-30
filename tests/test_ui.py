@@ -3312,36 +3312,102 @@ def test_a_missing_runtime_stops_the_transcription(own_window, monkeypatch) -> N
     assert dialog.run_button.isEnabled()
 
 
-def test_an_empty_active_channel_takes_the_notes_without_asking(own_window, monkeypatch) -> None:
+def test_choosing_the_active_target_does_not_ask_until_the_run(own_window, monkeypatch) -> None:
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: pytest.fail("must not ask"))
-    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window, active_has_notes=True)
+
     parameter_writer(dialog, "target")("active")
-    assert dialog.target() == "active"
+
+    assert dialog.target() == "active"  # picked quietly; the question belongs to the run
     dialog.close()
 
 
 def test_the_active_channel_is_only_overwritten_on_an_explicit_yes(own_window, monkeypatch) -> None:
-    answers = iter([QMessageBox.StandardButton.No, QMessageBox.StandardButton.Yes])
-    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: next(answers))
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.StandardButton.No)
+    monkeypatch.setattr("namioto.ui.transcription_dialog.start_job", fake_job([("done", [(0.0, 0.5, 60.0)])]))
     dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window, active_has_notes=True)
-
     parameter_writer(dialog, "target")("active")
+
+    dialog._start()
+    dialog._poll()
+
     assert dialog.target() == "new"  # a declined overwrite falls back to a channel of its own
 
+
+def test_an_empty_active_channel_takes_the_notes_without_asking(own_window, monkeypatch) -> None:
+    monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: pytest.fail("must not ask"))
+    monkeypatch.setattr("namioto.ui.transcription_dialog.start_job", fake_job([("done", [(0.0, 0.5, 60.0)])]))
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
     parameter_writer(dialog, "target")("active")
-    assert dialog.target() == "active"
-    dialog.close()
+
+    dialog._start()
+    dialog._poll()
+
+    assert dialog.notes() == [(0.0, 0.5, 60.0)]
 
 
 def test_a_remembered_active_target_is_checked_before_it_overwrites(own_window, monkeypatch) -> None:
     values = dict(transcription.default_parameters(), target="active")
     monkeypatch.setattr(transcription, "load_parameters", lambda: dict(values))
     monkeypatch.setattr(QMessageBox, "question", lambda *args, **kwargs: QMessageBox.StandardButton.No)
+    monkeypatch.setattr("namioto.ui.transcription_dialog.start_job", fake_job([("done", [(0.0, 0.5, 60.0)])]))
 
     dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window, active_has_notes=True)
+    assert dialog.target() == "active"  # remembered, and only questioned when the run is asked for
+
+    dialog._start()
+    dialog._poll()
 
     assert dialog.target() == "new"
-    dialog.close()
+
+
+def test_the_button_closes_the_window_when_idle(own_window) -> None:
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+    assert dialog.close_button.text() == "Close"
+
+    dialog._close_or_cancel()
+
+    assert dialog.result() == QDialog.DialogCode.Rejected
+
+
+def test_cancelling_a_run_keeps_the_window_and_offers_another(own_window, monkeypatch) -> None:
+    monkeypatch.setattr("namioto.ui.transcription_dialog.start_job", fake_job([("log", "GAME model small")]))
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+
+    dialog._start()
+    assert dialog.close_button.text() == "Cancel"
+
+    dialog._close_or_cancel()
+
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    assert dialog.run_button.isEnabled()
+    assert dialog.close_button.text() == "Close"
+    assert "Cancelled" in dialog.log.toPlainText()
+
+
+def test_the_log_stays_hidden_until_there_is_something_to_say(own_window, monkeypatch) -> None:
+    monkeypatch.setattr("namioto.ui.transcription_dialog.start_job", fake_job([("log", "GAME model small")]))
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+    assert dialog.log.isHidden()
+
+    dialog._start()
+
+    assert not dialog.log.isHidden()
+
+
+def test_the_window_is_pinned_to_its_content(own_window) -> None:
+    """Hyprland resizes a native toplevel only while min == max, so the dialog follows its content
+    by staying rigid."""
+    dialog = TranscriptionDialog("/tmp/song.wav", 120.0, parent=own_window)
+    collapsed = dialog.size().height()
+    assert dialog.minimumSize() == dialog.maximumSize()
+
+    dialog.findChild(QToolButton).click()
+    QApplication.processEvents()
+    QApplication.processEvents()
+
+    assert dialog.size().height() > collapsed
+    assert dialog.minimumSize() == dialog.maximumSize() == dialog.size()
 
 
 def test_a_transcription_lands_on_a_channel_of_its_own(own_window) -> None:

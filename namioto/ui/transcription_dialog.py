@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -61,7 +62,6 @@ class TranscriptionDialog(QDialog):
     def __init__(self, audio: str, tempo: float, parent=None, active_has_notes: bool = False, offset: float = 0.0):
         super().__init__(parent)
         self.setWindowTitle(tr("Transcribe the singing voice with GAME"))
-        self.resize(600, 640)
         self.audio = str(audio)
         self.tempo = float(tempo)
         self.offset = float(offset)
@@ -85,21 +85,26 @@ class TranscriptionDialog(QDialog):
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
         self.log.setFixedHeight(LOG_HEIGHT)
+        self.log.hide()
         self.run_button = QPushButton(tr("Transcribe"))
         self.run_button.clicked.connect(self._start)
         self.close_button = QPushButton(tr("Close"))
-        self.close_button.clicked.connect(self.reject)
+        self.close_button.clicked.connect(self._close_or_cancel)
 
-        buttons = QHBoxLayout()
-        buttons.addWidget(self.progress, 1)
-        buttons.addWidget(self.progress_label)
-        buttons.addWidget(self.run_button)
-        buttons.addWidget(self.close_button)
+        status = QHBoxLayout()
+        status.addWidget(self.progress, 1)
+        status.addWidget(self.progress_label)
+        actions = QHBoxLayout()
+        actions.addStretch(1)
+        actions.addWidget(self.run_button)
+        actions.addWidget(self.close_button)
 
         layout = QVBoxLayout(self)
         layout.addWidget(self.form)
         layout.addWidget(self.log, 1)
-        layout.addLayout(buttons)
+        layout.addLayout(status)
+        layout.addLayout(actions)
+        self._fit()
 
     def parameters(self) -> dict:
         """What the form holds now, checked the way the store checks it."""
@@ -114,6 +119,7 @@ class TranscriptionDialog(QDialog):
 
     def _build_form(self) -> QWidget:
         widget = QWidget()
+        widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         for advanced in (False, True):
@@ -128,15 +134,25 @@ class TranscriptionDialog(QDialog):
                 self._fields.append((item, read, write))
                 if item.name == "target":
                     self._target_read, self._target_write = read, write
-                    editor.currentIndexChanged.connect(self._target_changed)
             if advanced:
-                layout.addWidget(advanced_section(form))
+                heading = advanced_section(form)
+                layout.addWidget(heading)
+                heading.toggled.connect(lambda _open: QTimer.singleShot(0, self._fit))
             layout.addLayout(form)
-        layout.addStretch(1)
-        self._target_changed()
         return widget
 
-    def _target_changed(self) -> None:
+    def _fit(self) -> None:
+        """Pin the window to its content: Hyprland resizes a native toplevel only while it is rigid,
+        `min == max`, and ignores the request otherwise. https://github.com/hyprwm/Hyprland/issues/3167
+
+        Showing or hiding rows leaves the layout's cached size hint behind, so drop it first; the
+        deferred callers let the layout update land before the size is read.
+        """
+        self.form.updateGeometry()
+        self.layout().invalidate()
+        self.setFixedSize(self.sizeHint())
+
+    def _confirm_target(self) -> None:
         """A channel that already carries notes is only overwritten on an explicit yes."""
         if self._target_read() != "active" or not self.active_has_notes:
             return
@@ -148,7 +164,25 @@ class TranscriptionDialog(QDialog):
         if answer != QMessageBox.StandardButton.Yes:
             self._target_write("new")
 
+    def _close_or_cancel(self) -> None:
+        """The one button closes the window when idle and stops a running model when it is not."""
+        if self._process is None:
+            self.reject()
+        else:
+            self._cancel()
+
+    def _cancel(self) -> None:
+        self._stop()
+        self._settled = True
+        self._notes = []
+        self._log_line(tr("Cancelled"))
+        self.progress.setRange(0, 1)
+        self.progress.setValue(0)
+        self.progress_label.setText(tr("Ready"))
+        self._set_running(False)
+
     def _start(self) -> None:
+        self._confirm_target()
         self._parameters = self.parameters()
         transcription.save_parameters(self._parameters)
         cached = transcription.find_run(self.audio, self._parameters)
@@ -289,8 +323,11 @@ class TranscriptionDialog(QDialog):
         self.form.setEnabled(not running)
         self.run_button.setEnabled(not running)
         self.run_button.setText(tr("Transcribing …") if running else tr("Transcribe"))
+        self.close_button.setText(tr("Cancel") if running else tr("Close"))
 
     def _log_line(self, text: str) -> None:
+        self.log.show()
+        QTimer.singleShot(0, self._fit)
         self.log.appendPlainText(text)
 
     def _stop(self) -> None:

@@ -36,7 +36,12 @@ FIELD_WIDTH = 300  # a form of numbers that stretch across the page is hard to r
 
 
 def add_row(form: QFormLayout, editor: QWidget, field: Field) -> None:
-    """One row of a form: the spec's caption and tooltip, then the widget that edits its value."""
+    """One row of a form: the spec's caption and tooltip, then the widget that edits its value.
+
+    The field column grows to the rows' width whatever the style says: Breeze's style hint would
+    keep a combo at its size hint, leaving the controls of one form unaligned.
+    """
+    form.setFieldGrowthPolicy(QFormLayout.FieldGrowthPolicy.AllNonFixedFieldsGrow)
     editor.setMaximumWidth(FIELD_WIDTH)
     label = QLabel(tr(field.caption))
     if field.tooltip:
