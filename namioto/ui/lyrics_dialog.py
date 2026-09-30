@@ -1,31 +1,37 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """The lyrics window: the source text, the `.krc` it becomes, and the model call in between.
 
-A request runs off the GUI thread (`LyricsTranslator`), and `LyricsWatcher` follows the sidecar file
-so one edited outside the editor is seen.
+The project's lyrics are the box at the top, and the plain text below is the optional upstream that
+feeds it - the model, through the endpoint in the settings or through the clipboard, turns it into
+the `.krc` above. A request runs off the GUI thread (`LyricsTranslator`), and `LyricsWatcher` follows
+the sidecar file so one edited outside the editor is seen.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt6.QtCore import QFileSystemWatcher, QObject, pyqtSignal
+from PyQt6.QtCore import QFileSystemWatcher, QObject, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QGuiApplication, QTextCursor
 from PyQt6.QtWidgets import (
     QApplication,
-    QComboBox,
     QDialog,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QToolButton,
     QVBoxLayout,
+    QWidget,
 )
 
 from namioto import lyrics
 from namioto.i18n import tr
+from namioto.ui import icons
+from namioto.ui.controls import ICON_SIZE
 from namioto.ui.loading import LoadingThread
 
 LOAD_HEIGHT = 180
@@ -100,59 +106,71 @@ class LyricsWatcher(QObject):
         self.changed.emit()
 
 
-class LyricsDialog(QDialog):
-    """The `.krc` beside the project, and the two ways one gets there.
+def _fold_button(title: str, tooltip: str) -> QToolButton:
+    """A heading that folds its body away.
 
-    A `.krc` is imported whole into the lyrics box, or plain-text lyrics are annotated by a model
-    into it; `Save` writes the box out as the project's sidecar. The plain-text route is the only
-    reason a file that is not a `.krc` is read at all.
+    Not checkable: the widget styles paint a checked tool button as a pressed toggle, which reads as
+    a switch rather than as the heading over the panel.
+    """
+    button = QToolButton()
+    button.setText(title)
+    button.setToolTip(tooltip)
+    button.setAutoRaise(True)
+    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+    button.setArrowType(Qt.ArrowType.RightArrow)
+    return button
+
+
+class LyricsDialog(QDialog):
+    """The `.krc` beside the project, and the one pipeline that fills it.
+
+    `Save` writes the box at the top out as the project's sidecar; the plain text below is the only
+    reason a file that is not a `.krc` is read at all, and it folds away once there are lyrics to
+    work on.
     """
 
     saved = pyqtSignal(str)
     open_requested = pyqtSignal()
-    mode_changed = pyqtSignal(str)
 
-    def __init__(self, path: str | Path, config, mode: str = "edit", parent=None):
+    def __init__(self, path: str | Path, config, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(tr("Import lyrics"))
+        self.setWindowTitle(tr("Lyrics"))
         self.resize(680, 640)
         self.path = Path(path)
         self.config = config
         self.translator: LyricsTranslator | None = None
+        self._log_kind: str | None = None
 
         self.path_label = QLabel(str(self.path))
         self.path_label.setToolTip(tr("The lyrics file beside the project, written as .krc"))
-        self.mode = QComboBox()
-        self.mode.addItem(tr("Edit mode"), "edit")
-        self.mode.addItem(tr("Read-only mode"), "read")
-        self.mode.setCurrentIndex(max(0, self.mode.findData(mode)))
-        self.mode.setToolTip(
-            tr(
-                "Edit: the aligner's times lay the sounds out and the strip may drag them. "
-                "Read-only: the .krc's own .N and groups lay them out."
-            )
-        )
-        self.mode.currentIndexChanged.connect(self._emit_mode)
+
+        self.result = QPlainTextEdit()
+        self.result.setPlaceholderText(tr("The lyrics the project sings: import a .krc, or annotate plain text below"))
+        self.result.setPlainText(lyrics.load(self.path))
+        self._saved_text = self.result.toPlainText()
 
         self.load_krc_button = QPushButton(tr("Import .krc…"))
-        self.load_krc_button.setToolTip(tr("Use another .krc as this project's lyrics"))
+        self.load_krc_button.setIcon(icons.icon("import"))
+        self.load_krc_button.setToolTip(tr("Replace these lyrics with another .krc"))
         self.load_krc_button.clicked.connect(self._load_krc)
         self.save_button = QPushButton(tr("Save"))
+        self.save_button.setIcon(icons.icon("save"))
         self.save_button.setToolTip(tr("Write the lyrics to the project's .krc"))
+        self.save_button.setDefault(True)
         self.save_button.clicked.connect(self._save)
         self.open_button = QPushButton(tr("Open in external editor"))
+        self.open_button.setIcon(icons.icon("external"))
+        self.open_button.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
         self.open_button.setToolTip(tr("Open the lyrics file with the editor named in the settings"))
         self.open_button.clicked.connect(self.open_requested)
-        self.result = QPlainTextEdit()
-        self.result.setPlaceholderText(tr("The .krc lyrics: import one, or annotate plain text below"))
-        self.result.setPlainText(lyrics.load(self.path))
 
+        krc = QGroupBox(tr("Project lyrics (.krc)"))
+        krc.setToolTip(tr("The lyrics the project sings, kept beside it as a .krc"))
         krc_buttons = QHBoxLayout()
         krc_buttons.addWidget(self.load_krc_button)
         krc_buttons.addStretch(1)
-        krc_buttons.addWidget(self.save_button)
         krc_buttons.addWidget(self.open_button)
-        krc = QGroupBox(tr("Lyrics (.krc)"))
+        krc_buttons.addWidget(self.save_button)
         krc_body = QVBoxLayout(krc)
         krc_body.addWidget(self.result, 1)
         krc_body.addLayout(krc_buttons)
@@ -161,10 +179,12 @@ class LyricsDialog(QDialog):
         self.source.setPlaceholderText(tr("Paste plain-text lyrics to annotate"))
         self.source.setFixedHeight(LOAD_HEIGHT)
         self.load_text_button = QPushButton(tr("Load text…"))
+        self.load_text_button.setIcon(icons.icon("loadtext"))
         self.load_text_button.setToolTip(tr("Load a plain-text lyrics file to annotate"))
         self.load_text_button.clicked.connect(self._load_source)
         self.configured = bool(config.api_base.strip() and config.api_key.strip() and config.model.strip())
         self.translate_button = QPushButton(tr("Translate with the API"))
+        self.translate_button.setIcon(icons.icon("translate"))
         self.translate_button.setEnabled(self.configured)
         self.translate_button.setToolTip(
             tr("Ask the endpoint in the settings to annotate the text above")
@@ -173,6 +193,7 @@ class LyricsDialog(QDialog):
         )
         self.translate_button.clicked.connect(self._translate)
         self.copy_button = QPushButton(tr("Copy prompt"))
+        self.copy_button.setIcon(icons.icon("copy"))
         self.copy_button.setToolTip(tr("Put the prompt and the lyrics on the clipboard, for a web model"))
         self.copy_button.clicked.connect(self._copy_prompt)
         self.log = QPlainTextEdit()
@@ -180,18 +201,35 @@ class LyricsDialog(QDialog):
         self.log.setFixedHeight(LOG_HEIGHT)
         self.log.setPlaceholderText(tr("The model's own output, streamed as it arrives"))
         self.log.hide()
-        self._log_kind: str | None = None
+        self.hint = QLabel(
+            tr("No API is set up: copy the prompt into a web model, then paste its answer into the box above.")
+        )
+        self.hint.setWordWrap(True)
+        self.hint.setVisible(not self.configured)
 
         text_buttons = QHBoxLayout()
         text_buttons.addWidget(self.load_text_button)
-        text_buttons.addWidget(self.translate_button)
-        text_buttons.addWidget(self.copy_button)
         text_buttons.addStretch(1)
-        plain = QGroupBox(tr("Annotate plain text"))
+        text_buttons.addWidget(self.copy_button)
+        text_buttons.addWidget(self.translate_button)
+
+        plain = QWidget()
         plain_body = QVBoxLayout(plain)
+        plain_body.setContentsMargins(0, 0, 0, 0)
         plain_body.addWidget(self.source)
         plain_body.addWidget(self.log)
+        plain_body.addWidget(self.hint)
         plain_body.addLayout(text_buttons)
+
+        self.plain_toggle = _fold_button(
+            tr("Annotate plain text (optional)"),
+            tr("Turns plain lyrics into the .krc above: the model adds the rubies"),
+        )
+        self.plain_body = plain
+        # an empty box is the one case where the plain-text route is the thing to do
+        self.plain_open = not self._saved_text.strip()
+        self.plain_toggle.clicked.connect(self._toggle_plain)
+        self._render_plain()
 
         self.status_label = QLabel()
         self.status_label.setWordWrap(True)
@@ -201,19 +239,20 @@ class LyricsDialog(QDialog):
         bottom.addWidget(self.status_label, 1)
         bottom.addWidget(self.close_button)
 
-        top = QHBoxLayout()
-        top.addWidget(self.path_label, 1)
-        top.addWidget(QLabel(tr("Timeline mode")))
-        top.addWidget(self.mode)
-
         layout = QVBoxLayout(self)
-        layout.addLayout(top)
+        layout.addWidget(self.path_label)
         layout.addWidget(krc, 3)
+        layout.addWidget(self.plain_toggle)
         layout.addWidget(plain, 2)
         layout.addLayout(bottom)
 
-    def _emit_mode(self, _index: int) -> None:
-        self.mode_changed.emit(self.mode.currentData())
+    def _toggle_plain(self) -> None:
+        self.plain_open = not self.plain_open
+        self._render_plain()
+
+    def _render_plain(self) -> None:
+        self.plain_toggle.setArrowType(Qt.ArrowType.DownArrow if self.plain_open else Qt.ArrowType.RightArrow)
+        self.plain_body.setVisible(self.plain_open)
 
     def _load_krc(self) -> None:
         chosen, _filter = QFileDialog.getOpenFileName(
@@ -249,7 +288,9 @@ class LyricsDialog(QDialog):
 
     def _copy_prompt(self) -> None:
         QGuiApplication.clipboard().setText(lyrics.build_prompt(self.source.toPlainText()))
-        self.status_label.setText(tr("Prompt copied: paste it into a web model, then paste its answer below and save"))
+        self.status_label.setText(
+            tr("Prompt copied: paste it into a web model, then paste its answer into the box above and save")
+        )
 
     def _translate(self) -> None:
         source = self.source.toPlainText().strip()
@@ -297,8 +338,27 @@ class LyricsDialog(QDialog):
         except OSError as error:
             self.status_label.setText(tr("Could not save: {error}", error=error))
             return
+        self._saved_text = text
         self.status_label.setText(tr("Saved to {name}", name=self.path.name))
         self.saved.emit(text)
+
+    def _confirm_close(self) -> bool:
+        """A close that would drop unsaved lyrics asks first; a failed save keeps the window open."""
+        if self.result.toPlainText() == self._saved_text:
+            return True
+        answer = QMessageBox.question(
+            self,
+            tr("Lyrics"),
+            tr("Save the lyrics to {name} before closing?", name=self.path.name),
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Save,
+        )
+        if answer == QMessageBox.StandardButton.Cancel:
+            return False
+        if answer == QMessageBox.StandardButton.Save:
+            self._save()
+            return self.result.toPlainText() == self._saved_text
+        return True
 
     def _detach(self) -> None:
         """A request already on its way cannot be recalled, so it is left to finish unobserved."""
@@ -310,9 +370,7 @@ class LyricsDialog(QDialog):
             translator.setParent(QApplication.instance())
 
     def reject(self) -> None:
+        if not self._confirm_close():
+            return
         self._detach()
         super().reject()
-
-    def closeEvent(self, event) -> None:
-        self._detach()
-        super().closeEvent(event)

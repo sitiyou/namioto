@@ -236,7 +236,7 @@ The window has three control bars, each split into captioned blocks of related c
 | Bar | Blocks |
 | --- | --- |
 | Transport | **Project** (open, save, export MIDI), **Playback** (rewind, stop, play from the beginning, play/pause, forward, position readout, and the four display switches: auto page turn, overtone highlight, the channel sidebar, and the time division - the metronome icon checked means the time axis follows the beats of the tempo map, unchecked the seconds), **Speed** (0.10x-2.00x in 5% steps, pitch unchanged, with a reset icon back to 1.00x), **Tempo** (BPM, the estimated tempo of the audio, and the grid offset in ms) |
-| Edit | **Tools** (edit mode, pen, select, snap grid, quantize, the GAME transcription, the lyrics importer) |
+| Edit | **Tools** (edit mode, pen, select, snap grid, quantize, the GAME transcription, the lyrics window and the read-only lock) |
 | Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window (the few options the bars do not hold; the analysis parameters belong to the project) |
 
 **Volume** has a slider for each layer: the audio file is streamed at the level of the first one, and
@@ -345,30 +345,34 @@ are downloaded rather than redistributed here - see NOTICE.
 A project can carry rubies for the words its notes sing. The text itself lives in the `.nto`, so the
 project still opens with its lyrics once the sidecar is gone; a `.krc` file of the same base name
 beside it is a copy the project writes for external editing and export. The text-box button beside
-the GAME wand opens a window over that file. Import is a `.krc`: `Import .krc…` puts another one's
-text into the **Lyrics (.krc)** box, which is what the project sings. Plain text is the exception,
-and only so a model can make a `.krc` of it: the **Annotate plain text** box takes pasted lyrics or
-a `.txt`/`.md`/`.lrc` (`Load text…`), and `Translate with the API` or `Copy prompt` fills the
-lyrics box above. `Save` writes the `.krc` as plain UTF-8 text - readable and editable on its own -
-and the editor reloads it whenever something else changes it, so a hand edit shows up without
-reopening the project. `Open in external editor` hands the file to the command named under
-**External editor** in the settings, or to the platform's own choice when that is left empty.
+the GAME wand opens a window over that file. The window is one pipeline: the **Project lyrics
+(.krc)** box at the top is what the project sings, and the plain text below it is the optional
+upstream that fills it. `Import .krc…` puts another `.krc` into that box, and `Open in external
+editor` hands the file to the command named under **External editor** in the settings, or to the
+platform's own choice when that is left empty. `Save` writes the box as plain UTF-8 text - readable and editable on
+its own - and the editor reloads it whenever something else changes it, so a hand edit shows up
+without reopening the project. The plain-text panel folds away when there are already lyrics to work
+on, and opens by itself when the box is empty.
 
-The prompt is built in and adds the rubies: it is the same rule set an external `lyrics.md` role would
-carry, asking for the kana of each kanji in square brackets, grouped per word and comma-separated.
-`Copy prompt` puts it on the clipboard together with the lyrics, for a web model - paste it there,
-paste the answer back into the lyrics box and save. With an OpenAI-compatible endpoint set up under
-**Lyrics** in the settings, `Translate with the API` does that round trip in the background instead,
-and a box under the plain-text lyrics streams the model's own output as it arrives - its reasoning
-first, then the answer. That box appears only once the API is asked for; the clipboard and
-hand-editing routes never need it. The key lives in `~/.config/namioto/settings.json` in plain text,
-and nothing here
+Plain text is the exception, and only so a model can make a `.krc` of it: the panel takes pasted
+lyrics or a `.txt`/`.md`/`.lrc` (`Load text…`), and `Translate with the API` or `Copy prompt` fills
+the lyrics box above. The prompt is built in and adds the rubies: it is the same rule set an external
+`lyrics.md` role would carry, asking for the kana of each kanji in square brackets, grouped per word
+and comma-separated. `Copy prompt` puts it on the clipboard together with the lyrics, for a web
+model - paste it there, paste the answer back into the lyrics box and save. With an OpenAI-compatible
+endpoint set up under **Lyrics** in the settings, `Translate with the API` does that round trip in
+the background instead, and a box under the plain-text lyrics streams the model's own output as it
+arrives - its reasoning first, then the answer. Until an endpoint is set up the button is off and a
+line under the lyrics says to copy the prompt instead. The streamed box appears only once the API is
+asked for; the clipboard and hand-editing routes never need it. Closing with unsaved lyrics asks
+before they are dropped. The key lives in `~/.config/namioto/settings.json` in plain text, and
+nothing here
 checks the `.krc` syntax: a file with a mistake in it is still one you can fix in an editor.
 
-The window's **Timeline mode** picks how the sounds are laid on the notes. **Edit mode** lets the
-aligner's times do it and the strip be dragged; **Read-only mode** lets the `.krc`'s own `.N` and
-groups do it and keeps the strip still. The mode is kept in the `.nto`, and aligning is available in
-edit mode only.
+The lock button beside the lyrics one in the Edit bar picks how the sounds are laid on the notes.
+Off, the aligner's times do it and the strip can be dragged; on, the `.krc`'s own `.N` and groups do
+it and the strip is still. The mode is kept in the `.nto`, and aligning is available in edit mode
+only.
 
 Once a `.krc` is open and its audio is loaded, the clock button beside the text-box one puts a time
 on every sound: the whole stream is forced onto the frames of a wav2vec2 CTC model in one pass, and

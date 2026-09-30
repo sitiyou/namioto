@@ -3400,6 +3400,69 @@ def test_the_window_opens_with_the_lyrics_already_there(lyrics_window) -> None:
     dialog.close()
 
 
+def test_the_plain_text_panel_opens_when_there_are_no_lyrics(lyrics_window) -> None:
+    dialog = lyrics_dialog(lyrics_window)
+    assert dialog.plain_open is True
+    assert dialog.plain_body.isVisibleTo(dialog) is True
+    dialog.close()
+
+
+def test_the_plain_text_panel_stays_folded_over_existing_lyrics(lyrics_window) -> None:
+    lyrics.save(lyrics_window.lyrics_path(), "歌[うた]")
+    dialog = lyrics_dialog(lyrics_window)
+    assert dialog.plain_open is False
+    assert dialog.plain_body.isVisibleTo(dialog) is False
+    dialog.close()
+
+
+def test_an_unset_api_points_at_the_prompt(lyrics_window) -> None:
+    dialog = lyrics_dialog(lyrics_window)
+    assert dialog.translate_button.isEnabled() is False
+    assert dialog.copy_button.isEnabled() is True
+    assert dialog.hint.isVisibleTo(dialog) is True
+    dialog.close()
+
+
+def test_a_set_api_hides_the_prompt_hint(lyrics_window) -> None:
+    dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
+    assert dialog.translate_button.isEnabled() is True
+    assert dialog.hint.isVisibleTo(dialog) is False
+    dialog.close()
+
+
+def test_closing_with_unsaved_lyrics_asks(lyrics_window, monkeypatch) -> None:
+    dialog = lyrics_dialog(lyrics_window)
+    dialog.result.setPlainText("歌[うた]")
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Discard)
+
+    dialog.reject()
+
+    assert lyrics.load(lyrics_window.lyrics_path()) == ""  # Discard wrote nothing
+
+
+def test_closing_saves_the_lyrics_when_asked(lyrics_window, monkeypatch) -> None:
+    dialog = lyrics_dialog(lyrics_window)
+    dialog.result.setPlainText("歌[うた]")
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Save)
+
+    dialog.reject()
+
+    assert lyrics.load(lyrics_window.lyrics_path()) == "歌[うた]"
+
+
+def test_cancelling_the_close_keeps_the_unsaved_lyrics(lyrics_window, monkeypatch) -> None:
+    dialog = lyrics_dialog(lyrics_window)
+    dialog.result.setPlainText("歌[うた]")
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.StandardButton.Cancel)
+    finished: list[int] = []
+    dialog.finished.connect(finished.append)
+
+    dialog.reject()
+
+    assert finished == []
+    assert lyrics.load(lyrics_window.lyrics_path()) == ""
+
+
 def test_importing_a_krc_fills_the_lyrics_box(lyrics_window, tmp_path, monkeypatch) -> None:
     other = tmp_path / "other.krc"
     other.write_text("季節[き,せつ]", encoding="utf-8")
@@ -4981,28 +5044,24 @@ def test_read_mode_refuses_to_align(own_window, tmp_path) -> None:
     assert "edit mode" in own_window.statusBar().currentMessage().lower()
 
 
-def test_the_lyrics_window_offers_the_timeline_mode(lyrics_window) -> None:
-    dialog = lyrics_dialog(lyrics_window)
-    seen: list[str] = []
-    dialog.mode_changed.connect(seen.append)
+def test_the_lock_button_switches_the_timeline_mode(lyrics_window) -> None:
+    assert lyrics_window.edit.lyric_lock.isEnabled() is True
+    assert lyrics_window.edit.lyric_lock.isChecked() is False
+    assert lyrics_window._lyric_mode == "edit"
 
-    dialog.mode.setCurrentIndex(dialog.mode.findData("read"))
-
-    assert seen == ["read"]
-    assert dialog.mode.currentData() == "read"
-    dialog.close()
-
-
-def test_the_import_window_switches_the_mode(lyrics_window, monkeypatch) -> None:
-    def open_and_switch(dialog):
-        dialog.mode.setCurrentIndex(dialog.mode.findData("read"))
-        return QDialog.DialogCode.Rejected
-
-    monkeypatch.setattr(LyricsDialog, "exec", open_and_switch)
-
-    lyrics_window.edit.lyrics.click()
+    lyrics_window.edit.lyric_lock.click()
 
     assert lyrics_window._lyric_mode == "read"
+    assert lyrics_window.edit.align.isEnabled() is False
+
+
+def test_a_read_only_project_sets_the_lock(own_window, tmp_path) -> None:
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._stored_lyrics = project.Lyrics(text="あい\n", key=text_key("あい\n"), mode="read")
+    own_window._watch_lyrics()
+
+    assert own_window.edit.lyric_lock.isChecked() is True
+    assert own_window.edit.align.isEnabled() is False
 
 
 def test_a_read_only_strip_does_not_drag(own_window, tmp_path) -> None:

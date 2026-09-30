@@ -331,6 +331,7 @@ class MainWindow(QMainWindow):
         self.edit.transcribe_requested.connect(self._open_transcription)
         self.edit.lyrics_requested.connect(self._open_lyrics)
         self.edit.align_requested.connect(self._open_align)
+        self.edit.lyric_mode_changed.connect(self._set_lyric_mode)
         self.player.finished.connect(self._on_playback_finished)
         self.song.finished.connect(self._on_playback_finished)
         self.song.failed.connect(self._on_song_failed)
@@ -1144,6 +1145,8 @@ class MainWindow(QMainWindow):
                 lyrics.save(path, self.lyrics_text)
         self.lyrics_watcher.watch(path)
         self.edit.align.setEnabled(path is not None and self._lyric_mode == "edit")
+        self.edit.lyric_lock.setEnabled(path is not None)
+        self.edit.set_lyric_mode(self._lyric_mode)
         self._load_sounds()
         self._remap_lyrics()  # the mode may have changed even when the text did not
 
@@ -1273,8 +1276,7 @@ class MainWindow(QMainWindow):
         path = self.lyrics_path()
         if path is None:
             return
-        dialog = LyricsDialog(path, self.settings.lyrics, mode=self._lyric_mode, parent=self)
-        dialog.mode_changed.connect(self._set_lyric_mode)
+        dialog = LyricsDialog(path, self.settings.lyrics, parent=self)
         dialog.saved.connect(self._on_lyrics_saved)
         dialog.open_requested.connect(self._open_lyrics_editor)
         dialog.exec()
