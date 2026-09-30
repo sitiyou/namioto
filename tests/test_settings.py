@@ -9,8 +9,10 @@ from pathlib import Path
 import platformdirs
 import pytest
 
+from namioto import params
 from namioto import settings as store
 from namioto.analysis.game import models_root
+from namioto.channels import GM_PROGRAMS, PROGRAM_LABELS
 
 
 @pytest.fixture
@@ -145,7 +147,7 @@ def test_values_snap_to_the_step_they_are_shown_on(settings_file) -> None:
 def test_text_is_trimmed_and_bounded(settings_file) -> None:
     settings_file.write_text(json.dumps({"paths": {"last_audio_dir": "  " + "x" * 9999 + "  "}}))
     loaded = store.load()
-    assert len(store.get_value(loaded, "paths", "last_audio_dir")) == store.TEXT_LIMIT
+    assert len(store.get_value(loaded, "paths", "last_audio_dir")) == params.TEXT_LIMIT
 
     settings_file.write_text(json.dumps({"paths": {"last_audio_dir": None}}))
     assert store.get_value(store.load(), "paths", "last_audio_dir") == ""
@@ -174,15 +176,15 @@ def test_a_clone_can_be_edited_without_touching_the_original() -> None:
 
 
 def test_the_program_list_names_every_general_midi_preset() -> None:
-    assert len(store.GM_PROGRAMS) == 128
-    assert len(set(store.GM_PROGRAMS)) == 128  # one name per program, or the list cannot be picked from
-    assert store.GM_PROGRAMS[0] == "Acoustic Grand Piano"
-    assert store.GM_PROGRAMS[40] == "Violin"
-    assert store.GM_PROGRAMS[-1] == "Gunshot"
-    assert store.PROGRAM_LABELS[0] == "0: Acoustic Grand Piano"
-    assert store.PROGRAM_LABELS[40] == "40: Violin"
-    assert store.PROGRAM_LABELS[-1] == "127: Gunshot"
-    assert [label.split(":")[0] for label in store.PROGRAM_LABELS] == [str(index) for index in range(128)]
+    assert len(GM_PROGRAMS) == 128
+    assert len(set(GM_PROGRAMS)) == 128  # one name per program, or the list cannot be picked from
+    assert GM_PROGRAMS[0] == "Acoustic Grand Piano"
+    assert GM_PROGRAMS[40] == "Violin"
+    assert GM_PROGRAMS[-1] == "Gunshot"
+    assert PROGRAM_LABELS[0] == "0: Acoustic Grand Piano"
+    assert PROGRAM_LABELS[40] == "40: Violin"
+    assert PROGRAM_LABELS[-1] == "127: Gunshot"
+    assert [label.split(":")[0] for label in PROGRAM_LABELS] == [str(index) for index in range(128)]
 
 
 def test_a_choice_that_is_not_one_of_them_falls_back(settings_file) -> None:

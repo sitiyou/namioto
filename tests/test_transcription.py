@@ -142,15 +142,15 @@ def test_running_the_same_thing_again_keeps_one_entry() -> None:
 
 
 def test_a_run_file_that_makes_no_sense_is_no_runs(tmp_path) -> None:
-    from namioto import settings as store
+    from namioto.utils import write_json
 
     target = transcription.results_root() / f"{transcription.audio_key(AUDIO)}.json"
-    store.write_json({"version": transcription.STORE_VERSION, "runs": {"x": {"notes": "nonsense"}}}, target)
+    write_json({"version": transcription.STORE_VERSION, "runs": {"x": {"notes": "nonsense"}}}, target)
     assert transcription.load_runs(AUDIO) == {}
 
 
 def test_a_run_file_another_version_wrote_is_no_runs() -> None:
-    from namioto import settings as store
+    from namioto.utils import write_json
 
     values = transcription.default_parameters()
     assert transcription.save_run(AUDIO, values, [(0.0, 0.5, 60.0)])
@@ -159,7 +159,7 @@ def test_a_run_file_another_version_wrote_is_no_runs() -> None:
     target = transcription.results_root() / f"{transcription.audio_key(AUDIO)}.json"
     stored = json.loads(target.read_text())
     stored["version"] = transcription.STORE_VERSION - 1
-    store.write_json(stored, target)
+    write_json(stored, target)
 
     assert transcription.load_runs(AUDIO) == {}
     assert transcription.find_run(AUDIO, values) is None

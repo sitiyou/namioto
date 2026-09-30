@@ -45,10 +45,10 @@ from typing import Any, Protocol
 import librosa
 import numpy as np
 
-from namioto import settings as store
+from namioto import params
 from namioto.analysis import devices, model_store
 from namioto.analysis.slicing import Slicer
-from namioto.settings import Field
+from namioto.params import Field
 from namioto.utils import config_dir, data_dir, file_stamp, resolved
 
 SAMPLE_RATE = 16000
@@ -234,20 +234,20 @@ def parameter_path() -> pathlib.Path:
 
 
 def default_parameters() -> dict[str, Any]:
-    return store.defaults(PARAMETERS)
+    return params.defaults(PARAMETERS)
 
 
 def coerce_parameters(values: Any) -> dict[str, Any]:
-    return store.coerce_values(PARAMETERS, values)
+    return params.coerce_values(PARAMETERS, values)
 
 
 def load_parameters() -> dict[str, Any]:
     """What the window opens with: the last run's choices, or the defaults for anything unreadable."""
-    return store.load_values(parameter_path(), PARAMETERS)
+    return params.load_values(parameter_path(), PARAMETERS)
 
 
 def save_parameters(values: Any) -> pathlib.Path:
-    return store.save_values(parameter_path(), PARAMETERS, values)
+    return params.save_values(parameter_path(), PARAMETERS, values)
 
 
 def alignments_root() -> pathlib.Path:

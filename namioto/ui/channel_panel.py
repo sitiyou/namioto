@@ -27,8 +27,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from namioto import settings as store
-from namioto.channels import Channel, free_channel
+from namioto.channels import GM_PROGRAMS, PROGRAM_LABELS, Channel, free_channel
 from namioto.i18n import tr
 from namioto.ui import icons
 from namioto.ui.controls import CORNER_RADIUS, FIELD_HEIGHT, icon_button
@@ -79,7 +78,7 @@ class _Card(QWidget):
         self.id.setMinimumWidth(16)
         self.id.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         self.program = QComboBox()
-        self.program.addItems(store.GM_PROGRAMS)  # the index is the program number
+        self.program.addItems(GM_PROGRAMS)  # the index is the program number
         # the card is a fixed column: the combo must be allowed to shrink below its longest item
         self.program.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
         self.program.setMinimumContentsLength(12)
@@ -126,7 +125,7 @@ class _Card(QWidget):
         self.name.setText(channel.name or tr("Channel"))
         self.program.blockSignals(True)
         self.program.setCurrentIndex(channel.program)
-        self.program.setToolTip(store.PROGRAM_LABELS[channel.program])
+        self.program.setToolTip(PROGRAM_LABELS[channel.program])
         self.program.blockSignals(False)
         self.lock_button.setIcon(icons.icon("lock" if channel.lock else "unlock"))
         self.lock_button.setChecked(channel.lock)
@@ -190,7 +189,7 @@ class _Card(QWidget):
             self._panel.view.set_channel_field(self._number, **{field: not getattr(channel, field)})
 
     def _on_program(self, program: int) -> None:
-        self.program.setToolTip(store.PROGRAM_LABELS[program])
+        self.program.setToolTip(PROGRAM_LABELS[program])
         self._panel.view.set_channel_field(self._number, program=program)
 
 

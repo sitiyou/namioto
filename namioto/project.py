@@ -21,8 +21,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NamedTuple
 
+from namioto import params
 from namioto import settings as store
 from namioto.channels import CHANNEL_COUNT, Channel, valid_color
+from namioto.utils import write_json
 
 FORMAT = "namioto"
 VERSION = 8
@@ -137,7 +139,7 @@ def _channel_dict(channel: Channel) -> dict:
 
 
 def _audio(value: Any) -> str:
-    return str(value).strip()[: store.TEXT_LIMIT] if isinstance(value, str) else ""
+    return str(value).strip()[: params.TEXT_LIMIT] if isinstance(value, str) else ""
 
 
 def _note(entry: Any) -> Note | None:
@@ -171,7 +173,7 @@ def _channel(entry: Any) -> Channel:
     )
     name = entry.get("name")
     return Channel(
-        name=name.strip()[: store.TEXT_LIMIT] if isinstance(name, str) else "",
+        name=name.strip()[: params.TEXT_LIMIT] if isinstance(name, str) else "",
         color=valid_color(entry.get("color")),
         channel=whole(entry.get("channel", 0), 0, CHANNEL_COUNT - 1, 0),
         program=whole(entry.get("program", 0), 0, 127, 0),
@@ -272,4 +274,4 @@ def load(path: str | Path) -> Project:
 
 def save(project: Project, path: str | Path) -> Path:
     """Write the project out whole: a half-written file would be read as a broken one."""
-    return store.write_json(to_dict(project), Path(path))
+    return write_json(to_dict(project), Path(path))

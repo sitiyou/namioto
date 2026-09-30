@@ -20,10 +20,10 @@ import time
 import traceback
 from typing import Any
 
-from namioto import settings as store
+from namioto import params
 from namioto.analysis import devices
-from namioto.settings import Field
-from namioto.utils import config_dir, data_dir, file_stamp, resolved
+from namioto.params import Field
+from namioto.utils import config_dir, data_dir, file_stamp, resolved, write_json
 
 GAME_SIZES = ("small", "medium", "large")
 # the codes GAME's own config.json maps for the segmenter; 0, and so the empty code, is universal
@@ -141,11 +141,11 @@ PARAMETERS: tuple[Field, ...] = (
 
 
 def default_parameters() -> dict[str, Any]:
-    return store.defaults(PARAMETERS)
+    return params.defaults(PARAMETERS)
 
 
 def coerce_parameters(values: Any) -> dict[str, Any]:
-    return store.coerce_values(PARAMETERS, values)
+    return params.coerce_values(PARAMETERS, values)
 
 
 def parameter_path() -> pathlib.Path:
@@ -160,11 +160,11 @@ def results_root() -> pathlib.Path:
 
 def load_parameters() -> dict[str, Any]:
     """What the dialog opens with: the last run's values, or the defaults for anything unreadable."""
-    return store.load_values(parameter_path(), PARAMETERS)
+    return params.load_values(parameter_path(), PARAMETERS)
 
 
 def save_parameters(values: Any) -> pathlib.Path:
-    return store.save_values(parameter_path(), PARAMETERS, values)
+    return params.save_values(parameter_path(), PARAMETERS, values)
 
 
 def audio_key(path: Any) -> str:
@@ -239,7 +239,7 @@ def save_run(path: Any, parameters: Any, notes) -> pathlib.Path:
         ],
     }
     payload = {"version": STORE_VERSION, "audio": str(resolved(path)), "runs": runs}
-    return store.write_json(payload, _results_path(path))
+    return write_json(payload, _results_path(path))
 
 
 def transcribe(path: str, parameters: dict, queue) -> None:

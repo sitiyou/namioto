@@ -1,19 +1,16 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""What the program remembers between runs: the settings model, its file and its defaults.
+"""What the program remembers between runs: the spec table of every value, its file and the defaults.
 
-Qt-free on purpose. The spec table below is the single source of truth: it gives the defaults, tells
-`load` how to read a value back from the file (type, range, the values a choice may take) and lets
-`namioto.ui.settings_dialog` build its pages without repeating any of it. A `Field` is what the align
-and transcription windows describe their own parameter files with too, and they load and save those
-through the same helpers at the bottom of this module.
+Qt-free on purpose. The spec table below is the single source of truth for the program: it gives the
+defaults, tells `load` how to read a value back from the file, and lets `namioto.ui.settings_dialog`
+build its pages without repeating any of it. `namioto.params` holds the `Field` primitive the table
+is written with, and the align and transcription windows describe their own parameter files with it.
 
-`coerce` brings a bad value back in line on load: a wrong type falls to the field's default, an
-out-of-range one is clamped, and a number is snapped to its step. A field a bar control already sets
-is `hidden` and gets no row, and so is a project field with no control; `scope="project"` marks a
-document field, read and written by `project_values` / `apply_project_values` on this same table.
-Precedence is project file > settings file > built-in default, with the command line on top for one
-run, and `remembered=False` marks the two song-scoped values (tempo, the grid offset) whose default
-is written back rather than what the user left.
+A field a bar control already sets is `hidden` and gets no row, and so is a project field with no
+control; `scope="project"` marks a document field, read and written by `project_values` /
+`apply_project_values` on this same table. Precedence is project file > settings file > built-in
+default, with the command line on top for one run, and `remembered=False` marks the two song-scoped
+values (tempo, the grid offset) whose default is written back rather than what the user left.
 """
 
 from __future__ import annotations
@@ -22,182 +19,18 @@ import copy
 import json
 import os
 import warnings
-from collections.abc import Sequence
-from dataclasses import dataclass, field, make_dataclass
 from pathlib import Path
 from typing import Any
 
+from namioto import params
 from namioto.analysis import devices
 from namioto.analysis.choices import ALGORITHMS, CHANNEL_MODES
 from namioto.i18n import LANGUAGE_CODES, LANGUAGE_LABELS, SYSTEM
-from namioto.utils import config_dir, write_text
+from namioto.params import Field, Section
+from namioto.utils import config_dir, write_json
 
 VERSION = 5
-TEXT_LIMIT = 4096
 DIVISIONS = ("beats", "seconds")
-# the General MIDI program list, in the order the program change is meant to select them in
-GM_PROGRAMS = (
-    "Acoustic Grand Piano",
-    "Bright Acoustic Piano",
-    "Electric Grand Piano",
-    "Honky-tonk Piano",
-    "Electric Piano 1",
-    "Electric Piano 2",
-    "Harpsichord",
-    "Clavinet",
-    "Celesta",
-    "Glockenspiel",
-    "Music Box",
-    "Vibraphone",
-    "Marimba",
-    "Xylophone",
-    "Tubular Bells",
-    "Dulcimer",
-    "Drawbar Organ",
-    "Percussive Organ",
-    "Rock Organ",
-    "Church Organ",
-    "Reed Organ",
-    "Accordion",
-    "Harmonica",
-    "Tango Accordion",
-    "Acoustic Guitar (nylon)",
-    "Acoustic Guitar (steel)",
-    "Electric Guitar (jazz)",
-    "Electric Guitar (clean)",
-    "Electric Guitar (muted)",
-    "Overdriven Guitar",
-    "Distortion Guitar",
-    "Guitar Harmonics",
-    "Acoustic Bass",
-    "Electric Bass (finger)",
-    "Electric Bass (pick)",
-    "Fretless Bass",
-    "Slap Bass 1",
-    "Slap Bass 2",
-    "Synth Bass 1",
-    "Synth Bass 2",
-    "Violin",
-    "Viola",
-    "Cello",
-    "Contrabass",
-    "Tremolo Strings",
-    "Pizzicato Strings",
-    "Orchestral Harp",
-    "Timpani",
-    "String Ensemble 1",
-    "String Ensemble 2",
-    "Synth Strings 1",
-    "Synth Strings 2",
-    "Choir Aahs",
-    "Voice Oohs",
-    "Synth Voice",
-    "Orchestra Hit",
-    "Trumpet",
-    "Trombone",
-    "Tuba",
-    "Muted Trumpet",
-    "French Horn",
-    "Brass Section",
-    "Synth Brass 1",
-    "Synth Brass 2",
-    "Soprano Sax",
-    "Alto Sax",
-    "Tenor Sax",
-    "Baritone Sax",
-    "Oboe",
-    "English Horn",
-    "Bassoon",
-    "Clarinet",
-    "Piccolo",
-    "Flute",
-    "Recorder",
-    "Pan Flute",
-    "Blown Bottle",
-    "Shakuhachi",
-    "Whistle",
-    "Ocarina",
-    "Lead 1 (square)",
-    "Lead 2 (sawtooth)",
-    "Lead 3 (calliope)",
-    "Lead 4 (chiff)",
-    "Lead 5 (charang)",
-    "Lead 6 (voice)",
-    "Lead 7 (fifths)",
-    "Lead 8 (bass + lead)",
-    "Pad 1 (new age)",
-    "Pad 2 (warm)",
-    "Pad 3 (polysynth)",
-    "Pad 4 (choir)",
-    "Pad 5 (bowed)",
-    "Pad 6 (metallic)",
-    "Pad 7 (halo)",
-    "Pad 8 (sweep)",
-    "FX 1 (rain)",
-    "FX 2 (soundtrack)",
-    "FX 3 (crystal)",
-    "FX 4 (atmosphere)",
-    "FX 5 (brightness)",
-    "FX 6 (goblins)",
-    "FX 7 (echoes)",
-    "FX 8 (sci-fi)",
-    "Sitar",
-    "Banjo",
-    "Shamisen",
-    "Koto",
-    "Kalimba",
-    "Bag pipe",
-    "Fiddle",
-    "Shanai",
-    "Tinkle Bell",
-    "Agogo",
-    "Steel Drums",
-    "Woodblock",
-    "Taiko Drum",
-    "Melodic Tom",
-    "Synth Drum",
-    "Reverse Cymbal",
-    "Guitar Fret Noise",
-    "Breath Noise",
-    "Seashore",
-    "Bird Tweet",
-    "Telephone Ring",
-    "Helicopter",
-    "Applause",
-    "Gunshot",
-)
-PROGRAM_LABELS = tuple(f"{index}: {name}" for index, name in enumerate(GM_PROGRAMS))
-
-
-@dataclass(frozen=True)
-class Field:
-    """One setting: its default, how to read it back, and how the dialog shows it."""
-
-    name: str
-    kind: str  # bool, int, float, choice, device, text, style or secret
-    default: Any
-    caption: str
-    tooltip: str = ""
-    low: float = 0.0
-    high: float = 0.0
-    step: float = 0.0  # values snap to it, 0 meaning they do not
-    decimals: int = 3
-    choices: tuple = ()
-    labels: tuple[str, ...] = ()  # what to show for each choice, the choices themselves when empty
-    suffix: str = ""
-    advanced: bool = False
-    hidden: bool = False  # the program fills it in itself, so it never gets a row
-    remembered: bool = True  # False: it belongs to one song, so the file keeps the default
-    scope: str = "app"  # "project": the value describes a document, so the project file owns it
-
-
-@dataclass(frozen=True)
-class Section:
-    name: str
-    page: str
-    title: str
-    fields: tuple[Field, ...]
-
 
 SECTIONS: tuple[Section, ...] = (
     Section(
@@ -669,26 +502,7 @@ SECTIONS: tuple[Section, ...] = (
 )
 
 
-def _python_type(kind: str) -> type:
-    return {"bool": bool, "int": int, "float": float}.get(kind, str)
-
-
-def _build_types() -> type:
-    made = {
-        section.name: make_dataclass(
-            section.title,
-            [(item.name, _python_type(item.kind), field(default=item.default)) for item in section.fields],
-        )
-        for section in SECTIONS
-    }
-    return make_dataclass(
-        "Settings",
-        [("version", int, field(default=VERSION))]
-        + [(section.name, made[section.name], field(default_factory=made[section.name])) for section in SECTIONS],
-    )
-
-
-Settings = _build_types()
+Settings = params.build_types(VERSION, SECTIONS)
 FIELD_SPECS = {(section.name, item.name): item for section in SECTIONS for item in section.fields}
 PROJECT_FIELDS = tuple(
     (section.name, item) for section in SECTIONS for item in section.fields if item.scope == "project"
@@ -727,56 +541,7 @@ def get_value(settings: Settings, section: str, name: str) -> Any:
 
 def set_value(settings: Settings, section: str, name: str, value: Any) -> None:
     """Put `value` on one field, first making it fit the field's type and range."""
-    setattr(getattr(settings, section), name, coerce(FIELD_SPECS[(section, name)], value))
-
-
-def coerce(spec: Field, value: Any) -> Any:
-    """A file may hold anything at all, so every value is checked before it is used."""
-    if spec.kind == "bool":
-        return value if isinstance(value, bool) else spec.default
-    if spec.kind in ("choice", "device"):
-        # a bool would pass for 0 or 1 here, and the synthesiser would be sent a true instead of a number
-        return value if not isinstance(value, bool) and value in spec.choices else spec.default
-    if spec.kind in ("int", "float"):
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            return spec.default
-        number = min(spec.high, max(spec.low, float(value)))
-        number = round(number / spec.step) * spec.step if spec.step else number
-        return int(round(number)) if spec.kind == "int" else round(number, spec.decimals)
-    if value is None:  # a null is a missing text, not the word "None"
-        return spec.default
-    text = str(value).strip()[:TEXT_LIMIT]
-    return text
-
-
-def defaults(fields: Sequence[Field]) -> dict[str, Any]:
-    """The values a field table starts from."""
-    return {item.name: item.default for item in fields}
-
-
-def coerce_values(fields: Sequence[Field], values: Any) -> dict[str, Any]:
-    """A file may hold anything at all, so every value goes through its field's own check."""
-    if not isinstance(values, dict):
-        return defaults(fields)
-    return {item.name: coerce(item, values.get(item.name, item.default)) for item in fields}
-
-
-def load_values(path: str | Path, fields: Sequence[Field]) -> dict[str, Any]:
-    """What a dialog opens with: the file's values, or the defaults for anything unreadable."""
-    target = Path(path)
-    try:
-        data = json.loads(target.read_text(encoding="utf-8"))
-    except FileNotFoundError:
-        return defaults(fields)
-    except (OSError, ValueError) as error:
-        warnings.warn(f"{target} could not be read ({error}); defaults are in use", stacklevel=2)
-        return defaults(fields)
-    return coerce_values(fields, data)
-
-
-def save_values(path: str | Path, fields: Sequence[Field], values: Any) -> Path:
-    """Write one field table's values out whole, checked first."""
-    return write_json(coerce_values(fields, values), path)
+    setattr(getattr(settings, section), name, params.coerce(FIELD_SPECS[(section, name)], value))
 
 
 def to_dict(settings: Settings) -> dict:
@@ -798,7 +563,7 @@ def from_dict(data: Any) -> Settings:
         if isinstance(stored, dict):
             for item in section.fields:
                 if item.name in stored:
-                    setattr(getattr(settings, section.name), item.name, coerce(item, stored[item.name]))
+                    setattr(getattr(settings, section.name), item.name, params.coerce(item, stored[item.name]))
     return settings
 
 
@@ -813,11 +578,6 @@ def load(path: str | Path | None = None) -> Settings:
         warnings.warn(f"{target} could not be read as settings ({error}); defaults are in use", stacklevel=2)
         return Settings()
     return from_dict(data)
-
-
-def write_json(data: dict, path: str | Path) -> Path:
-    """Write a whole file at once, with the layout both settings and projects use."""
-    return write_text(path, json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 def save(settings: Settings, path: str | Path | None = None) -> Path:

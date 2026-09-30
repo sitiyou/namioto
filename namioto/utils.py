@@ -12,6 +12,7 @@ string and a whole `.krc` line.
 
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unicodedata
@@ -61,6 +62,11 @@ def write_text(path: str | Path, text: str) -> Path:
         Path(name).unlink(missing_ok=True)
         raise
     return target
+
+
+def write_json(data: dict, path: str | Path) -> Path:
+    """Write a whole file at once, with the layout both settings and projects use."""
+    return write_text(path, json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True) + "\n")
 
 
 _VOWELS = "aiueo"
