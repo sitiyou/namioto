@@ -6,19 +6,17 @@ from __future__ import annotations
 import sys
 import time
 import types
-from types import SimpleNamespace
 
-import numpy as np
+import pytest
 
-from namioto.playback import render_notes
+from namioto import _audio
 from namioto.ui.audio import (
     NOTE_OFF,
     NOTE_ON,
     PROGRAM_CHANGE,
     VELOCITY,
+    BuiltinSynth,
     MidiPortOut,
-    MidiSink,
-    SilentPlayer,
     open_player,
 )
 
@@ -33,17 +31,65 @@ class FakePort:
         self.messages.append(list(message))
 
 
-def test_a_preview_mixes_over_what_is_already_sounding() -> None:
-    voice = render_notes([(60, 0.0, 0.05)])
-    sink = MidiSink()
-    sink.mix = np.zeros(len(voice) * 2, dtype=np.float32)
-    sink._source = SimpleNamespace(cursor=0)  # the stream is being read from the top
+def test_the_built_in_synth_prepares_a_program_without_a_device() -> None:
+    synth = BuiltinSynth()
+    assert not synth.is_playing and synth.duration == 0.0
 
-    sink.preview(60, 0.05)
-    assert np.array_equal(sink.mix[: len(voice)], voice)
+    synth.set_program([(60, 0.0, 1.0)], 1.0)
+    assert synth.duration == pytest.approx(1.5)  # the note plus its release tail
+    synth.seek(0.75)
+    assert synth.position == pytest.approx(0.75)
+    synth.stop()
+    assert synth.position == 0.0
 
-    sink.preview(67, 0.05)  # a second click before the first note has finished
-    assert np.allclose(sink.mix[: len(voice)], voice + render_notes([(67, 0.0, 0.05)]))
+    synth.set_program([(60, 0.0, 1.0)], 2.0)
+    assert synth.duration == pytest.approx(1.5)  # the timeline itself does not change
+
+
+class FakeBuiltinOutput:
+    """The native engine with no device, to check the synth's source/output time conversion."""
+
+    def __init__(self, *_args) -> None:
+        self.is_open = False
+        self.playing = False
+        self.position = 0.0
+        self.finished = False
+        self.played: list[float] = []
+        self.sought: list[float] = []
+
+    def open(self, _null_backend: bool) -> bool:
+        self.is_open = True
+        return True
+
+    def submit_buffer(self, _data, _start_seconds: float, _gain: float, _buffer_id: int) -> None:
+        pass
+
+    def play(self, seconds: float = 0.0) -> None:
+        self.played.append(seconds)
+        self.playing = True
+
+    def pause(self) -> None:
+        self.playing = False
+
+    def seek(self, seconds: float) -> None:
+        self.sought.append(seconds)
+        self.position = seconds
+
+
+def test_the_built_in_synth_speaks_the_source_timeline(monkeypatch) -> None:
+    fake = FakeBuiltinOutput()
+    monkeypatch.setattr(_audio, "Output", lambda *args: fake)
+    synth = BuiltinSynth()
+
+    synth.set_program([(69, 0.0, 2.0)], 0.5)
+    synth.play(1.0)
+    assert fake.played == [2.0]  # one source second at half speed is two output seconds
+
+    fake.position = 3.0
+    assert synth.position == pytest.approx(1.5)  # three output seconds are one and a half of source
+
+    synth.seek(2.0)
+    assert fake.sought == [4.0]
 
 
 def note_messages(port) -> list[list[int]]:
@@ -75,20 +121,6 @@ def test_stopping_silences_a_preview() -> None:
     player.stop()
 
     assert note_messages(port)[-1] == [NOTE_OFF, 60, 0]
-
-
-def test_clicking_the_same_note_again_restarts_the_built_in_voice() -> None:
-    voice = render_notes([(60, 0.0, 0.05)])
-    sink = MidiSink()
-    sink.mix = np.zeros(len(voice) * 2, dtype=np.float32)
-    sink._source = SimpleNamespace(cursor=0)
-
-    sink.preview(60, 0.05)
-    assert np.array_equal(sink.mix[: len(voice)], voice)
-
-    sink.preview(60, 0.05)  # the note is released and started again, not stacked on itself
-    released = int(0.05 * sink.sample_rate)
-    assert np.allclose(sink.mix[released : len(voice)], voice[released:])
 
 
 def test_the_midi_volume_becomes_a_control_change() -> None:
@@ -177,11 +209,11 @@ def test_the_external_synth_is_preferred_when_one_is_listening() -> None:
 
 def test_a_backend_that_was_asked_for_is_honoured() -> None:
     player, name = open_player(backend="builtin")
-    assert isinstance(player, MidiSink)
+    assert isinstance(player, BuiltinSynth)
     assert name == "the built-in synth"
 
 
-def test_a_machine_with_no_synth_plays_nothing(monkeypatch) -> None:
+def test_with_no_midi_synth_the_built_in_one_takes_over(monkeypatch) -> None:
     fake_midi = types.ModuleType("rtmidi")
 
     class NoPorts:
@@ -192,9 +224,9 @@ def test_a_machine_with_no_synth_plays_nothing(monkeypatch) -> None:
     monkeypatch.setitem(sys.modules, "rtmidi", fake_midi)
 
     player, name = open_player()
-    assert isinstance(player, SilentPlayer)
-    assert name == "no MIDI output" and player.silent
-    player.set_program([(60, 0.0, 1.0)], 1.0)
-    player.play()
-    player.preview(60)
-    assert player.duration == 0.0 and player.position == 0.0 and not player.is_playing
+    assert isinstance(player, BuiltinSynth)
+    assert name == "the built-in synth"
+
+    player.set_program([(60, 0.0, 1.0)], 1.0)  # a program prepares without opening a device
+    assert player.duration == pytest.approx(1.5)
+    assert not player.is_playing and player.position == 0.0

@@ -55,7 +55,7 @@ from namioto.karaoke import sound_lines, text_key
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner
 from namioto.ui.app import MainWindow, TempoLoader
-from namioto.ui.audio import MidiPortOut, MidiSink, find_port, find_synth_port
+from namioto.ui.audio import BuiltinSynth, MidiPortOut, find_port, find_synth_port
 from namioto.ui.controls import Cluster, EditBar, TransportBar, ValueSlider
 from namioto.ui.lyrics_dialog import LyricsDialog, LyricsTranslator
 from namioto.ui.midi_dialog import MidiImportDialog
@@ -2417,18 +2417,17 @@ def test_a_silent_player_keeps_the_midi_volume_out_of_the_settings(window) -> No
     window._sync_midi_volume()
 
 
-def test_midi_sink_keeps_the_position_without_playing() -> None:
-    sink = MidiSink()
-    sink.set_program([(69, 0.0, 1.0)], 1.0)
-    assert sink.duration == pytest.approx(1.5)  # the note plus its release tail
-    assert sink.position == 0.0 and not sink.is_playing
-    sink.seek(0.75)
-    assert sink.position == pytest.approx(0.75)
-    sink.stop()
-    assert sink.position == 0.0
-    sink.set_program([(69, 0.0, 1.0)], 2.0)  # at double speed the mix is half as long
-    assert len(sink.mix) == round(0.75 * 44100)
-    assert sink.duration == pytest.approx(1.5)  # the timeline itself does not change
+def test_the_built_in_synth_keeps_the_position_without_playing() -> None:
+    synth = BuiltinSynth()
+    synth.set_program([(69, 0.0, 1.0)], 1.0)
+    assert synth.duration == pytest.approx(1.5)  # the note plus its release tail
+    assert synth.position == 0.0 and not synth.is_playing
+    synth.seek(0.75)
+    assert synth.position == pytest.approx(0.75)
+    synth.stop()
+    assert synth.position == 0.0
+    synth.set_program([(69, 0.0, 1.0)], 2.0)
+    assert synth.duration == pytest.approx(1.5)  # the timeline itself does not change
 
 
 def test_a_synth_port_is_preferred_over_the_loopback() -> None:
@@ -3044,13 +3043,6 @@ def test_the_zoom_can_be_set_from_outside(window) -> None:
     window.view.set_zoom(1.0, 500.0)  # both ends are held to what the roll can draw
     assert window.view.zoom == (window.view.MIN_ZOOM_X, window.view.MAX_ZOOM_Y)
     window.view.set_zoom(48.0, 16.0)
-
-
-def test_the_song_buffer_follows_the_settings(own_window) -> None:
-    own_window.song.buffer_ms = 200
-    assert own_window.song.buffer_ms == 200
-    own_window.song.buffer_ms = 1
-    assert own_window.song.buffer_ms == 10
 
 
 def test_a_midi_port_is_matched_by_name() -> None:

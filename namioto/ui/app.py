@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import contextlib
-import multiprocessing
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -58,7 +57,7 @@ from namioto.karaoke import KrcError, export_krc, snap_to_beats, sound_lines, te
 from namioto.playback import note_frequency
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner
-from namioto.ui.audio import open_player, warm_audio_output
+from namioto.ui.audio import open_player
 from namioto.ui.channel_panel import ChannelPanel
 from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
 from namioto.ui.loading import LoadingThread
@@ -67,8 +66,7 @@ from namioto.ui.lyrics_dialog import LyricsDialog, LyricsWatcher
 from namioto.ui.midi_dialog import MidiImportDialog
 from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler
 from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
-from namioto.ui.song import load_song
-from namioto.ui.song_process import SongProcess
+from namioto.ui.song import SongPlayer, load_song
 from namioto.ui.spectrogram import SpectrumLoader
 from namioto.ui.strips import SoundStrip
 from namioto.ui.text import note_name
@@ -245,7 +243,7 @@ class MainWindow(QMainWindow):
         self.player, self.player_name = self._make_player()
         self._current_player_key = self._player_key()
         self.player.gain = self.settings.playback.midi_volume / 100.0
-        self.song = SongProcess(self)
+        self.song = SongPlayer(self)
         self.lyrics_watcher = LyricsWatcher(self)
         self.lyrics_watcher.changed.connect(self._on_lyrics_file_changed)
         self.position_timer = QTimer(self)
@@ -1432,7 +1430,7 @@ class MainWindow(QMainWindow):
         self._remember_configuration()
         self._remember_session()
         self.settings_store.flush()
-        self.song.close()  # the child owns the audio device, so it leaves before the window does
+        self.song.close()  # the engine owns the audio device, so it leaves before the window does
         super().closeEvent(event)
 
     def _analysis_options(self) -> dict:
@@ -1761,13 +1759,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def main() -> int:
-    multiprocessing.freeze_support()  # a frozen build has to hand the child back the same bootstrap
     args = parse_args()
     app = QApplication(sys.argv)
     window = MainWindow(overrides={"channels": args.channels, "t_num": args.t_num})
     window.apply_overrides(gain=args.gain, contrast=args.contrast)
     window.show()
-    QTimer.singleShot(0, warm_audio_output)  # off the first play, whose sink would enumerate the devices
     if args.audio is not None:
         # a file waits for the window. Naming a project opens the platform's file chooser, and on
         # Linux that is the xdg-desktop-portal one, which is only ready once the event loop has run -

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Note playback outputs: the MIDI synth listening on this machine, or silence when there is none."""
+"""Note playback outputs: an external MIDI synth, or the built-in synth on the native engine."""
 
 from __future__ import annotations
 
@@ -8,13 +8,14 @@ import time
 from collections.abc import Sequence
 
 import numpy as np
-from PyQt6.QtCore import QIODevice, QObject, pyqtSignal
-from PyQt6.QtMultimedia import QAudioFormat, QAudioSink, QMediaDevices, QtAudio
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
-from namioto.playback import A4, RELEASE, SAMPLE_RATE, render_notes
+from namioto import _audio
+from namioto.playback import A4, SAMPLE_RATE, TAIL, render_notes
 
-BUFFER_MS = 80
-INT16_PEAK = 32767.0
+BUFFER_FRAMES = 1024
+FINISHED_POLL_MS = 50
+PROGRAM_ID = -1  # the note program's buffer; previews use their pitch as the id
 PREVIEW_SECONDS = 0.6
 NOTE_ON, NOTE_OFF, VELOCITY = 0x90, 0x80, 100
 PROGRAM_CHANGE = 0xC0  # program change per channel: which instrument the synth should use
@@ -93,210 +94,94 @@ class NotePlayer(QObject):
         raise NotImplementedError
 
 
-class _FloatSource(QIODevice):
-    """Serves a player's float32 frames to the sink in int16 chunks, at the current gain."""
+class BuiltinSynth(NotePlayer):
+    """The built-in synth: the notes rendered by Python and played through the native engine.
 
-    def __init__(self, player: SinkPlayer):
-        super().__init__()
-        self._player = player
-        self.cursor = 0
-        self.open(QIODevice.OpenModeFlag.ReadOnly)
-
-    def isSequential(self) -> bool:
-        return True
-
-    def bytesAvailable(self) -> int:
-        return self._player.remaining * 2 + super().bytesAvailable()
-
-    def readData(self, maxlen: int) -> bytes:
-        count = min(maxlen // 2, self._player.remaining)
-        if count <= 0:
-            return b""
-        chunk = self._player.read(count)
-        self.cursor += len(chunk)
-        chunk = np.clip(chunk * self._player.gain, -1.0, 1.0)
-        return (chunk * INT16_PEAK).astype(np.int16).tobytes()
-
-
-class SinkPlayer(NotePlayer):
-    """A player that streams float32 frames to Qt's audio sink.
-
-    The sink, its buffer and the transport around it are the same for the built-in synth and the
-    song; what each feeds it and how it times the playhead are the subclass's.
+    Nothing here stretches anything - a note program is already rendered at the settled speed - so
+    the engine only has to mix the rendered buffers. Previews are submitted at the playhead, which
+    is what lets them overlap the program the way the old Qt sink mixed them.
     """
 
-    def __init__(self, parent=None, buffer_ms: int = BUFFER_MS, sample_rate: int = SAMPLE_RATE):
-        super().__init__(parent)
-        self.sample_rate = sample_rate
-        self._buffer_ms = buffer_ms
+    def __init__(self, parent=None, sample_rate: int = SAMPLE_RATE, a4: float = A4):
+        self._sample_rate = sample_rate
+        self._output = _audio.Output(sample_rate, BUFFER_FRAMES)
+        self._program = np.zeros(0, dtype=np.float32)
         self._speed = 1.0
-        self._start = 0.0
-        self._sink: QAudioSink | None = None
-        self._source: _FloatSource | None = None
-
-    @property
-    def buffer_ms(self) -> int:
-        return self._buffer_ms
-
-    @buffer_ms.setter
-    def buffer_ms(self, value: int) -> None:
-        """Takes effect on the next play: the sink is built with it when the sound starts."""
-        self._buffer_ms = max(10, int(value))
-
-    def _format(self) -> QAudioFormat:
-        audio_format = QAudioFormat()
-        audio_format.setSampleRate(self.sample_rate)
-        audio_format.setChannelCount(1)
-        audio_format.setSampleFormat(QAudioFormat.SampleFormat.Int16)
-        return audio_format
-
-    def _start_cursor(self) -> int:
-        """Where in the output stream a play starts; a song is aimed by its vocoder instead."""
-        return 0
-
-    @property
-    def remaining(self) -> int:
-        raise NotImplementedError
-
-    def read(self, frames: int) -> np.ndarray:
-        raise NotImplementedError
-
-    def _open(self) -> None:
-        self._source = _FloatSource(self)
-        self._source.cursor = self._start_cursor()
-        self._sink = QAudioSink(QMediaDevices.defaultAudioOutput(), self._format(), self)
-        self._sink.setBufferSize(int(self.sample_rate * 2 * self._buffer_ms / 1000))
-        self._sink.stateChanged.connect(self._on_state_changed)
-        self._sink.start(self._source)
-
-    @property
-    def is_playing(self) -> bool:
-        return self._sink is not None and self._sink.state() == QtAudio.State.ActiveState
-
-    @property
-    def position(self) -> float:
-        if self._sink is None:
-            return self._start
-        return self._start + self._sink.processedUSecs() / 1e6 * self._speed
-
-    def pause(self) -> None:
-        self._start = self.position
-        self._close()
-
-    def stop(self) -> None:
-        self._start = 0.0
-        self._close()
-
-    def _close(self) -> None:
-        if self._sink is not None:
-            self._sink.stop()
-            self._sink.deleteLater()
-            self._sink = None
-        self._source = None
-
-    def _on_state_changed(self, state) -> None:
-        if state == QtAudio.State.IdleState:  # the source ran out of samples
-            self._start = self.duration
-            self._close()
-            self.finished.emit()
-
-
-class MidiSink(SinkPlayer):
-    """The built-in synth: the notes rendered into one buffer and streamed to Qt's audio sink."""
-
-    def __init__(
-        self,
-        parent=None,
-        buffer_ms: int = BUFFER_MS,
-        sample_rate: int = SAMPLE_RATE,
-        a4: float = A4,
-    ):
-        super().__init__(parent, buffer_ms=buffer_ms, sample_rate=sample_rate)
+        self._duration = 0.0
         self.a4 = a4
-        self.mix = np.zeros(0, dtype=np.float32)
-        self._key: tuple | None = None
-        self._voices: dict[int, tuple[int, int]] = {}  # pitch -> where its audition sits in the mix
-        self._release_frames = int(RELEASE * sample_rate)
+        super().__init__(parent)
+        self._finished_poll = QTimer(self)
+        self._finished_poll.setInterval(FINISHED_POLL_MS)
+        self._finished_poll.timeout.connect(self._check_finished)
+
+    @property
+    def gain(self) -> float:
+        return self._gain
+
+    @gain.setter
+    def gain(self, value: float) -> None:
+        self._gain = max(0.0, value)
+        if self._program.size:
+            self._output.submit_buffer(self._program, 0.0, self._gain, PROGRAM_ID)
 
     def set_program(self, notes, speed, channels=()) -> None:
-        """Render the notes into a buffer, but only when they or the speed changed."""
         notes = tuple(notes)
-        channels = tuple(channels) or (DEFAULT_CHANNEL,)
-        key = (notes, round(speed, 6), channels)
-        if key == self._key:
-            return
-        self.stop()
-        self._speed = speed
-        self.mix = render_notes(notes, speed=speed, a4=self.a4, channels=channels)
-        self._voices.clear()
-        self._key = key
+        self._speed = max(0.01, float(speed))
+        self._program = render_notes(
+            notes, sample_rate=self._sample_rate, speed=self._speed, a4=self.a4, channels=channels
+        )
+        end = max((start + duration for _pitch, start, duration, *_rest in notes), default=0.0)
+        self._duration = end + TAIL if notes else 0.0
+        if self._program.size:
+            self._output.submit_buffer(self._program, 0.0, self._gain, PROGRAM_ID)
 
-    def _load(self, mix: np.ndarray) -> None:
-        self.stop()
-        self._key = None
-        self._voices.clear()
-        self.mix = np.ascontiguousarray(mix, dtype=np.float32)
+    def play(self, seconds: float = 0.0) -> None:
+        if not self._program.size or not self._open():
+            return
+        # the program is already stretched into output time, so a source second is 1/speed of it
+        self._output.play(seconds / self._speed)
+        self._finished_poll.start()
+
+    def pause(self) -> None:
+        self._finished_poll.stop()
+        self._output.pause()
+
+    def stop(self) -> None:
+        self._finished_poll.stop()
+        self._output.pause()
+        self._output.seek(0.0)
+
+    def seek(self, seconds: float) -> None:
+        self._output.seek(seconds / self._speed)
+
+    def preview(self, pitch: int, seconds: float = PREVIEW_SECONDS) -> None:
+        if not self._open():
+            return
+        voice = render_notes([(pitch, 0.0, seconds)], sample_rate=self._sample_rate, a4=self.a4)
+        self._output.submit_buffer(voice, self._output.position, self._gain, pitch)
 
     @property
     def duration(self) -> float:
-        return len(self.mix) / self.sample_rate * self._speed
+        return self._duration
 
     @property
-    def remaining(self) -> int:
-        start = self._source.cursor if self._source is not None else 0
-        return max(0, len(self.mix) - start)
+    def position(self) -> float:
+        return self._output.position * self._speed
 
-    def read(self, frames: int) -> np.ndarray:
-        start = self._source.cursor if self._source is not None else 0
-        return self.mix[start : start + frames]
+    @property
+    def is_playing(self) -> bool:
+        return self._output.playing
 
-    def _start_cursor(self) -> int:
-        return int(self._start / self._speed * self.sample_rate)
+    def _open(self) -> bool:
+        return self._output.open(False) if not self._output.is_open else True
 
-    def play(self, seconds: float = 0.0) -> None:
-        self.stop()
-        if self.mix.size == 0:
+    def _check_finished(self) -> None:
+        # the engine holds no song here, so it never ends on its own; the program does
+        if not self._output.playing or self.position < self._duration:
             return
-        self._start = max(0.0, min(seconds, self.duration))
-        self._open()
-
-    def seek(self, seconds: float) -> None:
-        """Move the play position, carrying on from there when it was playing."""
-        if self.is_playing:
-            self.play(seconds)
-        else:
-            # the end of the current program is not the end of the timeline: a click past it
-            # has to land where it was aimed, and play() clamps when the sound actually starts
-            self._start = max(0.0, seconds)
-
-    def preview(self, pitch: int, seconds: float = PREVIEW_SECONDS) -> None:
-        """Audition one note, mixed over what is already sounding so clicks never cut each other."""
-        voice = render_notes([(pitch, 0.0, seconds)], a4=self.a4)
-        if self._source is None:
-            self._load(voice)
-            self.play()
-            self._voices[pitch] = (0, len(voice))
-            return
-        # the stream is read from the cursor on, so a voice mixed there starts at the playhead
-        start = self._source.cursor
-        self._release_voice(pitch, start)
-        end = start + len(voice)
-        if end > len(self.mix):
-            self.mix = np.concatenate([self.mix, np.zeros(end - len(self.mix), dtype=np.float32)])
-        self.mix[start:end] += voice
-        self._voices[pitch] = (start, len(voice))
-        self._key = None  # an audition is mixed in, so the next set_program has to render it again
-
-    def _release_voice(self, pitch: int, from_frame: int) -> None:
-        """Fade out the note this pitch is still sounding, the way a synth releases it on a retrigger."""
-        voice = self._voices.pop(pitch, None)
-        if voice is None:
-            return
-        offset, frames = voice
-        region = self.mix[max(offset, from_frame) : offset + frames]
-        fade = np.linspace(1.0, 0.0, min(len(region), self._release_frames), endpoint=False, dtype=np.float32)
-        region[: len(fade)] *= fade
-        region[len(fade) :] = 0.0
+        self._finished_poll.stop()
+        self._output.pause()
+        self.finished.emit()
 
 
 class MidiPortOut(NotePlayer):
@@ -380,7 +265,8 @@ class MidiPortOut(NotePlayer):
         if self.is_playing:
             self.play(seconds)
         else:
-            self._start = max(0.0, seconds)  # see MidiSink.seek
+            # the end of the program is not the end of the timeline: play() clamps when the sound starts
+            self._start = max(0.0, seconds)
 
     def stop(self) -> None:
         self._stopping = True
@@ -456,66 +342,20 @@ class MidiPortOut(NotePlayer):
                 del self._sounding[key]
 
 
-class SilentPlayer(NotePlayer):
-    """No note output: the machine has no MIDI service, so nothing is auditioned or played.
-
-    It keeps the transport's interface so the window can hold it without asking which player it has;
-    the MIDI control is what says the notes have nowhere to go.
-    """
-
-    silent = True
-
-    def set_program(self, notes, speed, channels=()) -> None:
-        pass
-
-    def play(self, seconds: float = 0.0) -> None:
-        pass
-
-    def pause(self) -> None:
-        pass
-
-    def stop(self) -> None:
-        pass
-
-    def seek(self, seconds: float) -> None:
-        pass
-
-    def preview(self, pitch: int, seconds: float = PREVIEW_SECONDS) -> None:
-        pass
-
-    @property
-    def duration(self) -> float:
-        return 0.0
-
-    @property
-    def position(self) -> float:
-        return 0.0
-
-    @property
-    def is_playing(self) -> bool:
-        return False
-
-
-def warm_audio_output() -> None:
-    """Ask Qt for the default output once, so the first sink does not pay the device enumeration."""
-    QMediaDevices.defaultAudioOutput()
-
-
 def open_player(
     parent=None,
     backend: str = "auto",
     port_name: str = "",
-    buffer_ms: int = BUFFER_MS,
     velocity: int = VELOCITY,
     program: int = DEFAULT_PROGRAM,
     a4: float = A4,
 ) -> tuple[NotePlayer, str]:
     """A player and a description of where it sends the sound.
 
-    The external synth is the note output: it brings its own patches (TiMidity's piano, FluidSynth's
-    SoundFont), which is what the rest of the machine already sounds like. A machine with no MIDI
-    service gets a silent player rather than the built-in synth, so nothing is heard until a synth is
-    there; `backend="builtin"` still asks for the built-in synth on purpose.
+    An external synth is preferred because it brings its own patches (TiMidity's piano,
+    FluidSynth's SoundFont), which is what the rest of the machine already sounds like; with no MIDI
+    service the built-in synth takes over, so the notes are still heard. `backend="builtin"` asks
+    for the built-in synth on purpose.
     """
     if backend != "builtin":
         try:
@@ -529,5 +369,4 @@ def open_player(
         if index is not None:
             port.open_port(index)
             return MidiPortOut(port, parent, velocity=velocity, program=program), port.get_port_name(index)
-        return SilentPlayer(parent), "no MIDI output"
-    return MidiSink(parent, buffer_ms=buffer_ms, a4=a4), "the built-in synth"
+    return BuiltinSynth(parent, a4=a4), "the built-in synth"

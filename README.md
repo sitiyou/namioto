@@ -3,13 +3,16 @@
 An open-source editor that follows [WaveTone](https://ackiesound.ifdef.jp/)'s feature set: analyse an
 audio file into a note-domain spectrum, draw that behind a piano roll, then transcribe what you see
 into notes - time on the horizontal axis, pitch on the vertical axis, with notes you can draw, move,
-resize and delete. Notes play back through a MIDI synth, and the file plays along with them.
+resize and delete. Notes play back through a synthesiser - the machine's MIDI one when it has one,
+or a built-in fallback - and the file plays along with them.
 
 ![namioto](docs/screenshot.png)
 
 ## Requirements
 
 - [uv](https://docs.astral.sh/uv/) (Python 3.12 or newer)
+- a C++17 compiler to build from the source tree or the sdist (the audio backend is native; the
+  published wheel carries it prebuilt)
 
 ## Run
 
@@ -194,10 +197,15 @@ namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars,
                       that share the roll's columns, theme.py: colours, icons.py: glyphs,
                       text.py: shared labels, loading.py: one-shot worker, spectrogram.py:
                       spectrum colour map, image cache and loader, audio.py: note playback
-                      outputs - the external MIDI synth, or silence when there is none,
-                      song.py: the audio file streamed to Qt's audio output, channel_panel.py:
+                      outputs - the external MIDI synth, or the built-in synth on the native engine,
+                      song.py: the audio file streamed to the native engine, channel_panel.py:
                       the sidebar, and one module per dialog: settings, lyrics, transcription,
                       align, MIDI import)
+audio/                the native audio backend (C++17): Signalsmith Stretch for the speed, miniaudio
+                      for the output device; built as the namioto._audio extension
+vendor/               the backend's vendored dependencies (miniaudio, Signalsmith Stretch and
+                      Linear), each with its license text
+meson.build           the native extension's build (meson-python + pybind11)
 tests/                pytest
 scripts/              developer tools (spectrum benchmark, aligner model export, model upload)
 build.sh              packaging script
@@ -228,9 +236,9 @@ The window has three control bars, each split into captioned blocks of related c
 | Mix | **Spectrum** (gain, contrast), **Volume** (**Audio** for the file, **MIDI** for the notes), and the gear that opens the settings window (the few options the bars do not hold; the analysis parameters belong to the project) |
 
 **Volume** has a slider for each layer: the audio file is streamed at the level of the first one, and
-the second is the note playback through the machine's external MIDI synth, sent as control change 7
-(channel volume) since that synth does its own mixing. A machine with no MIDI synth leaves the notes
-silent and the slider disabled.
+the second is the note playback - through the machine's external MIDI synth when one is listening,
+sent as control change 7 (channel volume) since that synth does its own mixing, or through the
+built-in synth otherwise.
 
 **Channels** are toggled by the layers icon among the playback switches: a sidebar with one card per MIDI channel.
 The notes of each channel are painted in its colour, and the card holds the name (double-click to
@@ -418,18 +426,19 @@ carrying that playhead with the pointer and sounds every row it slides over, whi
 up and down the keyboard. While the file is playing that
 press only edits: the cursor is left alone, and the timeline ruler is what seeks, from where the
 sound carries on. `Space` starts and pauses; the playhead, the readout and the timeline grid all
-follow the file. The audio is streamed to Qt's audio output one buffer at a time, mono at the sample
-rate of the file, so seeking is a cursor move. **Speed** stretches the song with a phase vocoder as it
-streams: the rhythm moves and the pitch does not, the way WaveTone's speed and pitch sliders are
-separate. Only the samples the output asks for are generated, so a speed change costs a reset rather
-than a rerender of the whole song, and it applies while the transport runs too - the notes and the
-song both pick the new speed up at once, carrying on from where they had got to.
+follow the file. The audio is decoded once at 48 kHz mono and handed to the native engine, which
+streams it to the output device: the stretching, the buffering and the device live in the
+`namioto._audio` extension, off the Python interpreter, so seeking and speed changes never interrupt
+the sound. **Speed** stretches the song with a Signalsmith Stretch phase vocoder as it streams: the
+rhythm moves and the pitch does not, the way WaveTone's speed and pitch sliders are separate. Only
+the frames the output asks for are generated, so a change of rate costs nothing but the new ratio,
+and it applies while the transport runs too - the notes and the song both pick the new speed up at
+once, carrying on from where they had got to.
 
 The notes go to a **software MIDI synth** when one is listening on the
 MIDI bus - TiMidity and FluidSynth are recognised by name, and the tooltip of the **MIDI** slider
-says which one is in use, because that is where the sound comes from (patches included). Without
-one, the notes stay silent and the **MIDI** slider is disabled, since there is nowhere for them to
-play. **Grid offset (ms)** slides the grid lines - `-` draws them to the left, `+` to
+says which one is in use, because that is where the sound comes from (patches included). With no
+such synth the notes fall back to a built-in synth, so they are heard either way. **Grid offset (ms)** slides the grid lines - `-` draws them to the left, `+` to
 the right, and snapping follows them - while the notes and the playback keep their exact
 timestamps. A click in the roll auditions what it lands on - the pitch of the row, whether or
 not it is a note - in either mode, and so does a key on the keyboard: listening and editing are
