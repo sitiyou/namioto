@@ -7,6 +7,10 @@ a binary container is the spectrum, and reanalysing a five-minute file takes abo
 Qt-free on purpose. Notes are stored in seconds and rounded to a tenth of a millisecond: seconds are
 what the editor anchors them to, so a different tempo moves the grid, not the notes.
 
+`ProjectSettings` holds the values that describe a song - how it is analysed, drawn and played back -
+and the table below is their single source of truth. They are the project's alone: the program's own
+preferences are in `namioto.settings`, and the window's state in `namioto.state`.
+
 `Lyrics` carries the `.krc` text itself (the baseline), the aligned times keyed by a hash of that
 text, and the mode. A same-named `.krc` beside the project is a working copy the editor keeps in
 step; it is never validated.
@@ -22,15 +26,208 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from namioto import params
-from namioto import settings as store
+from namioto.analysis.choices import CHANNEL_MODES
 from namioto.channels import CHANNEL_COUNT, Channel, valid_color
+from namioto.params import Field, Section
 from namioto.utils import write_json
 
 FORMAT = "namioto"
-VERSION = 8
+VERSION = 1
 SUFFIX = ".nto"
 NOTE_DECIMALS = 4
 LYRIC_MODES = ("edit", "read")
+DIVISIONS = ("beats", "seconds")
+
+PROJECT_SECTIONS: tuple[Section, ...] = (
+    Section(
+        "analysis",
+        "Analysis",
+        (
+            Field(
+                "channels",
+                "choice",
+                "mono",
+                "Channels",
+                "Which channels the analysis reads",
+                choices=CHANNEL_MODES,
+            ),
+            Field(
+                "t_num",
+                "float",
+                40.0,
+                "Frames/s",
+                "Analysis frames per second: the time resolution of the spectrum",
+                low=1,
+                high=200,
+                decimals=2,
+            ),
+            Field(
+                "fft_points",
+                "int",
+                8192,
+                "FFT points",
+                "Window size of the analysis: the frequency resolution",
+                low=256,
+                high=32768,
+                step=256,
+            ),
+            Field(
+                "a4",
+                "float",
+                440.0,
+                "A4 (Hz)",
+                "Frequency of A4, followed by both the analysis bands and the played notes",
+                low=400,
+                high=480,
+                step=0.5,
+                decimals=1,
+            ),
+        ),
+    ),
+    Section(
+        "spectrum",
+        "Spectrum",
+        (
+            Field(
+                "gain",
+                "float",
+                240.0,
+                "Gain",
+                "Energy it takes for the spectrum to reach full red",
+                low=10,
+                high=600,
+                step=1,
+            ),
+            Field(
+                "contrast",
+                "float",
+                1.0,
+                "Contrast",
+                "Exponent applied to the spectrum's energy",
+                low=0.2,
+                high=4.0,
+                step=0.1,
+                decimals=1,
+            ),
+        ),
+    ),
+    Section(
+        "playback",
+        "Playback",
+        (
+            Field(
+                "audio_volume",
+                "int",
+                80,
+                "Audio volume",
+                "Starting volume of the analysed audio",
+                low=0,
+                high=100,
+                suffix="%",
+            ),
+            Field(
+                "midi_volume",
+                "int",
+                80,
+                "MIDI volume",
+                "Starting volume of the note playback",
+                low=0,
+                high=100,
+                suffix="%",
+            ),
+            Field(
+                "latency_ms",
+                "int",
+                0,
+                "Grid offset (ms)",
+                "Shifts the drawn grid lines by this many ms; - left, + right, playback untouched",
+                low=-500,
+                high=500,
+            ),
+            Field(
+                "speed",
+                "float",
+                1.0,
+                "Speed",
+                "Playback speed in 5% steps, 0.10x to 2.00x; the pitch is left alone",
+                low=0.1,
+                high=2.0,
+                step=0.05,
+                decimals=2,
+                suffix="x",
+            ),
+        ),
+    ),
+    Section(
+        "editor",
+        "Editor",
+        (
+            Field("snap", "float", 0.5, "Snap", "Snap grid for the pen tool", low=0.0625, high=4.0),
+            Field(
+                "division",
+                "choice",
+                "beats",
+                "Division",
+                "What the ruler's lower row and the drawn grid lines divide by",
+                choices=DIVISIONS,
+            ),
+            Field("zoom_x", "float", 48.0, "Zoom x", "Pixels per beat at startup", low=12, high=900, decimals=1),
+            Field("zoom_y", "float", 16.0, "Zoom y", "Pixels per semitone row at startup", low=8, high=64, decimals=1),
+        ),
+    ),
+    Section(
+        "tempo",
+        "Tempo",
+        (
+            Field(
+                "bpm",
+                "float",
+                120.0,
+                "Tempo",
+                "Tempo of the beat grid at startup",
+                low=20,
+                high=300,
+                step=0.1,
+                decimals=1,
+            ),
+        ),
+    ),
+    Section(
+        "view",
+        "View",
+        (
+            Field("center_x", "float", 8.0, "View center x", "", low=0.0, high=10000.0, decimals=1),
+            Field("center_y", "float", 48.0, "View center y", "", low=0.0, high=88.0, decimals=1),
+        ),
+    ),
+)
+
+ProjectSettings = params.build(PROJECT_SECTIONS)
+FIELD_SPECS = ProjectSettings.__field_specs__
+
+
+def default_settings() -> ProjectSettings:
+    """The values a document starts from when the file names none of its own."""
+    return ProjectSettings()
+
+
+def settings_from_dict(data: Any) -> ProjectSettings:
+    """The project-scoped values a parsed file holds, with every one checked as it is read."""
+    settings = ProjectSettings()
+    if not isinstance(data, dict):
+        return settings
+    for section in PROJECT_SECTIONS:
+        for name, value in params.coerce_values(section.fields, data.get(section.name)).items():
+            setattr(getattr(settings, section.name), name, value)
+    return settings
+
+
+def to_settings_dict(settings: ProjectSettings) -> dict[str, dict]:
+    """The project-scoped values by section, as the project file spreads them over its top level."""
+    return {
+        section.name: {item.name: getattr(getattr(settings, section.name), item.name) for item in section.fields}
+        for section in PROJECT_SECTIONS
+    }
 
 
 class Note(NamedTuple):
@@ -63,7 +260,7 @@ class Lyrics(NamedTuple):
 
 @dataclass(frozen=True)
 class Project:
-    values: dict[str, dict] = field(default_factory=dict)  # the project-scoped settings, by section
+    settings: ProjectSettings = field(default_factory=ProjectSettings)  # how the song is analysed, drawn and played
     audio: str = ""
     channels: tuple[Channel, ...] = ()
     notes: tuple[Note, ...] = ()
@@ -97,7 +294,7 @@ def to_dict(project: Project) -> dict:
     return {
         "format": FORMAT,
         "version": VERSION,
-        **project.values,
+        **to_settings_dict(project.settings),
         "audio": project.audio,
         "channels": [_channel_dict(channel) for channel in project.channels],
         "notes": [
@@ -249,8 +446,6 @@ def from_dict(data: Any) -> Project:
     """Read a project out of a parsed file, with every value checked the way the settings are."""
     if not isinstance(data, dict) or data.get("format") != FORMAT:
         raise ValueError(f"not a {FORMAT} project")
-    values = store.Settings()
-    store.apply_project_values(values, data)
     channels = _channels(data.get("channels")) or (Channel(),)
     notes = _notes(data.get("notes"))
     # a note on a channel the file never described gets a plain entry back, the way the roll fills one
@@ -259,7 +454,7 @@ def from_dict(data: Any) -> Project:
         filled = (*channels, *(Channel(channel=number) for number in missing))
         channels = tuple(sorted(filled, key=lambda channel: channel.channel))
     return Project(
-        values=store.project_values(values),
+        settings=settings_from_dict(data),
         audio=_audio(data.get("audio")),
         channels=channels,
         notes=notes,

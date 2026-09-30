@@ -1,9 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """The values a setting may take, kept apart from the modules that run them.
 
-`settings.py` reads these to build its spec, and building the spec must not import the analysis
-stack: `namioto.project` reads the settings, and reading a project should not pull librosa and scipy
-in. The module that runs an option imports its list from here and so still offers the same name.
+`namioto.settings` and `namioto.project` read these to build their spec tables, and building one must
+not import the analysis stack: `namioto.project` reads the settings, and reading a project should not
+pull librosa and scipy in. The module that runs an option imports its list from here and so still
+offers the same name.
 """
 
 from __future__ import annotations

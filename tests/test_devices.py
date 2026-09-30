@@ -48,7 +48,7 @@ def test_the_first_available_gpu_skips_what_is_not_there(monkeypatch) -> None:
 def test_the_setting_names_the_gpu(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("NAMIOTO_SETTINGS", str(tmp_path / "settings.json"))
     saved = store.Settings()
-    store.set_value(saved, "hardware", "gpu", "webgpu")
+    store.set_value(saved, "devices", "gpu", "webgpu")
     store.save(saved)
 
     assert devices.configured_gpu() == "webgpu"
@@ -69,7 +69,7 @@ def test_a_run_choice_resolves_through_the_setting(monkeypatch) -> None:
 def test_the_webgpu_provider_is_told_which_gpu_to_prefer(monkeypatch, tmp_path) -> None:
     monkeypatch.setenv("NAMIOTO_SETTINGS", str(tmp_path / "settings.json"))
     saved = store.Settings()
-    store.set_value(saved, "hardware", "power", "low-power")
+    store.set_value(saved, "devices", "power", "low-power")
     store.save(saved)
 
     assert devices.provider_options("WebGpuExecutionProvider") == {"powerPreference": "low-power"}

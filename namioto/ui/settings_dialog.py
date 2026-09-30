@@ -1,134 +1,48 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """The settings window, and the store that keeps the file in step with what is running.
 
-The window is built from `namioto.settings`: one row per field of the spec, so a new setting is a
-line in that table and nothing here. A field the spec marks `hidden` is what the program remembers
-by itself - a bar value, the session - and never a row. `field_editor`, `add_row` and
-`advanced_section` are the pieces a form is made of, shared with the align and transcription windows.
+The window is built from `namioto.settings`: one page per section named below, one row per field of
+it, so a new setting is a line in that table and nothing here. `editor` is the one section left out
+of `PAGES`: its two switches are what the program remembers by itself, never a row.
+
+`field_editor`, `add_row` and `advanced_section` come from `namioto.ui.form`, which the align and
+transcription windows share.
 """
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
 from typing import Any
 
 from PyQt6.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
 from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
-    QCheckBox,
-    QComboBox,
     QDialog,
     QDialogButtonBox,
-    QDoubleSpinBox,
     QFormLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
-    QSpinBox,
-    QStyleFactory,
     QTabWidget,
-    QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from namioto import settings as store
-from namioto.analysis import devices
 from namioto.i18n import tr
-from namioto.settings import Field
-from namioto.ui import theme
+from namioto.params import Field
+from namioto.ui.form import add_row, advanced_section, field_editor
 
 SAVE_DELAY_MS = 1000
-FIELD_WIDTH = 300  # a form of numbers that stretch across the page is hard to read
 
-
-def add_row(form: QFormLayout, editor: QWidget, field: Field) -> None:
-    """One row of a form: the spec's caption and tooltip, then the widget that edits its value."""
-    editor.setMaximumWidth(FIELD_WIDTH)
-    label = QLabel(tr(field.caption))
-    if field.tooltip:
-        label.setToolTip(tr(field.tooltip))
-        editor.setToolTip(tr(field.tooltip))
-    if field.kind == "device":
-        form.addRow(label, device_row(editor))
-        return
-    form.addRow(label, editor)
-
-
-class WrappedLabel(QLabel):
-    """A wrapped line that keeps itself as tall as the lines it actually has.
-
-    A word-wrapped `QLabel` inside a form row is given only the one-line height its `sizeHint`
-    carries, so the rest of the text is clipped. The height the text needs at the label's real width
-    is forced as a minimum whenever either changes, which makes the row grow to fit.
-    """
-
-    def __init__(self, parent: QWidget | None = None):
-        super().__init__(parent)
-        self.setWordWrap(True)
-        policy = self.sizePolicy()
-        policy.setHeightForWidth(True)
-        self.setSizePolicy(policy)
-
-    def setText(self, text: str) -> None:
-        super().setText(text)
-        self._fit()
-
-    def resizeEvent(self, event) -> None:
-        super().resizeEvent(event)
-        self._fit()
-
-    def _fit(self) -> None:
-        if self.width() <= 0:
-            return
-        needed = self.heightForWidth(self.width())
-        if needed > 0 and needed != self.minimumHeight():
-            self.setMinimumHeight(needed)
-
-
-def device_row(editor: QComboBox) -> QWidget:
-    """A device combo with a line under it saying whether the runtime it needs is installed."""
-    holder = QWidget()
-    box = QVBoxLayout(holder)
-    box.setContentsMargins(0, 0, 0, 0)
-    box.setSpacing(2)
-    box.addWidget(editor)
-    status = WrappedLabel()
-    box.addWidget(status)
-    editor.currentIndexChanged.connect(lambda *_: _show_device_status(editor, status))
-    _show_device_status(editor, status)
-    return holder
-
-
-def _show_device_status(editor: QComboBox, status: QLabel) -> None:
-    """What the device the row names needs, and whether this machine has it."""
-    chosen = editor.currentData()
-    if chosen in devices.GPU_KEYS:
-        key = chosen
-    else:
-        found = [name for name in devices.GPU_KEYS if devices.available(name)]
-        if not found:
-            status.setText(tr("No GPU backend is available; a GPU run falls back to the CPU"))
-            status.setToolTip("")
-            _warn(status)
-            return
-        key = found[0]
-    device = devices.get(key)
-    name = device.runtime or device.label
-    if devices.available(key):
-        status.setText(tr("{name} is available", name=name))
-        status.setToolTip("")
-        status.setStyleSheet("")
-        return
-    missing = ", ".join(devices.missing(key)) or device.providers[0]
-    status.setText(tr("{name} is not available: {missing} is missing", name=name, missing=missing))
-    status.setToolTip(tr(device.hint))
-    _warn(status)
-
-
-def _warn(status: QLabel) -> None:
-    status.setStyleSheet(f"color: {theme.canvas().note_selected_edge.name()};")
+# the sections that get a page, in the order they are shown; `editor` is deliberately left out
+PAGES = ("general", "devices", "tempo", "lyrics", "network", "midi")
+# the rows a page folds away under its Advanced heading
+ADVANCED = {
+    "tempo": ("window_seconds", "window_hop_seconds"),
+    "lyrics": ("temperature", "timeout"),
+}
 
 
 class SettingsStore(QObject):
@@ -141,8 +55,6 @@ class SettingsStore(QObject):
         super().__init__(parent)
         self.settings = settings
         self.path = path or store.default_path()
-        # a project owns some of the values, so what goes to the file is not always what is on screen
-        self.source = lambda: self.settings
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer.setInterval(SAVE_DELAY_MS)
@@ -152,125 +64,23 @@ class SettingsStore(QObject):
         """Something changed, and more may follow: write it out when they settle."""
         self._timer.start()
 
-    def apply(self, settings, save: bool = True) -> None:
-        """Take whole settings over, at once, from the settings window or from an open project."""
+    def apply(self, settings) -> None:
+        """Take whole settings over, at once, from the settings window."""
         self.settings = settings
         self._timer.stop()  # anything still pending is older than what is being applied
         self.changed.emit(settings)
-        if save:
-            self.flush()
+        self.flush()
 
     def flush(self) -> None:
         self._timer.stop()
         try:
-            store.save(self.source(), self.path)
+            store.save(self.settings, self.path)
         except OSError as error:  # a read-only home must not take the editor down
             self.failed.emit(tr("Settings could not be saved: {error}", error=error))
 
 
-def _read(widget: QWidget) -> Any:
-    if isinstance(widget, QCheckBox):
-        return widget.isChecked()
-    if isinstance(widget, QDoubleSpinBox):  # before QSpinBox's sibling check, they do not nest
-        return widget.value()
-    if isinstance(widget, QSpinBox):
-        return widget.value()
-    if isinstance(widget, QLineEdit):
-        return widget.text()
-    if isinstance(widget, QComboBox):
-        return widget.currentData()
-    raise TypeError(f"no way to read a {type(widget).__name__}")
-
-
-def _write(widget: QWidget, value: Any) -> None:
-    if isinstance(widget, QCheckBox):
-        widget.setChecked(bool(value))
-    elif isinstance(widget, (QDoubleSpinBox, QSpinBox)):
-        widget.setValue(value)
-    elif isinstance(widget, QLineEdit):
-        widget.setText(str(value))
-    elif isinstance(widget, QComboBox):
-        widget.setCurrentIndex(max(0, widget.findData(value)))
-    else:
-        raise TypeError(f"no way to fill a {type(widget).__name__}")
-
-
-def field_editor(value: Any, field: Field) -> tuple[QWidget, Callable[[], Any], Callable[[Any], None]]:
-    """The widget one setting is edited with, plus how to read it back and how to fill it in."""
-    if field.kind == "bool":
-        widget = QCheckBox()
-    elif field.kind in ("choice", "device"):
-        labels = field.labels or tuple(str(choice) for choice in field.choices)
-        return combo_editor(list(zip((tr(label) for label in labels), field.choices, strict=True)), value)
-    elif field.kind == "style":
-        return style_editor(value)
-    elif field.kind == "int":
-        widget = QSpinBox()
-        widget.setRange(int(field.low), int(field.high))
-        widget.setSingleStep(max(1, int(field.step) or 1))
-        widget.setSuffix(field.suffix)
-    elif field.kind == "float":
-        widget = QDoubleSpinBox()
-        widget.setRange(field.low, field.high)
-        widget.setDecimals(field.decimals)
-        widget.setSingleStep(field.step or 0.1)
-        widget.setSuffix(field.suffix)
-        widget.setKeyboardTracking(False)
-    elif field.kind == "text":
-        widget = QLineEdit()
-    elif field.kind == "secret":
-        widget = QLineEdit()
-        widget.setEchoMode(QLineEdit.EchoMode.Password)
-    else:
-        raise TypeError(f"no editor for a {field.kind} field")
-    _write(widget, value)
-    return widget, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
-
-
-def combo_editor(entries: Sequence[tuple[str, Any]], value: Any):
-    widget = QComboBox()
-    for caption, data in entries:
-        widget.addItem(caption, data)
-    _write(widget, value)
-    return widget, lambda widget=widget: _read(widget), lambda new, widget=widget: _write(widget, new)
-
-
-def style_editor(value: Any):
-    """Every widget style this build can draw with, the one the desktop hands out named first."""
-    available = QStyleFactory.keys()
-    entries = [(tr("System default ({name})", name=theme.platform_style()), "")]
-    entries += [(name, name) for name in available]
-    return combo_editor(entries, value)
-
-
-def advanced_section(form: QFormLayout) -> QToolButton:
-    """The heading over a form of advanced rows, folded away until it is clicked."""
-    button = QToolButton()
-    button.setText(tr("Advanced"))
-    button.setCheckable(True)
-    button.setAutoRaise(True)
-    button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-    button.setArrowType(Qt.ArrowType.RightArrow)
-
-    def reveal(open: bool) -> None:
-        button.setArrowType(Qt.ArrowType.DownArrow if open else Qt.ArrowType.RightArrow)
-        for row in range(form.rowCount()):
-            form.setRowVisible(row, open)
-
-    button.toggled.connect(reveal)
-    reveal(False)
-    return button
-
-
-def _pages() -> tuple[str, ...]:
-    """The pages that still have a row: the rest of the spec is what the program remembers by itself."""
-    return tuple(
-        dict.fromkeys(section.page for section in store.SECTIONS if any(not item.hidden for item in section.fields))
-    )
-
-
 class SettingsDialog(QDialog):
-    """Every setting, on a page per group, over a copy that is only handed over when applied."""
+    """Every preference, on a page per section, over a copy that is only handed over when applied."""
 
     applied = pyqtSignal(object)
 
@@ -285,10 +95,12 @@ class SettingsDialog(QDialog):
         self.resize(560, 460)
         self._settings = store.clone(settings)
         self._rows: list[tuple[str, Field, Callable[[], Any], Callable[[Any], None]]] = []
+        self._sections = {section.name: section for section in store.SECTIONS}
 
         pages = QTabWidget()
-        for page in _pages():
-            pages.addTab(self._page(page), tr(page))
+        for name in PAGES:
+            section = self._sections[name]
+            pages.addTab(self._page(section), tr(section.title))
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok
@@ -303,6 +115,7 @@ class SettingsDialog(QDialog):
 
         layout = QVBoxLayout(self)
         layout.addWidget(pages)
+        layout.addWidget(self._path_hint())
         layout.addWidget(buttons)
 
     def values(self):
@@ -323,30 +136,23 @@ class SettingsDialog(QDialog):
         self.apply()
         self.accept()
 
-    def _page(self, page: str) -> QWidget:
+    def _page(self, section) -> QWidget:
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        advanced_names = ADVANCED.get(section.name, ())
         for advanced in (False, True):
-            rows = [
-                (section, field)
-                for section in store.SECTIONS
-                if section.page == page
-                for field in section.fields
-                if field.advanced is advanced and not field.hidden
-            ]
+            rows = [field for field in section.fields if (field.name in advanced_names) is advanced]
             if not rows:
                 continue
             form = QFormLayout()
             form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-            for section, field in rows:
+            for field in rows:
                 editor, read, write = self._editor(section.name, field)
                 self._rows.append((section.name, field, read, write))
                 add_row(form, editor, field)
             if advanced:
                 layout.addWidget(advanced_section(form))
             layout.addLayout(form)
-        if page == "Advanced":
-            layout.addWidget(self._path_hint())
         layout.addStretch(1)
         return widget
 

@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Checks for the project file: what it holds, what it leaves to the settings, and what it refuses."""
+"""Checks for the project file: the values it holds, how a bad one is brought back, and what it refuses."""
 
 from __future__ import annotations
 
@@ -9,11 +9,10 @@ from pathlib import Path
 import pytest
 
 from namioto import project
-from namioto import settings as store
 
 
 def make(**values) -> project.Project:
-    return project.Project(values=store.project_values(store.Settings()), **values)
+    return project.Project(settings=project.default_settings(), **values)
 
 
 def test_a_saved_project_can_be_read_back(tmp_path) -> None:
@@ -23,7 +22,7 @@ def test_a_saved_project_can_be_read_back(tmp_path) -> None:
     opened = project.load(path)
     assert opened.audio == "vocal.wav"
     assert opened.notes == (project.Note(0.73, 0.37, 63), project.Note(1.5, 2.0, 55))
-    assert opened.values == saved.values
+    assert opened.settings == saved.settings
 
 
 def test_the_file_is_text_with_a_name_and_a_version(tmp_path) -> None:
@@ -37,12 +36,11 @@ def test_the_file_is_text_with_a_name_and_a_version(tmp_path) -> None:
 
 
 def test_only_the_values_that_belong_to_the_document_are_written() -> None:
-    settings = store.Settings()
-    settings.paths.last_audio_dir = "/tmp"  # the machine's business
-    settings.midi.wavetone = False
-    written = project.to_dict(project.Project(values=store.project_values(settings)))
+    settings = project.default_settings()
+    settings.playback.speed = 0.75
+    written = project.to_dict(project.Project(settings=settings))
+    assert "wavetone" not in json.dumps(written)  # the program's own preference is not the song's
     assert "last_audio_dir" not in json.dumps(written)
-    assert "wavetone" not in json.dumps(written)
     assert set(written) == {
         "format",
         "version",
@@ -55,10 +53,10 @@ def test_only_the_values_that_belong_to_the_document_are_written() -> None:
         "playback",
         "editor",
         "tempo",
-        "session",
+        "view",
     }
     assert set(written["playback"]) == {"audio_volume", "midi_volume", "speed", "latency_ms"}
-    assert set(written["session"]) == {"center_x", "center_y"}
+    assert set(written["view"]) == {"center_x", "center_y"}
 
 
 def test_the_machine_values_in_a_file_are_ignored(tmp_path) -> None:
@@ -75,18 +73,18 @@ def test_the_machine_values_in_a_file_are_ignored(tmp_path) -> None:
         )
     )
     opened = project.load(path)
-    assert opened.values["playback"]["speed"] == 0.75
-    assert opened.values["playback"]["latency_ms"] == 120
-    assert "midi" not in opened.values
-    assert "paths" not in opened.values
+    assert opened.settings.playback.speed == 0.75
+    assert opened.settings.playback.latency_ms == 120
+    assert not hasattr(opened.settings, "midi")
+    assert not hasattr(opened.settings, "paths")
 
 
 def test_an_empty_or_partial_file_still_gives_every_value(tmp_path) -> None:
     path = tmp_path / "song.nto"
     path.write_text(json.dumps({"format": "namioto", "tempo": {"bpm": 93.0}}))
     opened = project.load(path)
-    assert opened.values["tempo"]["bpm"] == 93.0
-    assert opened.values["analysis"]["a4"] == 440.0
+    assert opened.settings.tempo.bpm == 93.0
+    assert opened.settings.analysis.a4 == 440.0
     assert opened.notes == ()
 
 
@@ -103,15 +101,15 @@ def test_a_value_out_of_range_is_brought_back_in_line(tmp_path) -> None:
         )
     )
     opened = project.load(path)
-    assert opened.values["tempo"]["bpm"] == 300.0
-    assert opened.values["analysis"]["channels"] == "mono"
-    assert opened.values["analysis"]["a4"] == 440.0
-    assert opened.values["playback"]["speed"] == 1.0
+    assert opened.settings.tempo.bpm == 300.0
+    assert opened.settings.analysis.channels == "mono"
+    assert opened.settings.analysis.a4 == 440.0
+    assert opened.settings.playback.speed == 1.0
 
 
 def test_another_json_file_is_refused() -> None:
     with pytest.raises(ValueError, match="not a namioto project"):
-        project.from_dict(store.to_dict(store.Settings()))
+        project.from_dict({"version": 1})
     with pytest.raises(ValueError, match="not a namioto project"):
         project.from_dict([1, 2, 3])
 
@@ -128,7 +126,7 @@ def test_a_file_that_is_not_json_is_refused(tmp_path) -> None:
 def test_a_file_from_a_later_version_is_still_read(tmp_path) -> None:
     path = tmp_path / "song.nto"
     path.write_text(json.dumps({"format": "namioto", "version": 99, "tempo": {"bpm": 100.0}}))
-    assert project.load(path).values["tempo"]["bpm"] == 100.0
+    assert project.load(path).settings.tempo.bpm == 100.0
 
 
 def test_notes_are_rounded_to_a_tenth_of_a_millisecond() -> None:

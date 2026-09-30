@@ -127,23 +127,25 @@ loses focus, and **Style**, the widget style that draws the window), **Devices**
 run that asks for the GPU uses; the line under it says whether its runtime is installed), **Tempo**
 (the **Algorithm** that estimates the tempo - `wavetone` by default, or the librosa beat tracker or
 TempoCNN - with the two windows the beat tracker fits under an `ADVANCED` heading),
-**WaveTone compatibility**, and **Lyrics** (the OpenAI-compatible endpoint the lyrics window may
-call - **API base** up to its `/v1`, **API key**, **Model**, the temperature and timeout under an
-`ADVANCED` heading - and the **External editor** command a `.krc` is opened with) - a page per
-group. `Restore defaults` puts everything back, and `Apply` lets the change go live without closing
-the window.
+**WaveTone compatibility**, **Network** (the **GitHub mirror** releases are fetched through, and
+an HTTP **Proxy** for downloads and the lyrics API), and **Lyrics** (the OpenAI-compatible endpoint
+the lyrics window may call - **API base** up to its `/v1`, **API key**, **Model**, the temperature
+and timeout under an `ADVANCED` heading - and the **External editor** command a `.krc` is opened
+with) - a page per group. `Restore defaults` puts everything back, and `Apply` lets the change go
+live without closing the window.
 
 ![settings](docs/settings.png)
 
-Everything else is remembered rather than configured. The style, the gain, the contrast, the audio
-and MIDI volumes, the speed, the snap grid, the division, the zoom, the two switches beside the
-transport readout and the window's own size and position are written to
-`~/.config/namioto/settings.json`
-(`$NAMIOTO_SETTINGS` points somewhere else) as they change on screen, and are back the way they were
-next time. The tempo and the grid offset are not among them: they describe one song, so they start from
-their defaults (120 BPM, 0 ms) whenever another file is loaded, and a project carries them - opening
-it puts its own back. The file is plain JSON, so it can be edited by hand - and a hand-mangled or
-half-written one falls back to the defaults field by field instead of refusing to start.
+Everything else is remembered rather than configured, and the file it goes to says what it belongs
+to. A value that describes the song - how it is analysed, drawn and played back, the zoom, the snap
+grid, the tempo, the grid offset - is written into the `.nto`, so a project carries its own and
+another file starts from the defaults. The program's own preferences - the interface language, the
+wanted GPU, the tempo algorithm, the lyrics endpoint, the GitHub mirror and proxy, WaveTone
+compatibility and the two editor switches - go to `~/.config/namioto/settings.json`
+(`$NAMIOTO_SETTINGS` points elsewhere), and the window's size, position and last folder to
+`~/.config/namioto/state.json` (`$NAMIOTO_STATE`). The files are plain JSON, so they can be edited
+by hand - and a hand-mangled or half-written one falls back to the defaults field by field instead
+of refusing to start.
 
 The command line still wins for one run: `--channels`, `--t-num`, `--gain` and `--contrast` shape
 this run alone and are never written back into the file.
@@ -183,8 +185,10 @@ namioto/channels.py   the MIDI channels a note plays on, and the values they pla
 namioto/interaction.py the roll's normal/edit mode and its tool, as one value, no Qt
 namioto/document.py   the notes and the MIDI channels they play on, in beats, no Qt
 namioto/midi.py       reading and writing MIDI files (mido), no Qt
-namioto/project.py    the .nto file: the notes, the audio they were drawn over, and their values, no Qt
-namioto/settings.py   the settings spec table, its file and the defaults, no Qt
+namioto/project.py    the .nto file: the notes, the audio they were drawn over, and the document's values, no Qt
+namioto/settings.py   the program's own preferences: the spec table, its file and the defaults, no Qt
+namioto/params.py     the Field primitive every parameter table is built from, no Qt
+namioto/state.py      the window's size, position and last folder between runs, no Qt
 namioto/lyrics.py     the .krc sidecar beside a project, and the model call that fills it, no Qt
 namioto/karaoke/      the .krc model, its parser, its writer and its timeline (lark), no Qt
 namioto/utils.py      the app's directories, a file's identity, kana to romaji tokens, no Qt
@@ -199,8 +203,8 @@ namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars,
                       spectrum colour map, image cache and loader, audio.py: note playback
                       outputs - the external MIDI synth, or the built-in synth on the native engine,
                       song.py: the audio file streamed to the native engine, channel_panel.py:
-                      the sidebar, and one module per dialog: settings, lyrics, transcription,
-                      align, MIDI import)
+                      the sidebar, form.py: the pieces a settings form is built from, and one
+                      module per dialog: settings, lyrics, transcription, align, MIDI import)
 audio/                the native audio backend (C++17): Signalsmith Stretch for the speed, miniaudio
                       for the output device; built as the namioto._audio extension
 vendor/               the backend's vendored dependencies (miniaudio, Signalsmith Stretch and

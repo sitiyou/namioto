@@ -29,11 +29,13 @@ from PyQt6.QtWidgets import (
 
 from namioto.analysis import devices, transcription
 from namioto.i18n import tr
-from namioto.settings import Field
-from namioto.ui.settings_dialog import add_row, advanced_section, field_editor
+from namioto.params import Field
+from namioto.ui.form import add_row, advanced_section, field_editor
 
 POLL_MS = 100
 LOG_HEIGHT = 140
+# the rows the form folds away: the ones only worth reaching for when the small model misses
+ADVANCED = ("batch_size", "seg_threshold", "seg_radius", "est_threshold", "d3pm_t0", "d3pm_steps", "silence_slice")
 
 
 def start_job(audio: str, parameters: dict):
@@ -115,7 +117,7 @@ class TranscriptionDialog(QDialog):
         layout = QVBoxLayout(widget)
         layout.setContentsMargins(0, 0, 0, 0)
         for advanced in (False, True):
-            items = [item for item in transcription.PARAMETERS if item.advanced is advanced]
+            items = [item for item in transcription.PARAMETERS if (item.name in ADVANCED) is advanced]
             if not items:
                 continue
             form = QFormLayout()

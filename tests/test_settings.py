@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Checks for the settings model: defaults, the file, and how a bad value is brought back in line."""
+"""Checks for the settings model: the preferences, their file, and how a bad value is brought back."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ def settings_file(tmp_path, monkeypatch) -> Path:
 def test_missing_file_gives_the_defaults(settings_file) -> None:
     loaded = store.load()
     assert store.to_dict(loaded) == store.to_dict(store.Settings())
-    assert store.get_value(loaded, "editor", "snap") == 0.5
+    assert store.get_value(loaded, "editor", "auto_page") is False
     assert store.get_value(loaded, "midi", "wavetone") is True
 
 
@@ -51,34 +51,34 @@ def test_the_environment_variable_names_the_file(settings_file) -> None:
 
 def test_a_round_trip_keeps_every_value(settings_file) -> None:
     original = store.Settings()
-    store.set_value(original, "analysis", "channels", "both")
-    store.set_value(original, "analysis", "t_num", 25.5)
-    store.set_value(original, "analysis", "a4", 442.0)
-    store.set_value(original, "spectrum", "gain", 300.0)
-    store.set_value(original, "playback", "latency_ms", 120)
-    store.set_value(original, "playback", "speed", 0.75)
-    store.set_value(original, "editor", "zoom_y", 22.0)
+    store.set_value(original, "general", "auto_save", True)
+    store.set_value(original, "general", "language", "zh")
+    store.set_value(original, "devices", "gpu", "cuda")
+    store.set_value(original, "tempo", "window_seconds", 8.0)
+    store.set_value(original, "lyrics", "model", "deepseek-chat")
+    store.set_value(original, "network", "proxy", "http://127.0.0.1:7890")
     store.set_value(original, "midi", "wavetone", False)
+    store.set_value(original, "editor", "auto_page", True)
     store.save(original)
 
     loaded = store.load()
     assert store.to_dict(loaded) == store.to_dict(original)
     assert json.loads(settings_file.read_text())["version"] == store.VERSION
-    assert store.get_value(loaded, "spectrum", "gain") == 300.0
+    assert store.get_value(loaded, "network", "proxy") == "http://127.0.0.1:7890"
     assert store.get_value(loaded, "midi", "wavetone") is False
 
 
 def test_unknown_keys_are_dropped_and_missing_ones_default(settings_file) -> None:
-    settings_file.write_text(json.dumps({"version": 1, "editor": {"snap": 0.25}, "nonesuch": {"a": 1}}))
+    settings_file.write_text(json.dumps({"version": 1, "general": {"auto_save": True}, "nonesuch": {"a": 1}}))
     loaded = store.load()
-    assert store.get_value(loaded, "editor", "snap") == 0.25
-    assert store.get_value(loaded, "editor", "division") == "beats"
+    assert store.get_value(loaded, "general", "auto_save") is True
+    assert store.get_value(loaded, "tempo", "window_seconds") == 12.0
     assert not hasattr(loaded, "nonesuch")
     assert "nonesuch" not in store.to_dict(loaded)
 
 
 def test_a_broken_file_is_reported_and_the_defaults_are_used(settings_file) -> None:
-    settings_file.write_text('{"analysis": {"t_num": ')
+    settings_file.write_text('{"tempo": {"window_seconds": ')
     with pytest.warns(UserWarning):
         loaded = store.load()
     assert store.to_dict(loaded) == store.to_dict(store.Settings())
@@ -91,88 +91,73 @@ def test_values_of_the_wrong_type_fall_back_one_by_one(settings_file) -> None:
     settings_file.write_text(
         json.dumps(
             {
-                "analysis": {"t_num": "fast", "channels": 5, "a4": True},
-                "spectrum": {"gain": None},
-                "editor": {"overtone_highlight": 0},
+                "devices": {"gpu": 5, "power": None},
+                "tempo": {"window_seconds": "long"},
+                "lyrics": {"temperature": True, "auto_align": "yes"},
+                "editor": {"auto_page": 0},
             }
         )
     )
     loaded = store.load()
-    assert store.get_value(loaded, "analysis", "t_num") == 40.0
-    assert store.get_value(loaded, "analysis", "channels") == "mono"
-    assert store.get_value(loaded, "analysis", "a4") == 440.0
-    assert store.get_value(loaded, "spectrum", "gain") == 240.0
-    assert store.get_value(loaded, "editor", "overtone_highlight") is False
-    assert store.get_value(loaded, "midi", "wavetone") is True
+    assert store.get_value(loaded, "devices", "gpu") == ""
+    assert store.get_value(loaded, "devices", "power") == "high-performance"
+    assert store.get_value(loaded, "tempo", "window_seconds") == 12.0
+    assert store.get_value(loaded, "lyrics", "temperature") == 0.2
+    assert store.get_value(loaded, "lyrics", "auto_align") is True
+    assert store.get_value(loaded, "editor", "auto_page") is False
 
 
 def test_values_out_of_range_are_brought_back_in(settings_file) -> None:
     settings_file.write_text(
         json.dumps(
             {
-                "analysis": {"t_num": -5.0, "fft_points": 10**9},
-                "playback": {"latency_ms": 9999, "audio_volume": 1000},
-                "editor": {"zoom_x": 0.001, "snap": 99.0},
-                "tempo": {"bpm": 1000.0},
+                "tempo": {"window_seconds": -5.0, "window_hop_seconds": 1000.0},
+                "lyrics": {"temperature": 9.0, "timeout": 0.0},
             }
         )
     )
     loaded = store.load()
-    assert store.get_value(loaded, "analysis", "t_num") == 1.0
-    assert store.get_value(loaded, "analysis", "fft_points") == 32768
-    assert store.get_value(loaded, "playback", "latency_ms") == 500
-    assert store.get_value(loaded, "playback", "audio_volume") == 100
-    assert store.get_value(loaded, "editor", "zoom_x") == 12.0
-    assert store.get_value(loaded, "editor", "snap") == 4.0
-    assert store.get_value(loaded, "tempo", "bpm") == 300.0
+    assert store.get_value(loaded, "tempo", "window_seconds") == 2.0
+    assert store.get_value(loaded, "tempo", "window_hop_seconds") == 60.0
+    assert store.get_value(loaded, "lyrics", "temperature") == 2.0
+    assert store.get_value(loaded, "lyrics", "timeout") == 1.0
 
 
 def test_values_snap_to_the_step_they_are_shown_on(settings_file) -> None:
-    settings_file.write_text(
-        json.dumps(
-            {
-                "playback": {"speed": 1.234, "preview_seconds": 0.611},
-                "spectrum": {"contrast": 1.234},
-                "analysis": {"fft_points": 9000, "a4": 441.2},
-            }
-        )
-    )
+    settings_file.write_text(json.dumps({"tempo": {"window_seconds": 12.6}, "lyrics": {"temperature": 1.234}}))
     loaded = store.load()
-    assert store.get_value(loaded, "playback", "speed") == 1.25
-    assert store.get_value(loaded, "spectrum", "contrast") == 1.2
-    assert store.get_value(loaded, "analysis", "fft_points") == 8960
-    assert store.get_value(loaded, "analysis", "a4") == 441.0
+    assert store.get_value(loaded, "tempo", "window_seconds") == 13.0
+    assert store.get_value(loaded, "lyrics", "temperature") == 1.2
 
 
 def test_text_is_trimmed_and_bounded(settings_file) -> None:
-    settings_file.write_text(json.dumps({"paths": {"last_audio_dir": "  " + "x" * 9999 + "  "}}))
+    settings_file.write_text(json.dumps({"lyrics": {"api_base": "  " + "x" * 9999 + "  "}}))
     loaded = store.load()
-    assert len(store.get_value(loaded, "paths", "last_audio_dir")) == params.TEXT_LIMIT
+    assert len(store.get_value(loaded, "lyrics", "api_base")) == params.TEXT_LIMIT
 
-    settings_file.write_text(json.dumps({"paths": {"last_audio_dir": None}}))
-    assert store.get_value(store.load(), "paths", "last_audio_dir") == ""
+    settings_file.write_text(json.dumps({"lyrics": {"api_base": None}}))
+    assert store.get_value(store.load(), "lyrics", "api_base") == ""
 
 
 def test_saving_leaves_nothing_half_written(settings_file) -> None:
     store.save(store.Settings())
-    store.set_value(store.Settings(), "editor", "snap", 1.0)
     first = store.Settings()
     store.save(first)
     second = store.Settings()
-    store.set_value(second, "editor", "snap", 2.0)
+    store.set_value(second, "tempo", "window_seconds", 20.0)
     store.save(second)
 
     assert [path.name for path in settings_file.parent.iterdir()] == ["settings.json"]
-    assert store.get_value(store.load(), "editor", "snap") == 2.0
+    assert store.get_value(store.load(), "tempo", "window_seconds") == 20.0
 
 
 def test_a_clone_can_be_edited_without_touching_the_original() -> None:
     original = store.Settings()
     edited = store.clone(original)
-    store.set_value(edited, "editor", "snap", 4.0)
-    store.set_value(edited, "analysis", "channels", "side")
-    assert store.get_value(original, "editor", "snap") == 0.5
-    assert store.get_value(original, "analysis", "channels") == "mono"
+    store.set_value(edited, "general", "auto_save", True)
+    store.set_value(edited, "devices", "gpu", "cuda")
+    assert store.get_value(original, "general", "auto_save") is False
+    assert store.get_value(original, "devices", "gpu") == ""
 
 
 def test_the_program_list_names_every_general_midi_preset() -> None:
@@ -188,8 +173,8 @@ def test_the_program_list_names_every_general_midi_preset() -> None:
 
 
 def test_a_choice_that_is_not_one_of_them_falls_back(settings_file) -> None:
-    settings_file.write_text(json.dumps({"editor": {"division": "bars"}}))
-    assert store.get_value(store.load(), "editor", "division") == "beats"
+    settings_file.write_text(json.dumps({"tempo": {"estimator": "magic"}}))
+    assert store.get_value(store.load(), "tempo", "estimator") == "wavetone"
 
 
 def test_a_caption_that_names_its_unit_does_not_repeat_it_in_the_field() -> None:
@@ -209,31 +194,3 @@ def test_every_spec_field_is_a_field_of_its_section() -> None:
                 assert item.high > item.low, item.name  # a range nobody can be inside of
                 assert item.low <= item.default <= item.high, item.name
     assert len(store.FIELD_SPECS) == sum(len(section.fields) for section in store.SECTIONS)
-
-
-def test_only_the_settings_without_a_control_keep_a_row() -> None:
-    shown = {(section.name, item.name) for section in store.SECTIONS for item in section.fields if not item.hidden}
-    assert shown == {
-        ("general", "auto_save"),
-        ("general", "language"),
-        ("general", "style"),
-        ("hardware", "gpu"),
-        ("hardware", "power"),
-        ("tempo", "estimator"),
-        ("tempo", "window_seconds"),
-        ("tempo", "window_hop_seconds"),
-        ("midi", "wavetone"),
-        ("network", "github_mirror"),
-        ("network", "proxy"),
-        ("lyrics", "api_base"),
-        ("lyrics", "api_key"),
-        ("lyrics", "model"),
-        ("lyrics", "temperature"),
-        ("lyrics", "timeout"),
-        ("lyrics", "editor"),
-        ("lyrics", "auto_align"),
-    }
-    assert ("editor", "zoom_x") not in shown  # the wheel has it, so the window does not
-    assert ("playback", "latency_ms") not in shown
-    assert ("session", "geometry") not in shown  # the window state is stored, never typed in
-    assert ("analysis", "channels") not in shown  # a project's analysis, not the program's

@@ -20,6 +20,7 @@ from namioto.i18n import tr
 CHANNEL_COUNT = 16
 COLOR_HEX = 7
 
+# the General MIDI program list, in the order the program change is meant to select them in
 GM_PROGRAMS = (
     "Acoustic Grand Piano",
     "Bright Acoustic Piano",

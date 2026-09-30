@@ -1,17 +1,20 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """The primitive behind every parameter table: one `Field` per value, and the checks on it.
 
-Qt-free on purpose. `namioto.settings` builds its spec from a table of these, and the align and
-transcription windows describe their own parameter files with the same `Field`, so a value is read
-back, checked and written out by one implementation everywhere.
+Qt-free on purpose. `namioto.settings` builds the app's own preferences from a table of these, and
+`namioto.project` builds a document's values the same way; the align and transcription windows
+describe their parameter files with the same `Field`, so a value is read back, checked and written
+out by one implementation everywhere.
 
 `coerce` brings a bad value back in line: a wrong type falls to the field's default, an out-of-range
-one is clamped, and a number is snapped to its step. `build_types` turns a table of `Section`s into
-the dataclass the rest of the program uses.
+one is clamped, and a number is snapped to its step. `build` turns a table of `Section`s into the
+dataclass the rest of the program uses, and hangs the spec on the class so `get_value` / `set_value`
+can find a field without being told where it came from.
 """
 
 from __future__ import annotations
 
+import copy
 import json
 import warnings
 from collections.abc import Sequence
@@ -26,10 +29,10 @@ TEXT_LIMIT = 4096
 
 @dataclass(frozen=True)
 class Field:
-    """One setting: its default, how to read it back, and how the dialog shows it."""
+    """One parameter: its default, how to read it back, and how a form shows it."""
 
     name: str
-    kind: str  # bool, int, float, choice, device, text, style or secret
+    kind: str  # bool, int, float, choice, device, text, secret or style
     default: Any
     caption: str
     tooltip: str = ""
@@ -40,17 +43,12 @@ class Field:
     choices: tuple = ()
     labels: tuple[str, ...] = ()  # what to show for each choice, the choices themselves when empty
     suffix: str = ""
-    advanced: bool = False
-    hidden: bool = False  # the program fills it in itself, so it never gets a row
-    remembered: bool = True  # False: it belongs to one song, so the file keeps the default
-    scope: str = "app"  # "project": the value describes a document, so the project file owns it
 
 
 @dataclass(frozen=True)
 class Section:
-    name: str
-    page: str
-    title: str
+    name: str  # the key the value sits under in the file
+    title: str  # what a form calls the group
     fields: tuple[Field, ...]
 
 
@@ -58,7 +56,8 @@ def _python_type(kind: str) -> type:
     return {"bool": bool, "int": int, "float": float}.get(kind, str)
 
 
-def build_types(version: int, sections: Sequence[Section]) -> type:
+def build(sections: Sequence[Section]) -> type:
+    """The dataclass a table describes, carrying the table so a value can be set by name later."""
     made = {
         section.name: make_dataclass(
             section.title,
@@ -66,11 +65,26 @@ def build_types(version: int, sections: Sequence[Section]) -> type:
         )
         for section in sections
     }
-    return make_dataclass(
+    model = make_dataclass(
         "Settings",
-        [("version", int, field(default=version))]
-        + [(section.name, made[section.name], field(default_factory=made[section.name])) for section in sections],
+        [(section.name, made[section.name], field(default_factory=made[section.name])) for section in sections],
     )
+    model.__field_specs__ = specs(sections)
+    return model
+
+
+def specs(sections: Sequence[Section]) -> dict[tuple[str, str], Field]:
+    """Every field of a table, keyed by the section and name it sits under."""
+    return {(section.name, item.name): item for section in sections for item in section.fields}
+
+
+def get_value(model: Any, section: str, name: str) -> Any:
+    return getattr(getattr(model, section), name)
+
+
+def set_value(model: Any, section: str, name: str, value: Any) -> None:
+    """Put `value` on one field, first making it fit the field's type and range."""
+    setattr(getattr(model, section), name, coerce(type(model).__field_specs__[(section, name)], value))
 
 
 def coerce(spec: Field, value: Any) -> Any:
@@ -88,8 +102,7 @@ def coerce(spec: Field, value: Any) -> Any:
         return int(round(number)) if spec.kind == "int" else round(number, spec.decimals)
     if value is None:  # a null is a missing text, not the word "None"
         return spec.default
-    text = str(value).strip()[:TEXT_LIMIT]
-    return text
+    return str(value).strip()[:TEXT_LIMIT]
 
 
 def defaults(fields: Sequence[Field]) -> dict[str, Any]:
@@ -120,3 +133,8 @@ def load_values(path: str | Path, fields: Sequence[Field]) -> dict[str, Any]:
 def save_values(path: str | Path, fields: Sequence[Field], values: Any) -> Path:
     """Write one field table's values out whole, checked first."""
     return write_json(coerce_values(fields, values), path)
+
+
+def clone(model: Any) -> Any:
+    """A copy to edit, so a cancelled dialog leaves nothing behind."""
+    return copy.deepcopy(model)

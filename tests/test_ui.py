@@ -46,6 +46,7 @@ from PyQt6.QtWidgets import (
 
 from namioto import lyrics, midi, project
 from namioto import settings as store
+from namioto import state as window_state
 from namioto.analysis import align, devices, transcription
 from namioto.analysis.bpm import BpmEstimate
 from namioto.analysis.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
@@ -57,6 +58,7 @@ from namioto.ui.align_dialog import AlignDialog, Aligner
 from namioto.ui.app import MainWindow, TempoLoader
 from namioto.ui.audio import BuiltinSynth, MidiPortOut, find_port, find_synth_port
 from namioto.ui.controls import Cluster, EditBar, TransportBar, ValueSlider
+from namioto.ui.form import WrappedLabel, _show_device_status, field_editor
 from namioto.ui.lyrics_dialog import LyricsDialog, LyricsTranslator
 from namioto.ui.midi_dialog import MidiImportDialog
 from namioto.ui.roll import (
@@ -72,7 +74,7 @@ from namioto.ui.roll import (
     PianoRollView,
     is_black_key,
 )
-from namioto.ui.settings_dialog import SettingsDialog, WrappedLabel, _show_device_status, field_editor
+from namioto.ui.settings_dialog import PAGES, SettingsDialog
 from namioto.ui.spectrogram import SpectrumImage, SpectrumLoader
 from namioto.ui.strips import SOUND_GAP_PX
 from namioto.ui.transcription_dialog import TranscriptionDialog
@@ -2160,7 +2162,7 @@ def test_opening_a_project_starts_the_history_over(own_window, tmp_path) -> None
 
     path = tmp_path / "song.nto"
     project.save(
-        project.Project(values=store.project_values(store.Settings()), notes=(project.Note(1.0, 0.5, 62),)),
+        project.Project(settings=project.default_settings(), notes=(project.Note(1.0, 0.5, 62),)),
         path,
     )
     assert own_window.load_project(path)
@@ -2406,12 +2408,12 @@ def test_a_silent_player_takes_the_midi_slider_out_of_reach(window) -> None:
     assert window.mix.midi_volume.isEnabled()
 
 
-def test_a_silent_player_keeps_the_midi_volume_out_of_the_settings(window) -> None:
+def test_a_silent_player_keeps_the_midi_volume_out_of_the_project(window) -> None:
     window.mix.midi_volume.set_value(70.0)
     window.player.silent = True
     window._sync_midi_volume()
     window._remember_configuration()
-    assert window.settings.playback.midi_volume == 70
+    assert window.project_settings.playback.midi_volume == 70
     window.player.silent = False
     window.mix.midi_volume.set_value(70.0)
     window._sync_midi_volume()
@@ -2774,11 +2776,11 @@ def test_the_settings_window_lists_every_visible_field(own_window) -> None:
     dialog = SettingsDialog(own_window.settings, parent=own_window)
     names = {(section, field.name) for section, field, _read, _write in dialog._rows}
     expected = {
-        (section.name, field.name) for section in store.SECTIONS for field in section.fields if not field.hidden
+        (section.name, field.name) for section in store.SECTIONS if section.name in PAGES for field in section.fields
     }
-    assert names == expected
+    assert names == expected  # `editor` has no page: its switches are what the program remembers itself
     pages = [dialog.findChild(QTabWidget).tabText(index) for index in range(dialog.findChild(QTabWidget).count())]
-    assert pages == ["General", "Devices", "Tempo", "Lyrics", "Advanced"]  # the rest of the spec is what it remembers
+    assert pages == ["General", "Devices", "Tempo", "Lyrics", "Network", "MIDI"]
     dialog.close()
 
 
@@ -2818,8 +2820,8 @@ def test_a_wrapped_status_line_grows_to_fit_its_text(qt_app) -> None:
 
 def test_the_gpu_row_says_whether_its_runtime_is_installed(qt_app, monkeypatch) -> None:
     monkeypatch.setattr(devices, "installed", lambda: ("CPUExecutionProvider",))
-    field = store.FIELD_SPECS[("hardware", "gpu")]
-    combo, _read, write = field_editor(store.Settings().hardware.gpu, field)
+    field = store.FIELD_SPECS[("devices", "gpu")]
+    combo, _read, write = field_editor(store.Settings().devices.gpu, field)
     status = QLabel()
 
     _show_device_status(combo, status)
@@ -2847,68 +2849,67 @@ def test_restoring_defaults_puts_every_widget_back(own_window) -> None:
     dialog.close()
 
 
-def test_closing_the_window_remembers_the_session(own_window) -> None:
+def test_closing_the_window_remembers_its_state_and_the_document(own_window) -> None:
     own_window.view.set_zoom(96.0, 20.0)
     own_window.close()
 
-    saved = store.load()
-    assert saved.session.geometry
-    assert saved.editor.zoom_x == 96.0
-    assert saved.editor.zoom_y == 20.0
-    assert saved.session.center_x > 0.0
+    saved = window_state.load()
+    assert saved.geometry
+    assert own_window.project_settings.editor.zoom_x == 96.0
+    assert own_window.project_settings.editor.zoom_y == 20.0
+    assert own_window.project_settings.view.center_x > 0.0
 
 
-def test_the_settings_are_read_when_the_window_starts(tmp_path, monkeypatch) -> None:
+def test_the_preferences_are_read_when_the_window_starts(tmp_path, monkeypatch) -> None:
     path = tmp_path / "settings.json"
     monkeypatch.setenv("NAMIOTO_SETTINGS", str(path))
     saved = store.Settings()
-    store.set_value(saved, "spectrum", "contrast", 2.5)
-    store.set_value(saved, "editor", "snap", 0.25)
-    store.set_value(saved, "editor", "zoom_y", 24.0)
-    store.set_value(saved, "tempo", "bpm", 84.0)
-    store.set_value(saved, "playback", "speed", 1.25)
     store.set_value(saved, "editor", "auto_page", True)
     store.save(saved)
 
     opened = MainWindow()
-    assert opened.view.contrast == 2.5
-    assert opened.view.snap == 0.25
-    assert opened.view.zoom[1] == 24.0
-    assert opened.transport.bpm.value() == 84.0
-    assert opened.transport.speed.value() == 1.25
     assert opened.transport.auto_page.isChecked() is True
     opened.close()
 
 
+def test_a_new_document_starts_from_the_document_defaults(own_window) -> None:
+    document = project.default_settings()
+    assert own_window.view.contrast == document.spectrum.contrast
+    assert own_window.view.snap == document.editor.snap
+    assert own_window.transport.bpm.value() == document.tempo.bpm
+    assert own_window.view.zoom == (document.editor.zoom_x, document.editor.zoom_y)
+
+
 def test_the_command_line_seeds_the_run_without_writing_itself_back(own_window) -> None:
-    before = store.load()
     own_window.apply_overrides(gain=300.0, contrast=2.0)
     assert own_window.view.gain == 300.0
     own_window.close()
 
-    saved = store.load()
-    assert saved.spectrum.gain == before.spectrum.gain
-    assert saved.spectrum.contrast == before.spectrum.contrast
+    document = project.default_settings()
+    assert own_window.project_settings.spectrum.gain == document.spectrum.gain
+    assert own_window.project_settings.spectrum.contrast == document.spectrum.contrast
 
 
 def test_every_bar_setting_has_one_binding(own_window) -> None:
     bound = {(binding.section, binding.name) for binding in own_window._bindings}
-    assert bound <= set(store.FIELD_SPECS), f"a binding names no setting: {sorted(bound - set(store.FIELD_SPECS))}"
-    # zoom lives on the roll, the last directory on the chooser and the session on the window: no bar
-    elsewhere = {("editor", "zoom_x"), ("editor", "zoom_y"), ("paths", "last_audio_dir")}
-    elsewhere |= {("session", name) for name in ("geometry", "center_x", "center_y")}
-    # the analysis options are the project's; the command line carries them for one run
-    elsewhere |= {("analysis", name) for name in ("channels", "t_num", "fft_points", "a4")}
-    missing = (
-        {(section.name, item.name) for section in store.SECTIONS for item in section.fields if item.hidden}
-        - bound
-        - elsewhere
-    )
-    assert not missing, f"a bar setting with no binding: {sorted(missing)}"
+    # the document's values are all on a bar, save the ones the roll, the window and the command line own
+    elsewhere = {
+        ("editor", "zoom_x"),
+        ("editor", "zoom_y"),
+        ("view", "center_x"),
+        ("view", "center_y"),
+        ("analysis", "channels"),
+        ("analysis", "t_num"),
+        ("analysis", "fft_points"),
+        ("analysis", "a4"),
+    }
+    assert set(project.FIELD_SPECS) - bound == elsewhere
+    # the two switches with no page are the program's, and are still on the bars
+    assert {("editor", "auto_page"), ("editor", "overtone_highlight")} <= bound
 
 
-def test_a_command_line_channel_beats_the_settings(own_window) -> None:
-    store.set_value(own_window.settings, "analysis", "channels", "side")
+def test_a_command_line_channel_beats_the_document(own_window) -> None:
+    own_window.project_settings.analysis.channels = "side"
     own_window.overrides["channels"] = "left"
     own_window.overrides["t_num"] = None
     options = own_window._analysis_options()
@@ -2954,10 +2955,10 @@ def fake_loaders(monkeypatch) -> list[dict]:
     return captured
 
 
-def test_loading_a_file_hands_the_settings_to_the_analysers(own_window, monkeypatch) -> None:
+def test_loading_a_file_hands_the_document_to_the_analysers(own_window, monkeypatch) -> None:
     captured = fake_loaders(monkeypatch)
-    store.set_value(own_window.settings, "analysis", "fft_points", 4096)
-    store.set_value(own_window.settings, "analysis", "a4", 441.0)
+    own_window.project_settings.analysis.fft_points = 4096
+    own_window.project_settings.analysis.a4 = 441.0
     store.set_value(own_window.settings, "tempo", "window_seconds", 8.0)
     own_window.overrides["channels"] = "left"
 
@@ -2966,7 +2967,7 @@ def test_loading_a_file_hands_the_settings_to_the_analysers(own_window, monkeypa
     analysis, _song, tempo = captured
     assert analysis == {"channels": "left", "t_num": 40.0, "fft_points": 4096, "a4": 441.0}
     assert tempo == {"algorithm": "wavetone", "window_seconds": 8.0, "window_hop_seconds": 6.0}
-    assert store.get_value(own_window.settings, "paths", "last_audio_dir") == "/tmp"
+    assert own_window.state.last_audio_dir == "/tmp"
     assert own_window.edit.transcribe.isEnabled()
 
 
@@ -2982,14 +2983,15 @@ def test_the_tempo_loader_follows_the_settings(own_window, monkeypatch) -> None:
     assert own_window.tempo_loader.window_hop_seconds == 3.0
 
 
-def test_the_tempo_and_the_latency_are_not_remembered_between_runs(own_window) -> None:
+def test_a_song_tempo_never_reaches_the_preferences(own_window) -> None:
     own_window.transport.bpm.setValue(93.0)
     own_window.transport.latency.setValue(120)
     own_window.close()
 
     saved = store.load()
-    assert saved.tempo.bpm == 120.0  # what a new song starts from
-    assert saved.playback.latency_ms == 0
+    assert not hasattr(saved, "playback")  # the offset is the document's, and it is not written here
+    assert not hasattr(saved.tempo, "bpm")
+    assert own_window.project_settings.tempo.bpm == 93.0
 
 
 def test_another_song_starts_from_the_default_tempo_and_latency(own_window, monkeypatch) -> None:
@@ -3007,19 +3009,19 @@ def test_another_song_starts_from_the_default_tempo_and_latency(own_window, monk
 
 
 def test_a_project_brings_its_tempo_and_latency_back(own_window, tmp_path) -> None:
-    other = store.Settings()
+    other = project.default_settings()
     other.tempo.bpm = 93.0
     other.playback.latency_ms = 120
     path = tmp_path / "song.nto"
-    project.save(project.Project(values=store.project_values(other)), path)
+    project.save(project.Project(settings=other), path)
 
     assert own_window.load_project(path) is True
     assert own_window.transport.bpm.value() == 93.0
     assert own_window.transport.latency.value() == 120
     own_window.settings_store.flush()
-    saved = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
-    assert saved["tempo"]["bpm"] == 120.0  # the song's tempo stays in the document
-    assert saved["playback"]["latency_ms"] == 0
+    written = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
+    assert not hasattr(own_window.settings, "playback")
+    assert "bpm" not in written["tempo"]  # the song's tempo stays in the document
 
 
 def test_the_overtone_highlight_can_be_turned_off(window) -> None:
@@ -3565,21 +3567,21 @@ def test_saving_a_project_takes_the_notes_and_the_values_with_it(own_window, tmp
     assert own_window._document_name() == "song"
     saved = project.load(path)  # beat 2 at 120 BPM is one second in, and it is seconds that are kept
     assert saved.notes == (project.Note(1.0, 0.5, 64), project.Note(1.5, 0.25, 67))
-    assert saved.values["tempo"]["bpm"] == 120.0
-    assert saved.values["spectrum"]["gain"] == 300.0
-    assert saved.values["editor"]["snap"] == own_window.view.snap
+    assert saved.settings.tempo.bpm == 120.0
+    assert saved.settings.spectrum.gain == 300.0
+    assert saved.settings.editor.snap == own_window.view.snap
     assert "Saved song.nto" in own_window.statusBar().currentMessage()
 
 
 def test_loading_a_project_brings_the_notes_and_the_values_back(own_window, tmp_path, monkeypatch) -> None:
-    other = store.Settings()
+    other = project.default_settings()
     other.tempo.bpm = 120.0  # not 60: at 120 BPM a beat and a second differ, so the conversion shows
     other.analysis.a4 = 432.0
     other.spectrum.gain = 300.0
     other.editor.snap = 0.25
     path = tmp_path / "song.nto"
     opened = project.Project(
-        values=store.project_values(other),
+        settings=other,
         audio="vocal.wav",
         notes=(project.Note(2.0, 0.5, 64), project.Note(3.5, 0.5, 67)),
     )
@@ -3594,7 +3596,7 @@ def test_loading_a_project_brings_the_notes_and_the_values_back(own_window, tmp_
     assert beats[0] == pytest.approx((4.0, 1.0))  # 2 s at 120 BPM is beat 4, and half a second is a beat
     assert beats[1] == pytest.approx((7.0, 1.0))
     assert own_window.view.bpm == 120.0
-    assert own_window.settings.analysis.a4 == 432.0
+    assert own_window.project_settings.analysis.a4 == 432.0
     assert own_window.view.gain == 300.0
     assert own_window.view.snap == 0.25
     assert played == [str(tmp_path / "vocal.wav")]
@@ -3611,7 +3613,7 @@ def test_a_project_without_its_audio_still_opens(own_window, tmp_path) -> None:
     path = tmp_path / "song.nto"
     project.save(
         project.Project(
-            values=store.project_values(store.Settings()),
+            settings=project.default_settings(),
             audio="gone.wav",
             notes=(project.Note(1.0, 0.5, 60),),
         ),
@@ -3632,37 +3634,37 @@ def test_a_file_that_is_not_a_project_says_so(own_window, tmp_path) -> None:
     assert own_window.project_path is None
 
 
-def test_opening_a_project_does_not_rewrite_the_app_defaults(own_window, tmp_path) -> None:
-    other = store.Settings()
+def test_opening_a_project_keeps_its_values_out_of_the_preferences(own_window, tmp_path) -> None:
+    other = project.default_settings()
     other.spectrum.gain = 300.0
     other.analysis.a4 = 432.0
     path = tmp_path / "song.nto"
-    project.save(project.Project(values=store.project_values(other)), path)
+    project.save(project.Project(settings=other), path)
 
     assert own_window.load_project(path) is True
-    assert own_window.settings.spectrum.gain == 300.0
+    assert own_window.project_settings.spectrum.gain == 300.0
     assert own_window.mix.gain.value() == 300.0
     assert not (tmp_path / "settings.json").exists()  # opening is not saving
 
     own_window.settings_store.flush()
     written = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
-    assert written["spectrum"]["gain"] == store.Settings().spectrum.gain
-    assert written["analysis"]["a4"] == store.Settings().analysis.a4
-    assert written["playback"]["speed"] == store.Settings().playback.speed
+    assert "spectrum" not in written  # a document's values never become the program's
+    assert "analysis" not in written
+    assert "playback" not in written
 
 
-def test_a_change_made_with_a_project_open_still_leaves_the_default_alone(own_window, tmp_path) -> None:
-    other = store.Settings()
+def test_a_change_made_with_a_project_open_stays_in_the_document(own_window, tmp_path) -> None:
+    other = project.default_settings()
     other.spectrum.gain = 300.0
     path = tmp_path / "song.nto"
-    project.save(project.Project(values=store.project_values(other)), path)
+    project.save(project.Project(settings=other), path)
     assert own_window.load_project(path) is True
 
-    own_window.mix.gain.set_value(340.0)  # the document's gain, not the app's
+    own_window.mix.gain.set_value(340.0)  # the document's gain, not the program's
     own_window.settings_store.flush()
     written = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
-    assert own_window.settings.spectrum.gain == 340.0
-    assert written["spectrum"]["gain"] == store.Settings().spectrum.gain
+    assert own_window.project_settings.spectrum.gain == 340.0
+    assert "spectrum" not in written
 
 
 def test_drawing_marks_the_document_that_has_a_name(own_window) -> None:
@@ -3778,7 +3780,7 @@ def test_the_chosen_file_is_left_alone_when_the_notes_are_kept(own_window, monke
     own_window.view.set_notes([(64, 0.0, 1.0)])
     own_window.project_path = Path("song.nto")
     other = tmp_path / "other.nto"
-    project.save(project.Project(values=store.project_values(store.Settings())), other)
+    project.save(project.Project(settings=project.default_settings()), other)
     monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: QMessageBox.StandardButton.Cancel)
     monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a, **k: (str(other), ""))
 
@@ -3815,7 +3817,7 @@ def test_saving_as_adds_the_suffix_when_it_is_missing(own_window, monkeypatch, t
 
 def test_saving_as_suggests_the_name_of_the_audio_file(own_window, monkeypatch, tmp_path) -> None:
     own_window.audio_path = str(tmp_path / "vocal.wav")
-    store.set_value(own_window.settings, "paths", "last_audio_dir", str(tmp_path))
+    own_window.state.last_audio_dir = str(tmp_path)
     asked: list[str] = []
 
     def choose(_parent, _caption, suggested, *_filters):
@@ -3832,7 +3834,7 @@ def test_a_project_beside_the_audio_is_opened_instead(own_window, monkeypatch, t
     audio.write_bytes(b"")
     project.save(
         project.Project(
-            values=store.project_values(store.Settings()),
+            settings=project.default_settings(),
             audio="song.wav",
             notes=(project.Note(1.0, 0.5, 62),),
         ),
@@ -3863,7 +3865,7 @@ def test_a_broken_project_beside_the_audio_stops_the_open(own_window, monkeypatc
 def test_a_project_is_picked_up_from_the_command_line(qt_app, tmp_path) -> None:
     path = tmp_path / "song.nto"
     project.save(
-        project.Project(values=store.project_values(store.Settings()), notes=(project.Note(1.0, 0.5, 62),)),
+        project.Project(settings=project.default_settings(), notes=(project.Note(1.0, 0.5, 62),)),
         path,
     )
     window = MainWindow()
@@ -4405,7 +4407,7 @@ def test_the_command_line_takes_audio_and_projects_but_not_a_midi_alone(qt_app, 
     midi.write(midi_path, (Channel(channel=0),), (project.Note(0.5, 0.5, 60, 0),), 120.0)
     project_path = tmp_path / "work.nto"
     project.save(
-        project.Project(values=store.project_values(store.Settings()), notes=(project.Note(1.0, 0.5, 62),)),
+        project.Project(settings=project.default_settings(), notes=(project.Note(1.0, 0.5, 62),)),
         project_path,
     )
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "clip.nto"), ""))

@@ -31,9 +31,9 @@ from PyQt6.QtWidgets import (
 from namioto.analysis import align, devices
 from namioto.i18n import tr
 from namioto.karaoke import align_tokens, snap_to_beats, sound_lines, split
-from namioto.settings import Field
+from namioto.params import Field
+from namioto.ui.form import add_row, field_editor
 from namioto.ui.loading import LoadingThread
-from namioto.ui.settings_dialog import add_row, field_editor
 
 LOG_HEIGHT = 120
 

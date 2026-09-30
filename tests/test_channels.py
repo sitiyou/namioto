@@ -6,7 +6,6 @@ from __future__ import annotations
 import json
 
 from namioto import project
-from namioto import settings as store
 from namioto.channels import (
     CHANNEL_COUNT,
     Channel,
@@ -18,7 +17,7 @@ from namioto.channels import (
 
 
 def make(**values) -> project.Project:
-    return project.Project(values=store.project_values(store.Settings()), **values)
+    return project.Project(settings=project.default_settings(), **values)
 
 
 def test_a_channel_keeps_the_number_it_was_given() -> None:

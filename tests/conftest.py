@@ -34,9 +34,10 @@ def isolated_settings(tmp_path_factory):
     Session wide, so that it is in place before the module-wide windows are built: a window reads the
     settings the moment it is constructed.
     """
-    path = tmp_path_factory.mktemp("settings") / "settings.json"
-    os.environ["NAMIOTO_SETTINGS"] = str(path)
-    return path
+    root = tmp_path_factory.mktemp("settings")
+    os.environ["NAMIOTO_SETTINGS"] = str(root / "settings.json")
+    os.environ["NAMIOTO_STATE"] = str(root / "state.json")
+    return root / "settings.json"
 
 
 @pytest.fixture(scope="session", autouse=True)

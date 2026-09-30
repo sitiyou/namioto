@@ -78,7 +78,7 @@ PARAMETERS: tuple[Field, ...] = (
         choices=TARGETS,
         labels=("New channel", "Active channel"),
     ),
-    Field("batch_size", "int", 4, "Batch", "Chunks per inference batch", low=1, high=32, advanced=True),
+    Field("batch_size", "int", 4, "Batch", "Chunks per inference batch", low=1, high=32),
     Field(
         "seg_threshold",
         "float",
@@ -89,7 +89,6 @@ PARAMETERS: tuple[Field, ...] = (
         high=1.0,
         step=0.05,
         decimals=2,
-        advanced=True,
     ),
     Field(
         "seg_radius",
@@ -102,7 +101,6 @@ PARAMETERS: tuple[Field, ...] = (
         high=0.2,
         step=0.005,
         decimals=3,
-        advanced=True,
     ),
     Field(
         "est_threshold",
@@ -114,7 +112,6 @@ PARAMETERS: tuple[Field, ...] = (
         high=1.0,
         step=0.05,
         decimals=2,
-        advanced=True,
     ),
     Field(
         "d3pm_t0",
@@ -126,16 +123,14 @@ PARAMETERS: tuple[Field, ...] = (
         high=1.0,
         step=0.05,
         decimals=2,
-        advanced=True,
     ),
-    Field("d3pm_steps", "int", 8, "D3PM steps", "Number of D3PM sampling steps", low=1, high=64, advanced=True),
+    Field("d3pm_steps", "int", 8, "D3PM steps", "Number of D3PM sampling steps", low=1, high=64),
     Field(
         "silence_slice",
         "bool",
         True,
         "Silence slicing",
         "Cut the audio at its silences before inference",
-        advanced=True,
     ),
 )
 

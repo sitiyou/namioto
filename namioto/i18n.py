@@ -52,6 +52,7 @@ CATALOGS: dict[str, dict[str, str]] = {
         "Show folder": "打开所在目录",
         "Open the directory holding the settings file": "打开存放设置文件的目录",
         "Settings could not be saved: {error}": "设置无法保存：{error}",
+        "Window state could not be saved: {error}": "窗口状态无法保存：{error}",
         # settings fields
         "Language": "语言",
         "Which language the interface speaks; a change takes effect the next time it starts": "界面使用的语言；修改后下次启动生效",

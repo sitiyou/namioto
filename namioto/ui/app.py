@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """The editor window and its wiring: the bars, the roll, the sidebar and the lyrics strip.
 
-`MainWindow` owns the document, the players, the settings and every path the program opens or
-writes, and runs in this one process - the analysis that must not touch the GUI goes out to the
-`LoadingThread` loaders at the top of the file, or to a spawned `namioto-transcription` child. Run
-it with `uv run namioto`.
+`MainWindow` owns the document, the players, the program's own preferences and the window's state,
+and every path the program opens or writes, and runs in this one process - the analysis that must not
+touch the GUI goes out to the `LoadingThread` loaders at the top of the file, or to a spawned
+`namioto-transcription` child. Run it with `uv run namioto`.
 
 Every bar value is one `_make_bindings` entry; `_remember_configuration` and the apply path both
 walk that table, and `_seeding` keeps an apply's quiet writes from counting as user edits. A project
@@ -46,8 +46,9 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from namioto import i18n, lyrics, midi, project
+from namioto import i18n, lyrics, midi, params, project
 from namioto import settings as store
+from namioto import state as window_state
 from namioto.analysis import align, bpm, devices
 from namioto.analysis.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.channels import Channel, free_channel
@@ -136,9 +137,9 @@ def _install_translations(language: str) -> None:
 class _Binding:
     """One value the bars own: where it is read and written, and what a change to it means.
 
-    The window keeps no second copy of these: `read` and `write` are the settings' side, `show` is
-    what a new value does to the roll and the players, and both directions - remember on screen,
-    apply a document - walk this one table, so a bar value is a line here and nowhere else.
+    The window keeps no second copy of these: `read` and `write` are the model's side, `show` is what
+    a new value does to the roll and the players, and both directions - remember on screen, apply a
+    document - walk this one table, so a bar value is a line here and nowhere else.
     """
 
     section: str
@@ -149,6 +150,7 @@ class _Binding:
     show: Callable[[], None] | None = None
     override: str = ""
     remember: Callable[[], bool] | None = None
+    model: Callable[[], Any] | None = None  # None: the program's preferences, else this document's
 
 
 class TempoLoader(LoadingThread):
@@ -195,10 +197,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("Namioto")
         self.resize(1200, 720)
         self.settings = settings if settings is not None else store.load()
+        self.state = window_state.load()
+        self.project_settings = project.default_settings()
         i18n.set_language(self.settings.general.language)
         _install_translations(i18n.current())
         self.settings_store = SettingsStore(self.settings, parent=self)
-        self.settings_store.source = self._file_settings
         self.settings_store.changed.connect(self._on_settings_changed)
         self.settings_store.failed.connect(lambda message: self.statusBar().showMessage(message))
         self._theme = theme.apply(theme.running_app(), self.settings.general.style)
@@ -207,7 +210,6 @@ class MainWindow(QMainWindow):
         self._display_overrides: dict[str, float] = {}
         self._seeding = False
         self._loading = False
-        self._app_defaults: store.Settings | None = None
         self.project_path: Path | None = None
         self.project_dirty = False
         self.audio_path: str | None = None
@@ -230,11 +232,11 @@ class MainWindow(QMainWindow):
         self._audio_generation = 0
         self._workers: set[QThread] = set()
 
-        editor = self.settings.editor
+        editor = self.project_settings.editor
         self.view = PianoRollView()
         self.view.set_zoom(editor.zoom_x, editor.zoom_y)
-        self.view.initial_center = (self.settings.session.center_x, self.settings.session.center_y)
-        self.view.overtone_highlight = editor.overtone_highlight
+        self.view.initial_center = (self.project_settings.view.center_x, self.project_settings.view.center_y)
+        self.view.overtone_highlight = self.settings.editor.overtone_highlight
         self.view.division = editor.division
         self.ruler = TimelineRuler(self.view)
         self.sound_strip = SoundStrip(self.view)
@@ -242,7 +244,7 @@ class MainWindow(QMainWindow):
         self.keyboard = PianoKeyboard(self.view)
         self.player, self.player_name = self._make_player()
         self._current_player_key = self._player_key()
-        self.player.gain = self.settings.playback.midi_volume / 100.0
+        self.player.gain = self.project_settings.playback.midi_volume / 100.0
         self.song = SongPlayer(self)
         self.lyrics_watcher = LyricsWatcher(self)
         self.lyrics_watcher.changed.connect(self._on_lyrics_file_changed)
@@ -294,21 +296,22 @@ class MainWindow(QMainWindow):
         column.addLayout(row, 1)
         self.setCentralWidget(central)
 
-        self.edit.snap.setCurrentIndex(max(0, self.edit.snap.findData(editor.snap)))
-        self.transport.division.setChecked(editor.division == "beats")
-        self.transport.auto_page.setChecked(editor.auto_page)
-        self.transport.overtone.setChecked(editor.overtone_highlight)
+        document = self.project_settings
+        self.edit.snap.setCurrentIndex(max(0, self.edit.snap.findData(document.editor.snap)))
+        self.transport.division.setChecked(document.editor.division == "beats")
+        self.transport.auto_page.setChecked(self.settings.editor.auto_page)
+        self.transport.overtone.setChecked(self.settings.editor.overtone_highlight)
         self.view.snap = self.edit.snap.currentData()
-        self.transport.bpm.setValue(self.settings.tempo.bpm)
-        self.transport.latency.setValue(self.settings.playback.latency_ms)
+        self.transport.bpm.setValue(document.tempo.bpm)
+        self.transport.latency.setValue(document.playback.latency_ms)
         self.view.set_offset(self.transport.latency.value() / 1000.0)
-        self.transport.speed.set_value(self.settings.playback.speed)
-        self.mix.gain.set_value(self.settings.spectrum.gain)
-        self.mix.contrast.set_value(self.settings.spectrum.contrast)
-        self.mix.audio_volume.set_value(self.settings.playback.audio_volume)
-        self.mix.midi_volume.set_value(self.settings.playback.midi_volume)
+        self.transport.speed.set_value(document.playback.speed)
+        self.mix.gain.set_value(document.spectrum.gain)
+        self.mix.contrast.set_value(document.spectrum.contrast)
+        self.mix.audio_volume.set_value(document.playback.audio_volume)
+        self.mix.midi_volume.set_value(document.playback.midi_volume)
 
-        # one table for every bar value: it feeds the roll and is what the program remembers
+        # one table for every bar value: it feeds the roll and is what the program or the document remembers
         self._bindings = self._make_bindings()
         for binding in self._bindings:
             binding.signal.connect(partial(self._binding_changed, binding))
@@ -382,11 +385,11 @@ class MainWindow(QMainWindow):
         self.view.setFocus()  # the roll holds the keyboard, so the bar opens without a focus ring on its first button
 
     def _make_player(self):
-        return open_player(self, a4=self.settings.analysis.a4)
+        return open_player(self, a4=self.project_settings.analysis.a4)
 
     def _player_key(self) -> tuple:
         """What a player is built from: a change to any of it means building a new one."""
-        return (self.settings.analysis.a4,)
+        return (self.project_settings.analysis.a4,)
 
     def apply_overrides(self, gain: float | None = None, contrast: float | None = None) -> None:
         """Values a command line asked for: they shape this run, not what is remembered."""
@@ -423,6 +426,7 @@ class MainWindow(QMainWindow):
                 self.mix.gain.value_changed,
                 self._on_spectrum_parameters,
                 "gain",
+                model=lambda: self.project_settings,
             ),
             _Binding(
                 "spectrum",
@@ -432,6 +436,7 @@ class MainWindow(QMainWindow):
                 self.mix.contrast.value_changed,
                 self._on_spectrum_parameters,
                 "contrast",
+                model=lambda: self.project_settings,
             ),
             _Binding(
                 "playback",
@@ -440,6 +445,7 @@ class MainWindow(QMainWindow):
                 self.mix.audio_volume.set_value,
                 self.mix.audio_volume.value_changed,
                 self._on_audio_volume,
+                model=lambda: self.project_settings,
             ),
             _Binding(
                 "playback",
@@ -449,6 +455,7 @@ class MainWindow(QMainWindow):
                 self.mix.midi_volume.value_changed,
                 self._on_midi_volume,
                 remember=lambda: not self.player.silent,
+                model=lambda: self.project_settings,
             ),
             _Binding(
                 "playback",
@@ -457,6 +464,7 @@ class MainWindow(QMainWindow):
                 self.transport.speed.set_value,
                 self.transport.speed.slider.valueChanged,
                 self._on_speed_changed,
+                model=lambda: self.project_settings,
             ),
             _Binding(
                 "playback",
@@ -465,6 +473,7 @@ class MainWindow(QMainWindow):
                 self.transport.latency.setValue,
                 self.transport.latency.valueChanged,
                 self._on_latency_changed,
+                model=lambda: self.project_settings,
             ),
             _Binding(
                 "tempo",
@@ -473,6 +482,7 @@ class MainWindow(QMainWindow):
                 self.transport.bpm.setValue,
                 self.transport.bpm.valueChanged,
                 self._on_bpm_changed,
+                model=lambda: self.project_settings,
             ),
             _Binding(
                 "editor",
@@ -481,6 +491,7 @@ class MainWindow(QMainWindow):
                 self._set_snap,
                 self.edit.snap.currentIndexChanged,
                 self._on_snap_changed,
+                model=lambda: self.project_settings,
             ),
             _Binding(
                 "editor",
@@ -489,6 +500,7 @@ class MainWindow(QMainWindow):
                 self._set_division,
                 self.transport.division_changed,
                 self._on_division_changed,
+                model=lambda: self.project_settings,
             ),
             _Binding(
                 "editor",
@@ -547,28 +559,43 @@ class MainWindow(QMainWindow):
         """The desktop switched between light and dark, so the canvas follows it."""
         self._apply_theme()
 
-    def _on_settings_changed(self, settings) -> None:
-        """Take a settings object over the running one: a project was opened, or the window applied.
+    def _owner(self, binding: _Binding):
+        """The object a bar reads and writes: the program's preferences, or the open document's."""
+        return self.settings if binding.model is None else binding.model()
 
-        Every bar is filled in quietly - `_seeding` keeps the write from looking like a user change -
-        and then told to show its value, so the roll follows even when the widget already held it.
+    def _seed_bindings(self, chosen: Callable[[_Binding], bool]) -> None:
+        """Fill the chosen bars in quietly, then let each value show, even when the widget held it.
+
+        `_seeding` keeps a write that is not the user's from being remembered as one.
         """
-        self.settings = settings
         self._seeding = True
         try:
             for binding in self._bindings:
-                binding.write(store.get_value(settings, binding.section, binding.name))
+                if not chosen(binding):
+                    continue
+                binding.write(params.get_value(self._owner(binding), binding.section, binding.name))
                 if binding.show is not None:
                     binding.show()
-            self.view.set_zoom(settings.editor.zoom_x, settings.editor.zoom_y)
-            self.view.refresh()
-            if self._player_key() != self._current_player_key:
-                self._rebuild_player()
-            self._sync_midi_volume()
         finally:
             self._seeding = False
+
+    def _on_settings_changed(self, settings) -> None:
+        """The settings window applied: the program's own preferences take over at once."""
+        self.settings = settings
+        self._seed_bindings(lambda binding: binding.model is None)
         self._apply_theme()
         self._update_status()
+
+    def _apply_project_settings(self) -> None:
+        """A document was opened or started: its values take over the bars, the roll and the player."""
+        self._seed_bindings(lambda binding: binding.model is not None)
+        document = self.project_settings
+        self.view.set_zoom(document.editor.zoom_x, document.editor.zoom_y)
+        self.view.center_on(document.view.center_x, document.view.center_y)
+        self.view.refresh()
+        if self._player_key() != self._current_player_key:
+            self._rebuild_player()
+        self._sync_midi_volume()
 
     def _rebuild_player(self) -> None:
         """A player that has to be built again - for another tuning - takes the notes over."""
@@ -624,7 +651,7 @@ class MainWindow(QMainWindow):
         self.player.set_program(notes, self.transport.speed.value(), programs)
 
     def _remember_configuration(self) -> None:
-        """The bar values are the settings, so what is on screen is what comes back next time.
+        """The bar values are the model's, so what is on screen is what comes back next time.
 
         A bar the program filled in rather than the user - the silent MIDI volume - is not on
         screen either, so its binding is left alone.
@@ -634,38 +661,25 @@ class MainWindow(QMainWindow):
                 continue
             if binding.override and binding.override in self._display_overrides:
                 continue
-            store.set_value(self.settings, binding.section, binding.name, binding.read())
-        store.set_value(self.settings, "editor", "zoom_x", self.view.zoom[0])
-        store.set_value(self.settings, "editor", "zoom_y", self.view.zoom[1])
+            params.set_value(self._owner(binding), binding.section, binding.name, binding.read())
+        params.set_value(self.project_settings, "editor", "zoom_x", self.view.zoom[0])
+        params.set_value(self.project_settings, "editor", "zoom_y", self.view.zoom[1])
 
     def _restore_session(self) -> None:
-        session = self.settings.session
-        if session.geometry:
-            self.restoreGeometry(QByteArray.fromBase64(session.geometry.encode()))
+        if self.state.geometry:
+            self.restoreGeometry(QByteArray.fromBase64(self.state.geometry.encode()))
 
     def _remember_session(self) -> None:
-        session = self.settings.session
-        session.geometry = self.saveGeometry().toBase64().data().decode()
+        self.state.geometry = self.saveGeometry().toBase64().data().decode()
         centre = self.view.mapToScene(self.view.viewport().rect().center())
-        session.center_x = round(centre.x(), 1)
-        session.center_y = round(centre.y(), 1)
+        self.project_settings.view.center_x = round(centre.x(), 1)
+        self.project_settings.view.center_y = round(centre.y(), 1)
 
-    def _capture_app_defaults(self) -> None:
-        """What the program's own file keeps: a document's values must not become the defaults."""
-        if self._app_defaults is None:
-            self._app_defaults = store.clone(self.settings)
-
-    def _file_settings(self):
-        """What the app's file keeps: a document's values never become the program's defaults, and the
-        ones that belong to a song - the tempo, the offset between sound and picture - keep the
-        default they are written with."""
-        kept = store.clone(self.settings)
-        for section, item in store.PROJECT_FIELDS:
-            if not item.remembered:
-                store.set_value(kept, section, item.name, item.default)
-            elif self._app_defaults is not None:
-                store.set_value(kept, section, item.name, store.get_value(self._app_defaults, section, item.name))
-        return kept
+    def _save_state(self) -> None:
+        try:
+            window_state.save(self.state)
+        except OSError as error:  # a read-only home must not take the editor down
+            self.statusBar().showMessage(i18n.tr("Window state could not be saved: {error}", error=error))
 
     def _document_name(self) -> str:
         name = self.project_path.stem if self.project_path is not None else i18n.tr("Untitled")
@@ -701,7 +715,7 @@ class MainWindow(QMainWindow):
         """Where a file dialog opens: the folder of the project in use, else the last one opened."""
         if self.project_path is not None:
             return str(self.project_path.parent)
-        return self.settings.paths.last_audio_dir or str(Path.home())
+        return self.state.last_audio_dir or str(Path.home())
 
     def _confirm_discard(self) -> bool:
         """Ask before unsaved notes go; False means the caller should do nothing. A roll that has no
@@ -759,7 +773,8 @@ class MainWindow(QMainWindow):
         target = self._new_project_path(path)
         if target is None:
             return False
-        self._capture_app_defaults()
+        self.project_settings = project.default_settings()
+        self._apply_project_settings()
         self.load_audio(path)
         return self.save_project(target)
 
@@ -871,9 +886,7 @@ class MainWindow(QMainWindow):
             return False
         self._loading = True
         try:
-            self._capture_app_defaults()
-            store.apply_project_values(self.settings, opened.values)
-            self.settings_store.apply(self.settings, save=False)
+            self.project_settings = opened.settings
             self.project_path = Path(path)
             self.project_dirty = False
             self.autosave_timer.stop()
@@ -885,7 +898,7 @@ class MainWindow(QMainWindow):
                 (note.pitch, self.view.to_beats(note.start), self.view.to_beats(note.duration), note.channel)
                 for note in opened.notes
             )
-            self.view.center_on(self.settings.session.center_x, self.settings.session.center_y)
+            self._apply_project_settings()  # the bars, the zoom and the player take the document's values
             self.view.undo_stack.clear()  # another document starts its history over
         finally:
             self._loading = False
@@ -924,7 +937,7 @@ class MainWindow(QMainWindow):
             else None
         )
         payload = project.Project(
-            values=store.project_values(self.settings),
+            settings=self.project_settings,
             audio=project.store_audio(target, self.audio_path),
             channels=tuple(self.view.channels),
             notes=notes,
@@ -940,8 +953,8 @@ class MainWindow(QMainWindow):
         self.autosave_timer.stop()
         self._stored_lyrics = lyrics_times
         self._watch_lyrics()
-        store.set_value(self.settings, "paths", "last_audio_dir", str(target.parent))
-        self.settings_store.touch()
+        self.state.last_audio_dir = str(target.parent)
+        self._save_state()
         self._update_status()
         self.statusBar().showMessage(i18n.tr("Saved {name} — {notes} notes", name=target.name, notes=len(notes)))
         return True
@@ -1053,7 +1066,7 @@ class MainWindow(QMainWindow):
                 path,
                 tuple(self.view.channels),
                 notes,
-                self.settings.tempo.bpm,
+                self.project_settings.tempo.bpm,
                 wavetone=self.settings.midi.wavetone,
             )
         except OSError as error:
@@ -1430,12 +1443,13 @@ class MainWindow(QMainWindow):
         self._remember_configuration()
         self._remember_session()
         self.settings_store.flush()
+        self._save_state()
         self.song.close()  # the engine owns the audio device, so it leaves before the window does
         super().closeEvent(event)
 
     def _analysis_options(self) -> dict:
-        """What the analysis runs with: the settings, then whatever this run was told to use."""
-        analysis = self.settings.analysis
+        """What the analysis runs with: the document's values, then whatever this run was told to use."""
+        analysis = self.project_settings.analysis
         chosen = {
             "channels": analysis.channels,
             "t_num": analysis.t_num,
@@ -1468,15 +1482,15 @@ class MainWindow(QMainWindow):
     def load_audio(self, path: str) -> None:
         if not self._loading and str(path) != self.audio_path:
             # another song brings its own tempo and offset; a re-analysis of the same one does not
-            self.transport.bpm.setValue(store.FIELD_SPECS[("tempo", "bpm")].default)
-            self.transport.latency.setValue(store.FIELD_SPECS[("playback", "latency_ms")].default)
+            self.transport.bpm.setValue(project.FIELD_SPECS[("tempo", "bpm")].default)
+            self.transport.latency.setValue(project.FIELD_SPECS[("playback", "latency_ms")].default)
         self.audio_path = path
         self._audio_generation += 1
         generation = self._audio_generation
         self.edit.transcribe.setEnabled(True)
         self._mark_dirty()
-        store.set_value(self.settings, "paths", "last_audio_dir", str(Path(path).parent))
-        self.settings_store.touch()
+        self.state.last_audio_dir = str(Path(path).parent)
+        self._save_state()
         loader = SpectrumLoader(path, parent=self, **self._analysis_options())
         loader.progress.connect(partial(self._on_analysis_progress, generation))
         loader.loaded.connect(partial(self._on_spectrum_loaded, generation))
@@ -1571,7 +1585,7 @@ class MainWindow(QMainWindow):
         manual, self._tempo_manual = self._tempo_manual, False
         if not result.bpm:
             return
-        if not manual and self.transport.bpm.value() != store.FIELD_SPECS[("tempo", "bpm")].default:
+        if not manual and self.transport.bpm.value() != project.FIELD_SPECS[("tempo", "bpm")].default:
             return  # a tempo the user set, or took from an estimate, is not one to suggest over
         if round(result.bpm) == round(self.transport.bpm.value()):
             return  # the balloon would read what the field already says

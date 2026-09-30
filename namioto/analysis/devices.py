@@ -88,7 +88,7 @@ def provider_options(name: str) -> dict[str, str]:
         return {}
     from namioto import settings as store  # the spec table imports this module, so import it late
 
-    return {"powerPreference": store.load().hardware.power}
+    return {"powerPreference": store.load().devices.power}
 
 
 def installed() -> tuple[str, ...]:
@@ -178,7 +178,7 @@ def configured_gpu() -> str:
     """The GPU device a GPU run stands for: the one settings name, or the first available for auto."""
     from namioto import settings as store
 
-    key = store.load().hardware.gpu
+    key = store.load().devices.gpu
     return key if key in GPU_KEYS else first_available_gpu()
 
 
