@@ -35,7 +35,7 @@
 | `|` | 条带上每个 Sound 起点的竖线，也是拖动把手。 | |
 | 块 | 条带上 Sound 映射到的 NOTE 矩形。 | |
 | `.0` | 没分到任何 NOTE 的 Sound；显示为灰、不画块。 | |
-| group | 多个 Sound 共享同一个 NOTE；**只是显示**（悬浮高亮）。不要求能折成 `.krc` 的 `(...)`，也不改写 `.krc`（见 §13）。 | |
+| group | 多个 Sound 共享同一个 NOTE，且每个 Sound **只占据**该 NOTE（还占据别的 NOTE 的 Sound 不是 group 成员，它保留自己的 NOTE）；**只是显示**（悬浮高亮）。不要求能折成 `.krc` 的 `(...)`，也不改写 `.krc`（见 §13）。 | |
 
 ---
 
@@ -109,8 +109,13 @@ NOTE 的 share 之和 ≈ 1（onset 链在 NOTE 内不重叠），所以「留�
        `share < SHARE` 的落到 `.0`；
      - 若**没有任何** holder 达标（如 5 个均分各 0.2），只留最大 share 的那个当 owner。
        即：一个弱的 sharer 不得把强的那些一起拖落（R16）。
-4. **落空的 NOTE**：对每个没有 owner 的 NOTE，交给**前一个**有 owner 的 mora（若前面没有则交给
-   后面的），并把该 mora 记入 `doubted`（→ 红）。保证每个 NOTE 都被覆盖（§2）。
+   - **只占据**：一个 Sound 不能同时单独占据一个 NOTE、又和别人共享另一个。还拥有其他 NOTE
+     的 holder 不进 group——保留自己的 NOTE 并放弃 share（R17）；只在 group 里、却被多个 NOTE
+     共享的 holder 只保留第一个 NOTE 的共享，其余放弃。
+4. **落空的 NOTE**：对每个没有 owner 的 NOTE，优先交给相邻 NOTE 上一个**能持有它**的 mora
+   （前一个 NOTE 的最后一个非 group mora，否则后一个 NOTE 的第一个非 group mora）——group 成员
+   只占据自己的 NOTE，不接；两侧都没有这样的 mora 时退回「前一个有 owner 的 mora，否则后面的」。
+   接手的 mora 记入 `doubted`（→ 红）。保证每个 NOTE 都被覆盖（§2）。
 5. **covered / span**：
    - `covered[mora]` = 它拥有的 NOTE 列表；
    - 每个 mora 的 `span` = 它拥有的 NOTE 的并集，即从第一个 NOTE 的 start 到最后一个 NOTE 的 end——
@@ -241,6 +246,10 @@ group    # 共享的 NOTE 下标；-1 表示独立
   **与能否折成 `.krc` 的 `(...)` 无关（见 R14）。**
 - **R16** 判定是「逐个达标」，不是「全体达标」：一个 share 很小的 sharer 只能自己落 `.0`，
   不得让同一 NOTE 上 share 已经 ≥ 1/4 的其他 mora 也落 `.0`。
+- **R17** group 成员**只占据**该 NOTE（§4.1）：一个 Sound 既占据一个 NOTE、又和别的 Sound 共享
+  另一个 NOTE 时，不许成组——它保留自己占据的 NOTE，放弃共享的那个（该 NOTE 归其余成员；
+  没有其余成员时按第 4 步交给相邻的 mora）。一个被多个 NOTE 共享、自己又没独占 NOTE 的 Sound
+  只保留第一个 NOTE 的共享，其余同样放弃。
 - **R7** `group` 仅在成组时 ≥ 0；悬浮高亮覆盖同一 `group` 的连续 run。
 - **R8** 块 = 映射后的 `Placement.span`（贴 NOTE、与卷帘对齐、覆盖整个 NOTE）；`|`/标签 = raw 起点。
 - **R8d** 同一 NOTE 的 group 成员两块重叠，画成一个整块（成员之间不画竖边）；条带竖线只有
@@ -267,6 +276,7 @@ group    # 共享的 NOTE 下标；-1 表示独立
 | `.0` = 无 NOTE | `tests/test_timeline.py::test_a_mora_that_covers_no_note_falls_to_no_length_without_doubt` |
 | 共享 NOTE 判定 | `tests/test_timeline.py::test_two_sounds_that_share_a_note_equally_group_on_it`、`test_the_smaller_share_of_a_note_falls_to_no_length` |
 | 弱 sharer 不拖累强的（R16） | `test_a_weak_sharer_does_not_drag_down_the_others` |
+| group 成员只占据该 NOTE（R17） | `test_a_sound_holding_a_note_and_sharing_another_gives_up_the_share`、`test_a_sound_that_shares_a_note_and_holds_a_later_one_keeps_the_later_one`、`test_a_doubted_note_goes_to_a_sound_that_can_hold_it_not_a_group` |
 | 2–4 morae 分一个 NOTE | `test_a_note_split_a_quarter_to_three_quarters_still_groups`、`test_a_note_split_past_a_quarter_falls_to_no_length`、`test_four_sounds_each_holding_a_quarter_all_keep_the_note`、`test_four_sounds_under_a_quarter_fall_to_no_length` |
 | NOTE 全被覆盖 | `test_a_note_no_mora_reaches_is_given_to_the_one_before_and_doubted` 等 |
 | 块 = 映射 NOTE（全覆盖/贴节拍线） | `tests/test_ui.py::test_a_block_is_the_note_the_mora_maps_to` |
@@ -320,7 +330,8 @@ group    # 共享的 NOTE 下标；-1 表示独立
 ### 13.2 group 是显示概念
 
 - 多个 Sound 共享同一个 NOTE → `map_sounds` 成组（`group >= 0`），条带悬浮高亮整段。
-- 成组判定只看 **share**（`share >= SHARE`）；**不得**用 `group_sounds`
+- 成组的 Sound **只占据**该 NOTE；一个还占据其他 NOTE 的 Sound 是 held，不进 group（§4.1，R17）。
+- 成组判定看 share（`share >= SHARE`）；**不得**用 `group_sounds`
   （尝试折成 `(...)`）把关，因为：
   - ruby 词、跨 `]` 的组合可能无法写成 `.krc`，但仍应显示为 group。
 - `group_sounds` 只服务 `.krc` 折叠/导出，不参与显示判定。

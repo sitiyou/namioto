@@ -702,10 +702,12 @@ def map_sounds(
     With `aligned`, a sound covers every note its time overlaps; a note several sounds share stays the
     own of each that keeps a share of it of at least `SHARE` (a quarter), and the ones left under
     that fall to no length - so a strong sound is never dragged down by a weak neighbour on the same
-    note. A note no sound reaches is given to the one before it and doubted, so every note is
-    answered for. Without `aligned` the sounds and the notes are paired one for one, in reading
-    order, until the shorter side runs out. `flagged` marks the lines the aligner itself doubted,
-    which reddens the whole line.
+    note. A sound in a group only occupies that note: one that also owns a note of its own keeps that
+    note and gives the share up, and one offered several shares keeps only the first - so a group
+    never holds a sound that occupies another note. A note no sound reaches is given to a neighbouring
+    sound that can hold it and doubted, so every note is answered for. Without `aligned` the sounds
+    and the notes are paired one for one, in reading order, until the shorter side runs out. `flagged`
+    marks the lines the aligner itself doubted, which reddens the whole line.
     """
     flat: list[tuple[int, int, float | None, float | None]] = []
     for row, line in enumerate(lines):
@@ -728,8 +730,6 @@ def map_sounds(
                 holders[note].append(index)
 
     owner: list[list[int]] = [[] for _note in notes]
-    grouped: dict[int, int] = {}  # sound -> the note its neighbours share it with
-    doubted: set[int] = set()
     for note, sharers in enumerate(holders):
         if not sharers:
             continue
@@ -741,21 +741,47 @@ def map_sounds(
         if not kept:
             kept = [sharers[max(range(len(sharers)), key=lambda at: shares[at])]]
         owner[note] = kept
+
+    # a sound in a group only occupies that note: one that also owns a note of its own keeps that
+    # note and gives the share up, and one offered several shares keeps only the first - so a group
+    # never holds a sound that occupies another note
+    owned: dict[int, list[int]] = {}
+    for note, owners in enumerate(owner):
+        for sound in owners:
+            owned.setdefault(sound, []).append(note)
+    share: dict[int, int] = {}
+    for sound, notes_of in owned.items():
+        shared = [note for note in notes_of if len(owner[note]) > 1]
+        if len(shared) == len(notes_of):
+            share[sound] = shared[0]
+
+    grouped: dict[int, int] = {}  # sound -> the note its neighbours share it with
+    for note, owners in enumerate(owner):
+        if len(owners) < 2:
+            continue
+        kept = [sound for sound in owners if share.get(sound) == note]
+        owner[note] = kept
         if len(kept) > 1:
             for sound in kept:
-                grouped.setdefault(sound, note)
+                grouped[sound] = note
+
+    doubted: set[int] = set()
 
     for note in range(len(notes)):
         if owner[note]:
             continue
-        before = next((other for other in range(note - 1, -1, -1) if owner[other]), None)
-        if before is not None:
-            sound = owner[before][-1]
-        else:
-            after = next((other for other in range(note + 1, len(notes)) if owner[other]), None)
-            if after is None:
-                continue
-            sound = owner[after][0]
+        # a grouped sound may not take another note, so a doubt offers the note to a sound that can
+        # hold it first, and falls back to the neighbour only when both sides are all groups
+        sound = _free_owner(owner, grouped, note)
+        if sound is None:
+            before = next((other for other in range(note - 1, -1, -1) if owner[other]), None)
+            if before is not None:
+                sound = owner[before][-1]
+            else:
+                after = next((other for other in range(note + 1, len(notes)) if owner[other]), None)
+                if after is None:
+                    continue
+                sound = owner[after][0]
         owner[note] = [sound]
         doubted.add(sound)
 
@@ -823,3 +849,15 @@ def _zero_point(start: float | None, notes: Sequence[tuple[float, float]]) -> fl
     if start is not None:
         return start
     return notes[0][0] if notes else None
+
+
+def _free_owner(owner: Sequence[Sequence[int]], grouped: dict[int, int], note: int) -> int | None:
+    """The sound on a neighbouring note that may take one more: the previous note's last, else the
+    next note's first. A grouped sound only occupies its own note, so it is skipped; `None` when
+    neither neighbour holds one."""
+    for other, end in ((note - 1, -1), (note + 1, 0)):
+        if 0 <= other < len(owner):
+            free = [sound for sound in owner[other] if sound not in grouped]
+            if free:
+                return free[end]
+    return None

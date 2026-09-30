@@ -512,6 +512,33 @@ def test_a_weak_sharer_does_not_drag_down_the_others():
     assert [placement.group for placement in found[0]] == [0, 0, -1]
 
 
+def test_a_sound_holding_a_note_and_sharing_another_gives_up_the_share():
+    # あ holds note 0 and reaches into note 1, which い covers too: a group only occupies its own
+    # note, so あ keeps note 0 and い takes note 1 alone
+    notes = [(0.0, 1.0), (1.0, 2.0)]
+    found = map_sounds(sound_lines("あい"), [[(0.0, 1.6), (1.6, 2.0)]], notes, "あい")
+    assert [placement.notes for placement in found[0]] == [(0,), (1,)]
+    assert [placement.group for placement in found[0]] == [-1, -1]
+
+
+def test_a_sound_that_shares_a_note_and_holds_a_later_one_keeps_the_later_one():
+    # い holds note 1 and shares note 0 with あ: い keeps note 1, あ takes note 0 alone
+    notes = [(0.0, 1.0), (1.0, 2.0)]
+    found = map_sounds(sound_lines("あい"), [[(0.0, 0.4), (0.4, 1.6)]], notes, "あい")
+    assert [placement.notes for placement in found[0]] == [(0,), (1,)]
+    assert [placement.group for placement in found[0]] == [-1, -1]
+
+
+def test_a_doubted_note_goes_to_a_sound_that_can_hold_it_not_a_group():
+    # あ and い share note 0 and い reaches into note 1, which would leave note 1 with no owner; the
+    # doubt gives it to う, which can hold it, rather than turn grouped い into a held sound
+    notes = [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]
+    found = map_sounds(sound_lines("あいう"), [[(0.0, 1.0), (0.6, 1.6), (1.6, 3.0)]], notes, "あいう")
+    assert [placement.notes for placement in found[0]] == [(0,), (0,), (1, 2)]
+    assert [placement.group for placement in found[0]] == [0, 0, -1]
+    assert found[0][2].red is True
+
+
 def test_four_sounds_each_holding_a_quarter_all_keep_the_note():
     times = [[(0.0, 0.5), (0.5, 1.0), (1.0, 1.5), (1.5, 2.0)]]
     found = map_sounds(sound_lines("あいうえ"), times, [(0.0, 2.0)], "あいうえ")
