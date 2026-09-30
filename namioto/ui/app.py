@@ -67,7 +67,8 @@ from namioto.ui.lyrics_dialog import LyricsDialog, LyricsWatcher
 from namioto.ui.midi_dialog import MidiImportDialog
 from namioto.ui.roll import SNAP_CHOICES, PianoKeyboard, PianoRollView, TimelineRuler
 from namioto.ui.settings_dialog import SettingsDialog, SettingsStore
-from namioto.ui.song import SongPlayer, load_song
+from namioto.ui.song import load_song
+from namioto.ui.song_process import SongProcess
 from namioto.ui.spectrogram import SpectrumLoader
 from namioto.ui.strips import SoundStrip
 from namioto.ui.text import note_name
@@ -244,7 +245,7 @@ class MainWindow(QMainWindow):
         self.player, self.player_name = self._make_player()
         self._current_player_key = self._player_key()
         self.player.gain = self.settings.playback.midi_volume / 100.0
-        self.song = SongPlayer(self)
+        self.song = SongProcess(self)
         self.lyrics_watcher = LyricsWatcher(self)
         self.lyrics_watcher.changed.connect(self._on_lyrics_file_changed)
         self.position_timer = QTimer(self)
@@ -331,6 +332,7 @@ class MainWindow(QMainWindow):
         self.edit.align_requested.connect(self._open_align)
         self.player.finished.connect(self._on_playback_finished)
         self.song.finished.connect(self._on_playback_finished)
+        self.song.failed.connect(self._on_song_failed)
         self.view.seek_requested.connect(self._seek)
         self.view.hover_changed.connect(self._on_hover_changed)
         self.view.note_preview.connect(self._on_note_preview)
@@ -1430,6 +1432,7 @@ class MainWindow(QMainWindow):
         self._remember_configuration()
         self._remember_session()
         self.settings_store.flush()
+        self.song.close()  # the child owns the audio device, so it leaves before the window does
         super().closeEvent(event)
 
     def _analysis_options(self) -> dict:
@@ -1503,6 +1506,10 @@ class MainWindow(QMainWindow):
     def _on_playback_failed(self, generation: int, message: str) -> None:
         if generation != self._audio_generation:
             return
+        self.statusBar().showMessage(i18n.tr("Playback failed: {error}", error=message))
+
+    def _on_song_failed(self, message: str) -> None:
+        """The playback process has no generation of its own: a failure from it is always current."""
         self.statusBar().showMessage(i18n.tr("Playback failed: {error}", error=message))
 
     def _on_speed_changed(self, _value: int = 0) -> None:
