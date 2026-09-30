@@ -221,6 +221,8 @@ def test_only_the_settings_without_a_control_keep_a_row() -> None:
         ("tempo", "window_seconds"),
         ("tempo", "window_hop_seconds"),
         ("midi", "wavetone"),
+        ("network", "github_mirror"),
+        ("network", "proxy"),
         ("lyrics", "api_base"),
         ("lyrics", "api_key"),
         ("lyrics", "model"),

@@ -32,7 +32,7 @@ from namioto.analysis.choices import ALGORITHMS, CHANNEL_MODES
 from namioto.i18n import LANGUAGE_CODES, LANGUAGE_LABELS, SYSTEM
 from namioto.utils import config_dir, write_text
 
-VERSION = 4
+VERSION = 5
 TEXT_LIMIT = 4096
 DIVISIONS = ("beats", "seconds")
 # the General MIDI program list, in the order the program change is meant to select them in
@@ -596,6 +596,28 @@ SECTIONS: tuple[Section, ...] = (
                 "Last directory",
                 "Where the file chooser starts",
                 hidden=True,
+            ),
+        ),
+    ),
+    Section(
+        "network",
+        "Advanced",
+        "Network",
+        (
+            Field(
+                "github_mirror",
+                "text",
+                "https://gh-proxy.org",
+                "GitHub mirror",
+                "Downloads of GitHub releases are fetched through this mirror; empty goes straight to github.com",
+            ),
+            Field(
+                "proxy",
+                "text",
+                "",
+                "Proxy",
+                "HTTP(S) proxy for downloads and the lyrics API, such as http://127.0.0.1:7890; "
+                "empty follows the environment",
             ),
         ),
     ),

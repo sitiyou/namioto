@@ -9,7 +9,9 @@ installed copy under `models/`, then the release it names; the first file of a f
 downloaded package is recognized by.
 
 This module does not import ONNX Runtime of its own: the runtime is optional and is reached only
-when a session is opened, so importing this module never pulls it into the GUI's startup path.
+when a session is opened, so importing this module never pulls it into the GUI's startup path. The
+address a package comes from goes through `namioto.net`, so the GitHub mirror and the proxy settings
+apply to every download.
 """
 
 from __future__ import annotations
@@ -18,12 +20,12 @@ import os
 import pathlib
 import shutil
 import tempfile
-import urllib.request
 import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from namioto import net
 from namioto.analysis import devices
 from namioto.utils import data_dir
 
@@ -143,11 +145,11 @@ def install(
     model = MODELS[name]
     target = path(name, *parts)
     target.parent.mkdir(parents=True, exist_ok=True)
-    open_url = opener or urllib.request.urlopen
+    open_url = opener or net.opener()
     with tempfile.NamedTemporaryFile(dir=target.parent, suffix=".zip", delete=False) as handle:
         archive = pathlib.Path(handle.name)
     try:
-        with open_url(model.url(parts)) as response, archive.open("wb") as out:
+        with open_url(net.mirrored(model.url(parts))) as response, archive.open("wb") as out:
             total = int(response.headers.get("Content-Length") or 0)
             done = 0
             while True:

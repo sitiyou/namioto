@@ -11,6 +11,7 @@ import zipfile
 import numpy as np
 import pytest
 
+from namioto import net
 from namioto.analysis.game import (
     MODEL_FILES,
     OnnxBackend,
@@ -211,7 +212,7 @@ def test_downloading_unpacks_the_release_into_the_data_directory(tmp_path, monke
     steps: list[tuple[int, int]] = []
     target = download_model("small", lambda done, total: steps.append((done, total)), opener=opener)
 
-    assert seen == [asset_url("small")]
+    assert seen == [net.mirrored(asset_url("small"))]
     assert is_installed("small") and (target / "encoder.onnx").is_file()
     assert steps == [(len(payload), len(payload))]  # the whole file, in one block
     assert not list(target.parent.glob("*.zip"))  # the archive does not linger

@@ -29,6 +29,7 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
+from namioto import net
 from namioto.utils import write_text
 
 SUFFIX = ".krc"
@@ -93,13 +94,14 @@ def translate(
     timeout: float = 120.0,
     stream: bool = False,
     on_delta: Callable[[str, str], None] | None = None,
-    opener: Callable[..., Any] = urllib.request.urlopen,
+    opener: Callable[..., Any] | None = None,
 ) -> str:
     """Ask an OpenAI-compatible endpoint to annotate `lyrics`, and return what it wrote.
 
     `base_url` is the endpoint up to its `/v1`. The key rides in the header and nowhere else, and
     nothing raised here repeats it. With `stream`, every delta is handed to `on_delta(kind, text)`
     as it arrives - `kind` being `"reasoning"` or `"content"` - and the answer is still returned.
+    Without an `opener`, the request goes through the proxy named in the settings.
     """
     body: dict[str, Any] = {
         "model": model,
@@ -117,8 +119,9 @@ def translate(
         headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
         method="POST",
     )
+    open_url = opener or net.opener()
     try:
-        with opener(request, timeout=timeout) as response:
+        with open_url(request, timeout=timeout) as response:
             if stream:
                 return _read_stream(response, on_delta)
             payload = json.loads(response.read().decode("utf-8"))
