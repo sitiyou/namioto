@@ -2860,6 +2860,32 @@ def test_closing_the_window_remembers_its_state_and_the_document(own_window) -> 
     assert own_window.project_settings.view.center_x > 0.0
 
 
+def test_a_new_window_starts_from_the_remembered_defaults() -> None:
+    window_state.save(window_state.State(project={"spectrum": {"gain": 300.0}, "editor": {"zoom_x": 96.0}}))
+    opened = MainWindow()
+    assert opened.mix.gain.value() == 300.0
+    assert opened.view.zoom == (96.0, 16.0)
+    opened.project_dirty = False
+    opened.close()
+
+
+def test_closing_keeps_the_values_worth_carrying_to_the_next_project(own_window) -> None:
+    own_window.mix.gain.set_value(300.0)
+    own_window.transport.bpm.setValue(93.0)
+    own_window.transport.latency.setValue(120)
+    own_window.view.set_zoom(72.0, 24.0)
+    own_window.close()
+
+    saved = window_state.load().project
+    assert saved["spectrum"]["gain"] == 300.0
+    assert saved["editor"]["zoom_x"] == 72.0
+    assert saved["editor"]["zoom_y"] == 24.0
+    assert "tempo" not in saved  # the song's tempo is not a habit
+    assert "latency_ms" not in saved["playback"]  # the grid offset belongs to the song too
+    assert "a4" not in saved["analysis"]
+    assert "view" not in saved
+
+
 def test_the_preferences_are_read_when_the_window_starts(tmp_path, monkeypatch) -> None:
     path = tmp_path / "settings.json"
     monkeypatch.setenv("NAMIOTO_SETTINGS", str(path))

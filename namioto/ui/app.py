@@ -198,7 +198,7 @@ class MainWindow(QMainWindow):
         self.resize(1200, 720)
         self.settings = settings if settings is not None else store.load()
         self.state = window_state.load()
-        self.project_settings = project.default_settings()
+        self.project_settings = project.default_settings(self.state.project)
         i18n.set_language(self.settings.general.language)
         _install_translations(i18n.current())
         self.settings_store = SettingsStore(self.settings, parent=self)
@@ -675,6 +675,10 @@ class MainWindow(QMainWindow):
         self.project_settings.view.center_x = round(centre.x(), 1)
         self.project_settings.view.center_y = round(centre.y(), 1)
 
+    def _remember_defaults(self) -> None:
+        """The values worth carrying to the next project, kept in the window's own state."""
+        self.state.project = project.remembered_defaults(self.project_settings)
+
     def _save_state(self) -> None:
         try:
             window_state.save(self.state)
@@ -773,7 +777,7 @@ class MainWindow(QMainWindow):
         target = self._new_project_path(path)
         if target is None:
             return False
-        self.project_settings = project.default_settings()
+        self.project_settings = project.default_settings(self.state.project)
         self._apply_project_settings()
         self.load_audio(path)
         return self.save_project(target)
@@ -912,6 +916,7 @@ class MainWindow(QMainWindow):
         """Write the notes and the values that belong to them out to `path`."""
         self._remember_configuration()
         self._remember_session()
+        self._remember_defaults()
         target = Path(path)
         # scene order is not a file's order: sorted notes keep a saved project stable to diff
         notes = tuple(
@@ -1442,6 +1447,7 @@ class MainWindow(QMainWindow):
         self._workers.clear()
         self._remember_configuration()
         self._remember_session()
+        self._remember_defaults()
         self.settings_store.flush()
         self._save_state()
         self.song.close()  # the engine owns the audio device, so it leaves before the window does

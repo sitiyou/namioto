@@ -9,7 +9,9 @@ what the editor anchors them to, so a different tempo moves the grid, not the no
 
 `ProjectSettings` holds the values that describe a song - how it is analysed, drawn and played back -
 and the table below is their single source of truth. They are the project's alone: the program's own
-preferences are in `namioto.settings`, and the window's state in `namioto.state`.
+preferences are in `namioto.settings`, and the window's state in `namioto.state`. A field marked
+`reuse` is the exception - its last value says more about the user than about the song - so the
+window keeps it in `namioto.state` and the next document starts from it.
 
 `Lyrics` carries the `.krc` text itself (the baseline), the aligned times keyed by a hash of that
 text, and the mode. A same-named `.krc` beside the project is a working copy the editor keeps in
@@ -21,6 +23,7 @@ from __future__ import annotations
 import json
 import math
 import warnings
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -50,6 +53,7 @@ PROJECT_SECTIONS: tuple[Section, ...] = (
                 "Channels",
                 "Which channels the analysis reads",
                 choices=CHANNEL_MODES,
+                reuse=True,
             ),
             Field(
                 "t_num",
@@ -60,6 +64,7 @@ PROJECT_SECTIONS: tuple[Section, ...] = (
                 low=1,
                 high=200,
                 decimals=2,
+                reuse=True,
             ),
             Field(
                 "fft_points",
@@ -70,6 +75,7 @@ PROJECT_SECTIONS: tuple[Section, ...] = (
                 low=256,
                 high=32768,
                 step=256,
+                reuse=True,
             ),
             Field(
                 "a4",
@@ -97,6 +103,7 @@ PROJECT_SECTIONS: tuple[Section, ...] = (
                 low=10,
                 high=600,
                 step=1,
+                reuse=True,
             ),
             Field(
                 "contrast",
@@ -108,6 +115,7 @@ PROJECT_SECTIONS: tuple[Section, ...] = (
                 high=4.0,
                 step=0.1,
                 decimals=1,
+                reuse=True,
             ),
         ),
     ),
@@ -124,6 +132,7 @@ PROJECT_SECTIONS: tuple[Section, ...] = (
                 low=0,
                 high=100,
                 suffix="%",
+                reuse=True,
             ),
             Field(
                 "midi_volume",
@@ -134,6 +143,7 @@ PROJECT_SECTIONS: tuple[Section, ...] = (
                 low=0,
                 high=100,
                 suffix="%",
+                reuse=True,
             ),
             Field(
                 "latency_ms",
@@ -162,7 +172,7 @@ PROJECT_SECTIONS: tuple[Section, ...] = (
         "editor",
         "Editor",
         (
-            Field("snap", "float", 0.5, "Snap", "Snap grid for the pen tool", low=0.0625, high=4.0),
+            Field("snap", "float", 0.5, "Snap", "Snap grid for the pen tool", low=0.0625, high=4.0, reuse=True),
             Field(
                 "division",
                 "choice",
@@ -170,9 +180,30 @@ PROJECT_SECTIONS: tuple[Section, ...] = (
                 "Division",
                 "What the ruler's lower row and the drawn grid lines divide by",
                 choices=DIVISIONS,
+                reuse=True,
             ),
-            Field("zoom_x", "float", 48.0, "Zoom x", "Pixels per beat at startup", low=12, high=900, decimals=1),
-            Field("zoom_y", "float", 16.0, "Zoom y", "Pixels per semitone row at startup", low=8, high=64, decimals=1),
+            Field(
+                "zoom_x",
+                "float",
+                48.0,
+                "Zoom x",
+                "Pixels per beat at startup",
+                low=12,
+                high=900,
+                decimals=1,
+                reuse=True,
+            ),
+            Field(
+                "zoom_y",
+                "float",
+                16.0,
+                "Zoom y",
+                "Pixels per semitone row at startup",
+                low=8,
+                high=64,
+                decimals=1,
+                reuse=True,
+            ),
         ),
     ),
     Section(
@@ -206,9 +237,40 @@ ProjectSettings = params.build(PROJECT_SECTIONS)
 FIELD_SPECS = ProjectSettings.__field_specs__
 
 
-def default_settings() -> ProjectSettings:
-    """The values a document starts from when the file names none of its own."""
-    return ProjectSettings()
+REUSE_FIELDS: tuple[tuple[str, str], ...] = tuple(
+    (section.name, item.name) for section in PROJECT_SECTIONS for item in section.fields if item.reuse
+)
+
+
+def default_settings(remembered: Mapping | None = None) -> ProjectSettings:
+    """The values a document starts from when the file names none of its own.
+
+    `remembered` is what the window kept of the last document; only the fields marked reusable take
+    from it, and every other one keeps the table's default.
+    """
+    settings = ProjectSettings()
+    if not isinstance(remembered, Mapping):
+        return settings
+    for section in PROJECT_SECTIONS:
+        fields = tuple(item for item in section.fields if item.reuse)
+        values = remembered.get(section.name)
+        if not fields or not isinstance(values, Mapping):
+            continue
+        for name, value in params.coerce_values(fields, values).items():
+            setattr(getattr(settings, section.name), name, value)
+    return settings
+
+
+def remembered_defaults(settings: ProjectSettings) -> dict[str, dict]:
+    """The reusable values of a document, as the window keeps them for the next one."""
+    kept: dict[str, dict] = {}
+    for section in PROJECT_SECTIONS:
+        values = {
+            item.name: getattr(getattr(settings, section.name), item.name) for item in section.fields if item.reuse
+        }
+        if values:
+            kept[section.name] = values
+    return kept
 
 
 def settings_from_dict(data: Any) -> ProjectSettings:

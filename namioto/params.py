@@ -43,6 +43,8 @@ class Field:
     choices: tuple = ()
     labels: tuple[str, ...] = ()  # what to show for each choice, the choices themselves when empty
     suffix: str = ""
+    # a document value that says more about the user than about the song, so the next document starts from it
+    reuse: bool = False
 
 
 @dataclass(frozen=True)

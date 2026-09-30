@@ -216,3 +216,58 @@ def test_saving_leaves_no_half_written_file_behind(tmp_path) -> None:
     project.save(make(notes=(project.Note(2.0, 1.0, 62),)), path)
     assert [item.name for item in tmp_path.iterdir()] == ["song.nto"]
     assert project.load(path).notes == (project.Note(2.0, 1.0, 62),)
+
+
+def test_only_the_habits_are_worth_carrying_across_projects() -> None:
+    assert set(project.REUSE_FIELDS) == {
+        ("analysis", "channels"),
+        ("analysis", "t_num"),
+        ("analysis", "fft_points"),
+        ("spectrum", "gain"),
+        ("spectrum", "contrast"),
+        ("playback", "audio_volume"),
+        ("playback", "midi_volume"),
+        ("editor", "snap"),
+        ("editor", "division"),
+        ("editor", "zoom_x"),
+        ("editor", "zoom_y"),
+    }
+
+
+def test_a_new_document_takes_the_remembered_values_it_is_worth_carrying() -> None:
+    settings = project.default_settings({"spectrum": {"gain": 300.0, "contrast": 1.4}, "editor": {"zoom_x": 96.0}})
+    assert settings.spectrum.gain == 300.0
+    assert settings.spectrum.contrast == 1.4
+    assert settings.editor.zoom_x == 96.0
+    assert settings.editor.zoom_y == project.FIELD_SPECS[("editor", "zoom_y")].default
+
+
+def test_a_remembered_value_is_checked_like_any_other() -> None:
+    settings = project.default_settings({"spectrum": {"gain": 9999.0}, "editor": {"snap": "wide"}})
+    assert settings.spectrum.gain == 600.0
+    assert settings.editor.snap == 0.5
+
+
+def test_a_remembered_value_the_song_owns_is_left_out() -> None:
+    settings = project.default_settings(
+        {"tempo": {"bpm": 93.0}, "playback": {"latency_ms": 120}, "view": {"center_x": 5.0}}
+    )
+    assert settings.tempo.bpm == 120.0
+    assert settings.playback.latency_ms == 0
+    assert settings.view.center_x == 8.0
+
+
+def test_remembering_a_document_keeps_only_the_reusable_values() -> None:
+    settings = project.default_settings()
+    settings.spectrum.gain = 300.0
+    settings.tempo.bpm = 93.0
+    kept = project.remembered_defaults(settings)
+    assert kept["spectrum"]["gain"] == 300.0
+    assert "tempo" not in kept
+    assert set(kept["editor"]) == {"snap", "division", "zoom_x", "zoom_y"}
+
+
+def test_a_remembered_map_that_is_not_a_map_gives_the_defaults() -> None:
+    assert project.default_settings(None) == project.default_settings()
+    assert project.default_settings("nonsense") == project.default_settings()
+    assert project.default_settings({"spectrum": "loud"}) == project.default_settings()

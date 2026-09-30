@@ -40,6 +40,13 @@ def isolated_settings(tmp_path_factory):
     return root / "settings.json"
 
 
+@pytest.fixture(autouse=True)
+def isolated_state(tmp_path):
+    """Every test gets a window state of its own: the reusable project defaults live there now, so a
+    window one test closes must not seed the next window."""
+    os.environ["NAMIOTO_STATE"] = str(tmp_path / "state.json")
+
+
 @pytest.fixture(scope="session", autouse=True)
 def isolated_directories(tmp_path_factory):
     """No test reads the machine's config or data directory: GAME's models and the transcription

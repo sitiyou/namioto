@@ -54,3 +54,16 @@ def test_a_missing_or_broken_file_gives_the_defaults(state_file) -> None:
 def test_a_value_that_is_not_text_is_dropped(state_file) -> None:
     state_file.write_text(json.dumps({"geometry": 5, "last_audio_dir": None}))
     assert window_state.load() == window_state.State()
+
+
+def test_the_remembered_project_defaults_round_trip(state_file) -> None:
+    window_state.save(window_state.State(geometry="AAAA", project={"spectrum": {"gain": 300.0}}))
+    assert window_state.load().project == {"spectrum": {"gain": 300.0}}
+
+
+def test_a_project_block_that_is_not_a_section_map_is_dropped(state_file) -> None:
+    state_file.write_text(json.dumps({"project": {"spectrum": "loud", "tempo": {"bpm": 93.0}}}))
+    assert window_state.load().project == {"tempo": {"bpm": 93.0}}
+
+    state_file.write_text(json.dumps({"project": [1, 2, 3]}))
+    assert window_state.load().project == {}
