@@ -356,7 +356,7 @@ def test_control_widths_grow_with_the_theme_font(qt_app) -> None:
         slider = ValueSlider("Speed", 0.1, 2.0, 1.0, suffix="x", scale=100)
         bar = TransportBar()
         edit = EditBar(SNAP_CHOICES)
-        for field in (bar.bpm, bar.latency, edit.snap):
+        for field in (bar.bpm, bar.grid_offset, edit.snap):
             assert field.width() >= field.sizeHint().width(), f"{type(field).__name__} is narrower than its text"
         metrics = slider.value_label.fontMetrics()
         for value in (slider.slider.minimum(), slider.slider.maximum()):
@@ -538,7 +538,7 @@ def test_spectrum_grid_lines_follow_the_division() -> None:
 
 def test_defaults_of_the_control_bars(window) -> None:
     assert window.transport.bpm.value() == 120.0
-    assert window.transport.latency.value() == 0
+    assert window.transport.grid_offset.value() == 0
     assert window.transport.position.text() == "00:00.000"
     assert window.transport.speed.value() == 1.0
     assert window.mix.gain.value() == 240.0
@@ -564,8 +564,8 @@ def test_the_tempo_hides_a_zero_decimal(window) -> None:
     window.transport.bpm.setValue(120.0)
 
 
-def test_the_tempo_and_latency_fields_select_their_text(window) -> None:
-    for field in (window.transport.bpm, window.transport.latency):
+def test_the_tempo_and_grid_offset_fields_select_their_text(window) -> None:
+    for field in (window.transport.bpm, window.transport.grid_offset):
         field.focusInEvent(QFocusEvent(QEvent.Type.FocusIn))
         assert field.lineEdit().selectedText() == field.cleanText() != ""
         field.lineEdit().deselect()
@@ -582,8 +582,8 @@ def test_the_tempo_and_latency_fields_select_their_text(window) -> None:
         assert field.lineEdit().selectedText() == field.cleanText()
 
 
-def test_the_latency_field_shows_its_unit_beside_it(window) -> None:
-    field = window.transport.latency
+def test_the_grid_offset_field_shows_its_unit_beside_it(window) -> None:
+    field = window.transport.grid_offset
     assert field.suffix() == ""
     unit = next(label for label in window.controls.findChildren(QLabel) if label.text() == "ms")
     # both in the control area's coordinates: the label is a sibling of the field, not a child of it
@@ -2869,21 +2869,30 @@ def test_a_new_window_starts_from_the_remembered_defaults() -> None:
     opened.close()
 
 
-def test_closing_keeps_the_values_worth_carrying_to_the_next_project(own_window) -> None:
+def test_an_explicit_change_is_what_the_next_project_inherits(own_window) -> None:
     own_window.mix.gain.set_value(300.0)
-    own_window.transport.bpm.setValue(93.0)
-    own_window.transport.latency.setValue(120)
-    own_window.view.set_zoom(72.0, 24.0)
+    own_window.transport.grid_offset.setValue(120)
+    own_window.view._zoom(1.5, 1.5, QPoint(0, 0))  # a wheel zoom is the user's; set_zoom is not
     own_window.close()
 
     saved = window_state.load().project
     assert saved["spectrum"]["gain"] == 300.0
-    assert saved["editor"]["zoom_x"] == 72.0
-    assert saved["editor"]["zoom_y"] == 24.0
-    assert "tempo" not in saved  # the song's tempo is not a habit
-    assert "latency_ms" not in saved["playback"]  # the grid offset belongs to the song too
-    assert "a4" not in saved["analysis"]
+    assert saved["editor"]["zoom_x"] == 72.0  # 48 * 1.5
+    assert saved["editor"]["zoom_y"] == 24.0  # 16 * 1.5
+    assert "grid_offset_ms" not in saved["editor"]  # the grid offset belongs to the song too
     assert "view" not in saved
+
+
+def test_opening_a_project_leaves_the_remembered_defaults_alone(own_window, tmp_path) -> None:
+    other = project.default_settings()
+    other.spectrum.gain = 300.0
+    other.editor.zoom_x = 96.0
+    path = tmp_path / "song.nto"
+    project.save(project.Project(settings=other), path)
+    assert own_window.load_project(path) is True
+    own_window.close()
+
+    assert window_state.load().project == {}
 
 
 def test_the_preferences_are_read_when_the_window_starts(tmp_path, monkeypatch) -> None:
@@ -3011,7 +3020,7 @@ def test_the_tempo_loader_follows_the_settings(own_window, monkeypatch) -> None:
 
 def test_a_song_tempo_never_reaches_the_preferences(own_window) -> None:
     own_window.transport.bpm.setValue(93.0)
-    own_window.transport.latency.setValue(120)
+    own_window.transport.grid_offset.setValue(120)
     own_window.close()
 
     saved = store.load()
@@ -3020,30 +3029,30 @@ def test_a_song_tempo_never_reaches_the_preferences(own_window) -> None:
     assert own_window.project_settings.tempo.bpm == 93.0
 
 
-def test_another_song_starts_from_the_default_tempo_and_latency(own_window, monkeypatch) -> None:
+def test_another_song_starts_from_the_default_tempo_and_grid_offset(own_window, monkeypatch) -> None:
     fake_loaders(monkeypatch)
     own_window.transport.bpm.setValue(93.0)
-    own_window.transport.latency.setValue(120)
+    own_window.transport.grid_offset.setValue(120)
 
     own_window.load_audio("/tmp/other.wav")
     assert own_window.transport.bpm.value() == 120.0
-    assert own_window.transport.latency.value() == 0
+    assert own_window.transport.grid_offset.value() == 0
 
     own_window.transport.bpm.setValue(93.0)
     own_window.load_audio("/tmp/other.wav")  # the same file again: a re-analysis keeps what was typed
     assert own_window.transport.bpm.value() == 93.0
 
 
-def test_a_project_brings_its_tempo_and_latency_back(own_window, tmp_path) -> None:
+def test_a_project_brings_its_tempo_and_grid_offset_back(own_window, tmp_path) -> None:
     other = project.default_settings()
     other.tempo.bpm = 93.0
-    other.playback.latency_ms = 120
+    other.editor.grid_offset_ms = 120
     path = tmp_path / "song.nto"
     project.save(project.Project(settings=other), path)
 
     assert own_window.load_project(path) is True
     assert own_window.transport.bpm.value() == 93.0
-    assert own_window.transport.latency.value() == 120
+    assert own_window.transport.grid_offset.value() == 120
     own_window.settings_store.flush()
     written = json.loads((tmp_path / "settings.json").read_text(encoding="utf-8"))
     assert not hasattr(own_window.settings, "playback")
@@ -3161,7 +3170,7 @@ def test_the_transcribe_button_opens_the_dialog(own_window, monkeypatch) -> None
 
 def test_the_transcription_dialog_carries_the_grid_offset(own_window, monkeypatch) -> None:
     own_window.audio_path = "/tmp/song.wav"
-    own_window.transport.latency.setValue(125)
+    own_window.transport.grid_offset.setValue(125)
     opened: list[TranscriptionDialog] = []
     monkeypatch.setattr(TranscriptionDialog, "exec", lambda self: opened.append(self) or QDialog.DialogCode.Rejected)
 
@@ -4848,7 +4857,7 @@ def test_notes_on_another_channel_are_not_mapped(own_window, tmp_path) -> None:
     assert own_window.view.lyric_times == (((None, None), (None, None)),)
 
 
-def test_the_latency_only_slides_the_drawn_grid(own_window) -> None:
+def test_the_grid_offset_only_slides_the_drawn_grid(own_window) -> None:
     view = own_window.view
     view.set_channels(())
     view.set_notes(((60, 0.0, 1.0, 0),))
@@ -4856,7 +4865,7 @@ def test_the_latency_only_slides_the_drawn_grid(own_window) -> None:
     rect = QRectF(0.0, 0.0, 3.0, 1.0)
     assert [x for x, _level in view.division_lines(rect, 0.0)] == [0.0, 1.0, 2.0, 3.0]
 
-    own_window.transport.latency.setValue(125)  # +0.125 s = a quarter beat at 120 BPM
+    own_window.transport.grid_offset.setValue(125)  # +0.125 s = a quarter beat at 120 BPM
     assert [x for x, _level in view.division_lines(rect, 0.0)] == [-0.75, 0.25, 1.25, 2.25]
     assert view.notes()[0].start == 0.0  # the note keeps its own time
     assert view._snap_beats(0.6) == pytest.approx(0.75)  # snapping follows the drawn lines
@@ -4864,8 +4873,8 @@ def test_the_latency_only_slides_the_drawn_grid(own_window) -> None:
     assert view._snap_ceil_beats(0.6) == pytest.approx(0.75)
 
 
-def test_the_latency_leaves_the_playhead_at_its_timestamp(own_window, monkeypatch) -> None:
-    own_window.transport.latency.setValue(-300)
+def test_the_grid_offset_leaves_the_playhead_at_its_timestamp(own_window, monkeypatch) -> None:
+    own_window.transport.grid_offset.setValue(-300)
     monkeypatch.setattr(own_window, "_position", lambda: 1.0)
     own_window._show_position()
     assert own_window.view.playhead == 1.0
@@ -5239,7 +5248,7 @@ def test_the_align_button_opens_the_dialog(own_window, monkeypatch, tmp_path) ->
 
     opened: list = []
     monkeypatch.setattr(AlignDialog, "exec", lambda self: opened.append(self) or 0)
-    own_window.transport.latency.setValue(125)
+    own_window.transport.grid_offset.setValue(125)
     own_window._open_align()
     assert len(opened) == 1
     assert opened[0].offset == 0.125  # the dialog quantises on the grid that is drawn

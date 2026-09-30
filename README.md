@@ -82,7 +82,8 @@ written when you save but does not count as a change, so looking around never na
 not been saved under a name yet is treated as a sketch and closes without asking.
 
 Settings and projects stay apart: the values inside a project belong to that project and never
-overwrite the program's own defaults, which are what the next file starts from.
+overwrite the program's own preferences, and only a handful of them - the ones that are habits
+rather than a song's - carry into the next new project.
 
 ## MIDI files
 
@@ -137,15 +138,18 @@ live without closing the window.
 ![settings](docs/settings.png)
 
 Everything else is remembered rather than configured, and the file it goes to says what it belongs
-to. A value that describes the song - how it is analysed, drawn and played back, the zoom, the snap
-grid, the tempo, the grid offset - is written into the `.nto`, so a project carries its own and
-another file starts from the defaults. The program's own preferences - the interface language, the
-wanted GPU, the tempo algorithm, the lyrics endpoint, the GitHub mirror and proxy, WaveTone
+to. A value that describes the song - how it is analysed, drawn and played back, the tempo, the grid
+offset, the speed, the tuning, the view centre - is written into the `.nto`, so a project carries
+its own. The habits a new document should inherit are kept as well, in
+`~/.config/namioto/state.json` (`$NAMIOTO_STATE` points elsewhere): the spectrum gain and contrast,
+the audio and MIDI volumes, the analysis channels and resolution, the snap grid, the time division
+and the zoom. Change one of those while working and the next new project starts from it; opening a
+project never changes what is remembered. The program's own preferences - the interface language,
+the wanted GPU, the tempo algorithm, the lyrics endpoint, the GitHub mirror and proxy, WaveTone
 compatibility and the two editor switches - go to `~/.config/namioto/settings.json`
-(`$NAMIOTO_SETTINGS` points elsewhere), and the window's size, position and last folder to
-`~/.config/namioto/state.json` (`$NAMIOTO_STATE`). The files are plain JSON, so they can be edited
-by hand - and a hand-mangled or half-written one falls back to the defaults field by field instead
-of refusing to start.
+(`$NAMIOTO_SETTINGS` points elsewhere), and the window's size, position and last folder also to
+`state.json`. The files are plain JSON, so they can be edited by hand - and a hand-mangled or
+half-written one falls back to the defaults field by field instead of refusing to start.
 
 The command line still wins for one run: `--channels`, `--t-num`, `--gain` and `--contrast` shape
 this run alone and are never written back into the file.
@@ -188,7 +192,7 @@ namioto/midi.py       reading and writing MIDI files (mido), no Qt
 namioto/project.py    the .nto file: the notes, the audio they were drawn over, and the document's values, no Qt
 namioto/settings.py   the program's own preferences: the spec table, its file and the defaults, no Qt
 namioto/params.py     the Field primitive every parameter table is built from, no Qt
-namioto/state.py      the window's size, position and last folder between runs, no Qt
+namioto/state.py      the window's size, position, last folder and the habits a new document starts from, no Qt
 namioto/lyrics.py     the .krc sidecar beside a project, and the model call that fills it, no Qt
 namioto/karaoke/      the .krc model, its parser, its writer and its timeline (lark), no Qt
 namioto/utils.py      the app's directories, a file's identity, kana to romaji tokens, no Qt

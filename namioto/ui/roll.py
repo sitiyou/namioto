@@ -18,7 +18,7 @@ on the grid
 (`round(movement / snap) * snap`), so an off-grid note keeps the offset it had; trimming an edge is
 the exception and lands on the drawn grid.
 
-`playback.latency_ms` slides the drawn grid through `set_offset`, negative left and positive right;
+`editor.grid_offset_ms` slides the drawn grid through `set_offset`, negative left and positive right;
 the snap helpers, the ruler and the align dialog's Quantize follow it, while the notes, the spectrum
 and the playhead keep their exact timestamps.
 """
@@ -272,6 +272,7 @@ class PianoRollView(QGraphicsView):
 
     view_changed = pyqtSignal()
     viewport_changed = pyqtSignal()
+    zoom_changed = pyqtSignal()
     notes_changed = pyqtSignal()
     channels_changed = pyqtSignal()
     active_channel_changed = pyqtSignal(int)
@@ -1477,6 +1478,7 @@ class PianoRollView(QGraphicsView):
         vbar.setValue(vbar.value() + delta.y())
         self.view_changed.emit()
         self.viewport_changed.emit()
+        self.zoom_changed.emit()
 
     def keyPressEvent(self, event) -> None:
         key = event.key()

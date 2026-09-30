@@ -303,8 +303,8 @@ class MainWindow(QMainWindow):
         self.transport.overtone.setChecked(self.settings.editor.overtone_highlight)
         self.view.snap = self.edit.snap.currentData()
         self.transport.bpm.setValue(document.tempo.bpm)
-        self.transport.latency.setValue(document.playback.latency_ms)
-        self.view.set_offset(self.transport.latency.value() / 1000.0)
+        self.transport.grid_offset.setValue(document.editor.grid_offset_ms)
+        self.view.set_offset(self.transport.grid_offset.value() / 1000.0)
         self.transport.speed.set_value(document.playback.speed)
         self.mix.gain.set_value(document.spectrum.gain)
         self.mix.contrast.set_value(document.spectrum.contrast)
@@ -316,6 +316,7 @@ class MainWindow(QMainWindow):
         for binding in self._bindings:
             binding.signal.connect(partial(self._binding_changed, binding))
         self.edit.interaction_changed.connect(self.view.apply_interaction)
+        self.view.zoom_changed.connect(self._on_zoom_changed)
         self.transport.detect.clicked.connect(lambda: self._start_tempo(manual=True))
         self.transport.suggestion.applied.connect(self._apply_tempo)
         self.transport.suggestion.dismissed.connect(self.transport.suggestion.hide)
@@ -468,12 +469,12 @@ class MainWindow(QMainWindow):
                 model=lambda: self.project_settings,
             ),
             _Binding(
-                "playback",
-                "latency_ms",
-                self.transport.latency.value,
-                self.transport.latency.setValue,
-                self.transport.latency.valueChanged,
-                self._on_latency_changed,
+                "editor",
+                "grid_offset_ms",
+                self.transport.grid_offset.value,
+                self.transport.grid_offset.setValue,
+                self.transport.grid_offset.valueChanged,
+                self._on_grid_offset_changed,
                 model=lambda: self.project_settings,
             ),
             _Binding(
@@ -540,6 +541,10 @@ class MainWindow(QMainWindow):
             binding.show()
         self._display_overrides.clear()  # the bar was touched after all, so it is what is remembered
         self._remember_configuration()
+        if binding.model is not None:
+            spec = project.FIELD_SPECS.get((binding.section, binding.name))
+            if spec is not None and spec.reuse:  # a habit the user chose, kept for the next document
+                project.remember(self.state.project, binding.section, binding.name, binding.read())
         self.settings_store.touch()
 
     def _apply_theme(self) -> None:
@@ -676,9 +681,11 @@ class MainWindow(QMainWindow):
         self.project_settings.view.center_x = round(centre.x(), 1)
         self.project_settings.view.center_y = round(centre.y(), 1)
 
-    def _remember_defaults(self) -> None:
-        """The values worth carrying to the next project, kept in the window's own state."""
-        self.state.project = project.remembered_defaults(self.project_settings)
+    def _on_zoom_changed(self) -> None:
+        """A zoom the user asked for is a habit: the next document starts where this one was left."""
+        zoom_x, zoom_y = self.view.zoom
+        project.remember(self.state.project, "editor", "zoom_x", zoom_x)
+        project.remember(self.state.project, "editor", "zoom_y", zoom_y)
 
     def _save_state(self) -> None:
         try:
@@ -917,7 +924,6 @@ class MainWindow(QMainWindow):
         """Write the notes and the values that belong to them out to `path`."""
         self._remember_configuration()
         self._remember_session()
-        self._remember_defaults()
         target = Path(path)
         # scene order is not a file's order: sorted notes keep a saved project stable to diff
         notes = tuple(
@@ -1449,7 +1455,6 @@ class MainWindow(QMainWindow):
         self._workers.clear()
         self._remember_configuration()
         self._remember_session()
-        self._remember_defaults()
         self.settings_store.flush()
         self._save_state()
         self.song.close()  # the engine owns the audio device, so it leaves before the window does
@@ -1491,7 +1496,7 @@ class MainWindow(QMainWindow):
         if not self._loading and str(path) != self.audio_path:
             # another song brings its own tempo and offset; a re-analysis of the same one does not
             self.transport.bpm.setValue(project.FIELD_SPECS[("tempo", "bpm")].default)
-            self.transport.latency.setValue(project.FIELD_SPECS[("playback", "latency_ms")].default)
+            self.transport.grid_offset.setValue(project.FIELD_SPECS[("editor", "grid_offset_ms")].default)
         self.audio_path = path
         self._audio_generation += 1
         generation = self._audio_generation
@@ -1732,9 +1737,9 @@ class MainWindow(QMainWindow):
         self.transport.suggestion.hide()  # a tempo the user typed wins over the suggestion
         self.view.bpm = self.transport.bpm.value()
 
-    def _on_latency_changed(self, *_args) -> None:
-        """The latency only slides the drawn grid; the playhead and the notes keep their timestamps."""
-        self.view.set_offset(self.transport.latency.value() / 1000.0)
+    def _on_grid_offset_changed(self, *_args) -> None:
+        """The offset only slides the drawn grid; the playhead and the notes keep their timestamps."""
+        self.view.set_offset(self.transport.grid_offset.value() / 1000.0)
 
     def _on_spectrum_parameters(self, *_args) -> None:
         self.view.gain = self.mix.gain.value()

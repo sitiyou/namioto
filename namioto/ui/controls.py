@@ -361,7 +361,7 @@ class TempoBox(_SelectAll, QDoubleSpinBox):
         self.context_menu().exec(self.mapToGlobal(position))
 
 
-class LatencyBox(_SelectAll, QSpinBox):
+class GridOffsetBox(_SelectAll, QSpinBox):
     """Milliseconds; the unit is a label beside the field, the way WaveTone shows it."""
 
 
@@ -431,7 +431,7 @@ class ControlArea(QWidget):
 
 
 class TransportBar(_Group):
-    """Playback transport, position, the view toggles, playback speed, tempo and latency."""
+    """Playback transport, position, the view toggles, playback speed, tempo and grid offset."""
 
     rewind_requested = pyqtSignal()
     play_from_start_requested = pyqtSignal()
@@ -500,15 +500,15 @@ class TransportBar(_Group):
         self.suggestion = TempoSuggestion()
         self.settings_button = icon_button("gear", tr("Settings: the advanced options the bars have no control for"))
 
-        self.latency = LatencyBox()
-        self.latency.setRange(-500, 500)
-        self.latency.setValue(0)
-        self.latency.setToolTip(
+        self.grid_offset = GridOffsetBox()
+        self.grid_offset.setRange(-500, 500)
+        self.grid_offset.setValue(0)
+        self.grid_offset.setToolTip(
             tr("Grid offset: slides the grid lines, - left and + right; notes and playback keep their timestamps")
         )
-        self.latency.setFixedWidth(self.latency.sizeHint().width())
-        self.latency.setFixedHeight(FIELD_HEIGHT)
-        self.latency.setKeyboardTracking(False)
+        self.grid_offset.setFixedWidth(self.grid_offset.sizeHint().width())
+        self.grid_offset.setFixedHeight(FIELD_HEIGHT)
+        self.grid_offset.setKeyboardTracking(False)
 
         self.auto_page = icon_button(
             "page",
@@ -555,7 +555,7 @@ class TransportBar(_Group):
         bpm.add(field_label("BPM"))
         bpm.add(self.detect)
         bpm.add(separator())
-        bpm.add(self.latency)
+        bpm.add(self.grid_offset)
         bpm.add(field_label("ms"))
 
         speed = Cluster("speed")

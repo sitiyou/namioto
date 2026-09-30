@@ -55,7 +55,8 @@ def test_only_the_values_that_belong_to_the_document_are_written() -> None:
         "tempo",
         "view",
     }
-    assert set(written["playback"]) == {"audio_volume", "midi_volume", "speed", "latency_ms"}
+    assert set(written["playback"]) == {"audio_volume", "midi_volume", "speed"}
+    assert set(written["editor"]) == {"snap", "division", "grid_offset_ms", "zoom_x", "zoom_y"}
     assert set(written["view"]) == {"center_x", "center_y"}
 
 
@@ -65,7 +66,8 @@ def test_the_machine_values_in_a_file_are_ignored(tmp_path) -> None:
         json.dumps(
             {
                 "format": "namioto",
-                "playback": {"latency_ms": 120, "speed": 0.75},
+                "playback": {"speed": 0.75},
+                "editor": {"grid_offset_ms": 120},
                 "midi": {"wavetone": False},
                 "paths": {"last_audio_dir": "/tmp"},
                 "notes": [],
@@ -74,9 +76,16 @@ def test_the_machine_values_in_a_file_are_ignored(tmp_path) -> None:
     )
     opened = project.load(path)
     assert opened.settings.playback.speed == 0.75
-    assert opened.settings.playback.latency_ms == 120
+    assert opened.settings.editor.grid_offset_ms == 120
     assert not hasattr(opened.settings, "midi")
     assert not hasattr(opened.settings, "paths")
+
+
+def test_a_field_from_an_older_project_is_ignored_rather_than_refused(tmp_path) -> None:
+    path = tmp_path / "song.nto"
+    path.write_text(json.dumps({"format": "namioto", "playback": {"latency_ms": 120}}))
+    opened = project.load(path)
+    assert opened.settings.editor.grid_offset_ms == 0
 
 
 def test_an_empty_or_partial_file_still_gives_every_value(tmp_path) -> None:
@@ -219,7 +228,8 @@ def test_saving_leaves_no_half_written_file_behind(tmp_path) -> None:
 
 
 def test_only_the_habits_are_worth_carrying_across_projects() -> None:
-    assert set(project.REUSE_FIELDS) == {
+    reusable = {key for key, spec in project.FIELD_SPECS.items() if spec.reuse}
+    assert reusable == {
         ("analysis", "channels"),
         ("analysis", "t_num"),
         ("analysis", "fft_points"),
@@ -250,21 +260,19 @@ def test_a_remembered_value_is_checked_like_any_other() -> None:
 
 def test_a_remembered_value_the_song_owns_is_left_out() -> None:
     settings = project.default_settings(
-        {"tempo": {"bpm": 93.0}, "playback": {"latency_ms": 120}, "view": {"center_x": 5.0}}
+        {"tempo": {"bpm": 93.0}, "editor": {"grid_offset_ms": 120}, "view": {"center_x": 5.0}}
     )
     assert settings.tempo.bpm == 120.0
-    assert settings.playback.latency_ms == 0
+    assert settings.editor.grid_offset_ms == 0
     assert settings.view.center_x == 8.0
 
 
-def test_remembering_a_document_keeps_only_the_reusable_values() -> None:
-    settings = project.default_settings()
-    settings.spectrum.gain = 300.0
-    settings.tempo.bpm = 93.0
-    kept = project.remembered_defaults(settings)
-    assert kept["spectrum"]["gain"] == 300.0
-    assert "tempo" not in kept
-    assert set(kept["editor"]) == {"snap", "division", "zoom_x", "zoom_y"}
+def test_remembering_a_habit_checks_it_like_any_other_value() -> None:
+    remembered: dict[str, dict] = {}
+    project.remember(remembered, "spectrum", "gain", 9999.0)
+    project.remember(remembered, "editor", "zoom_x", 72.0)
+    assert remembered["spectrum"]["gain"] == 600.0
+    assert remembered["editor"]["zoom_x"] == 72.0
 
 
 def test_a_remembered_map_that_is_not_a_map_gives_the_defaults() -> None:

@@ -3,9 +3,9 @@
 values worth carrying from the last project to the next one.
 
 Qt-free on purpose. No preference lives here - a value the user can choose on is in
-`namioto.settings` - and nothing here is a song's own: `project` is only the memory of what the last
-document held, and `namioto.project` decides which fields are kept and checks them when it reads
-them back. The window writes this file as it goes, so it is not made to be edited by hand.
+`namioto.settings` - and nothing here is a song's own: `project` is only the reusable values the user
+changed themselves, and `namioto.project` decides which fields those are and checks them when it
+reads them back. The window writes this file as it goes, so it is not made to be edited by hand.
 """
 
 from __future__ import annotations

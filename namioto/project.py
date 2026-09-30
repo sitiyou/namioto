@@ -11,7 +11,8 @@ what the editor anchors them to, so a different tempo moves the grid, not the no
 and the table below is their single source of truth. They are the project's alone: the program's own
 preferences are in `namioto.settings`, and the window's state in `namioto.state`. A field marked
 `reuse` is the exception - its last value says more about the user than about the song - so the
-window keeps it in `namioto.state` and the next document starts from it.
+window keeps every change the user makes to one in `namioto.state`, and the next document starts
+from it.
 
 `Lyrics` carries the `.krc` text itself (the baseline), the aligned times keyed by a hash of that
 text, and the mode. A same-named `.krc` beside the project is a working copy the editor keeps in
@@ -146,15 +147,6 @@ PROJECT_SECTIONS: tuple[Section, ...] = (
                 reuse=True,
             ),
             Field(
-                "latency_ms",
-                "int",
-                0,
-                "Grid offset (ms)",
-                "Shifts the drawn grid lines by this many ms; - left, + right, playback untouched",
-                low=-500,
-                high=500,
-            ),
-            Field(
                 "speed",
                 "float",
                 1.0,
@@ -181,6 +173,15 @@ PROJECT_SECTIONS: tuple[Section, ...] = (
                 "What the ruler's lower row and the drawn grid lines divide by",
                 choices=DIVISIONS,
                 reuse=True,
+            ),
+            Field(
+                "grid_offset_ms",
+                "int",
+                0,
+                "Grid offset (ms)",
+                "Shifts the drawn grid lines by this many ms; - left, + right, playback untouched",
+                low=-500,
+                high=500,
             ),
             Field(
                 "zoom_x",
@@ -237,11 +238,6 @@ ProjectSettings = params.build(PROJECT_SECTIONS)
 FIELD_SPECS = ProjectSettings.__field_specs__
 
 
-REUSE_FIELDS: tuple[tuple[str, str], ...] = tuple(
-    (section.name, item.name) for section in PROJECT_SECTIONS for item in section.fields if item.reuse
-)
-
-
 def default_settings(remembered: Mapping | None = None) -> ProjectSettings:
     """The values a document starts from when the file names none of its own.
 
@@ -261,16 +257,9 @@ def default_settings(remembered: Mapping | None = None) -> ProjectSettings:
     return settings
 
 
-def remembered_defaults(settings: ProjectSettings) -> dict[str, dict]:
-    """The reusable values of a document, as the window keeps them for the next one."""
-    kept: dict[str, dict] = {}
-    for section in PROJECT_SECTIONS:
-        values = {
-            item.name: getattr(getattr(settings, section.name), item.name) for item in section.fields if item.reuse
-        }
-        if values:
-            kept[section.name] = values
-    return kept
+def remember(remembered: dict[str, dict], section: str, name: str, value: Any) -> None:
+    """Keep one reusable field the user changed themselves, checked, for the next document."""
+    remembered.setdefault(section, {})[name] = params.coerce(FIELD_SPECS[(section, name)], value)
 
 
 def settings_from_dict(data: Any) -> ProjectSettings:
