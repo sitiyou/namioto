@@ -18,9 +18,9 @@ on the grid
 (`round(movement / snap) * snap`), so an off-grid note keeps the offset it had; trimming an edge is
 the exception and lands on the drawn grid.
 
-`editor.grid_offset_ms` slides the drawn grid through `set_offset`, negative left and positive right;
-the snap helpers, the ruler and the align dialog's Quantize follow it, while the notes, the spectrum
-and the playhead keep their exact timestamps.
+`editor.grid_offset_ms` slides the drawn beat grid through `set_offset`, negative left and positive
+right; the snap helpers, the ruler's beat divisions and the align dialog's Quantize follow it, while
+the notes, the spectrum, the playhead and the ruler's clock keep their exact timestamps.
 """
 
 from __future__ import annotations
@@ -992,15 +992,18 @@ class PianoRollView(QGraphicsView):
 
     def seconds_lines(self, rect: QRectF, minimum: float) -> list[tuple[float, float, bool]]:
         """(x, seconds, major) of the time grid across `rect`, on the 1-2-5 step that keeps the
-        lines at least `minimum` pixels apart and marks every step above it as a major line."""
+        lines at least `minimum` pixels apart and marks every step above it as a major line.
+
+        The clock is absolute: `editor.grid_offset_ms` slides the beat grid, not the time axis, so a
+        label always names the second it sits on.
+        """
         index = TIME_STEPS.index(time_step(self.pixels_per_second(), minimum))
         step, major = TIME_STEPS[index], TIME_STEPS[min(index + 1, len(TIME_STEPS) - 1)]
         beats_per_second = self.bpm / 60.0
-        offset = self.offset_beats
-        value = math.floor((rect.left() - offset) / (step * beats_per_second)) * step
+        value = math.floor(rect.left() / (step * beats_per_second)) * step
         lines = []
-        while value * beats_per_second + offset <= rect.right():
-            lines.append((value * beats_per_second + offset, value, _is_multiple(value, major)))
+        while value * beats_per_second <= rect.right():
+            lines.append((value * beats_per_second, value, _is_multiple(value, major)))
             value += step
         return lines
 

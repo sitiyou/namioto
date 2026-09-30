@@ -5028,6 +5028,18 @@ def test_the_grid_offset_only_slides_the_drawn_grid(own_window) -> None:
     assert view._snap_ceil_beats(0.6) == pytest.approx(0.75)
 
 
+def test_the_grid_offset_leaves_the_time_clock_absolute(own_window) -> None:
+    view = own_window.view
+    own_window.transport.bpm.setValue(120.0)
+    rect = QRectF(0.0, 0.0, 3.0, 1.0)
+    assert [x for x, _seconds, _major in view.seconds_lines(rect, 40.0)] == [0.0, 1.0, 2.0, 3.0]
+
+    own_window.transport.grid_offset.setValue(125)  # +0.125 s = a quarter beat at 120 BPM
+    assert [x for x, _seconds, _major in view.seconds_lines(rect, 40.0)] == [0.0, 1.0, 2.0, 3.0]
+    view.division = "seconds"
+    assert [x for x, _level in view.division_lines(rect, 40.0)] == [0.0, 1.0, 2.0, 3.0]
+
+
 def test_the_grid_offset_leaves_the_playhead_at_its_timestamp(own_window, monkeypatch) -> None:
     own_window.transport.grid_offset.setValue(-300)
     monkeypatch.setattr(own_window, "_position", lambda: 1.0)
