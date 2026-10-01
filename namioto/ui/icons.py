@@ -72,16 +72,16 @@ def _palette_colour(group: QPalette.ColorGroup) -> str:
 
 
 def _drawn(kind: str, color: str = "") -> QIcon:
-    """The qtawesome icon behind a glyph, kept for as long as its two colours are the ones in force."""
+    """The qtawesome icon behind a glyph, built from the colours in force right now.
+
+    qtawesome keeps its icons on the font instance it loaded them from and reloads the fonts when
+    the application's font database is reset; a cache of our own would outlive that reload and keep
+    painting the stale glyph as a missing-character box, so the cache is qtawesome's own, which is
+    per font instance and does not survive the reload.
+    """
     text = color or _palette_colour(QPalette.ColorGroup.Active)
     dim = _palette_colour(QPalette.ColorGroup.Disabled)
-    key = (kind, text, dim)
-    if key not in _drawn_icons:
-        _drawn_icons[key] = qta.icon(GLYPHS[kind], color=text, color_disabled=dim)
-    return _drawn_icons[key]
-
-
-_drawn_icons: dict[tuple[str, str, str], QIcon] = {}
+    return qta.icon(GLYPHS[kind], color=text, color_disabled=dim)
 
 
 class _Glyph(QIconEngine):
