@@ -11,8 +11,8 @@ walk that table, and `_seeding` keeps an apply's quiet writes from counting as u
 is the document: opening audio needs one (the sibling `.nto` when there is one, else a name from the
 chooser), a MIDI is imported into the project already open and never on its own, and the Open dialog
 offers its filter only inside a project; switching documents goes through `_confirm_discard` first.
-The Export button is a menu: MIDI, or the lyrics as a `.krc` with the mapping folded in
-(`karaoke.export_krc`).
+The Export button is a menu: MIDI, the lyrics as a `.krc` with the mapping folded in
+(`karaoke.export_krc`), or a karaoke subtitle as `.ass` (`karaoke.generate_ass`).
 
 Dirty state covers notes, channels, tempo, audio and the lyric times, and is asked about only once
 the document has a file name. `general.auto_save` (off by default) writes the open project once an
@@ -55,7 +55,7 @@ from namioto.analysis.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
 from namioto.channels import set_field as channel_set_field
-from namioto.karaoke import KrcError, export_krc, snap_to_beats, sound_lines, text_key
+from namioto.karaoke import AssSettings, KrcError, export_krc, generate_ass, snap_to_beats, sound_lines, text_key
 from namioto.playback import note_frequency
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner
@@ -76,6 +76,7 @@ from namioto.ui.spectrogram import SpectrumLoader
 from namioto.ui.strips import SoundStrip
 from namioto.ui.text import note_name
 from namioto.ui.transcription_dialog import TranscriptionDialog
+from namioto.utils import write_text
 
 POSITION_INTERVAL_MS = 40
 SPEED_SETTLE_MS = 100
@@ -113,6 +114,10 @@ def _midi_filter() -> str:
 
 def _lyrics_filter() -> str:
     return i18n.tr("Lyrics file (*{suffix})", suffix=lyrics.SUFFIX)
+
+
+def _ass_filter() -> str:
+    return i18n.tr("ASS subtitle (*.ass)")
 
 
 _translators: list[QTranslator] = []
@@ -338,6 +343,7 @@ class MainWindow(QMainWindow):
         self.transport.save_requested.connect(self._on_save)
         self.transport.export_midi_requested.connect(self._on_export_midi)
         self.transport.export_krc_requested.connect(self._on_export_krc)
+        self.transport.export_ass_requested.connect(self._on_export_ass)
         self.edit.transcribe_requested.connect(self._open_transcription)
         self.edit.lyrics_requested.connect(self._open_lyrics)
         self.edit.align_requested.connect(self._open_align)
@@ -988,6 +994,56 @@ class MainWindow(QMainWindow):
             return export_krc(self.lyrics_text, lines, times, self._mapped_notes(), aligned=aligned), ""
         except KrcError as error:
             return self.lyrics_text, str(error)
+
+    def _on_export_ass(self) -> bool:
+        """Write the lyrics out as a karaoke subtitle, timed by the mapping the strip shows."""
+        if not self.lyrics_text or not self.view.lyric_lines:
+            self.statusBar().showMessage(self._lyric_error or i18n.tr("There are no lyrics to export"))
+            return False
+        if not self.view.notes():
+            self.statusBar().showMessage(i18n.tr("There are no notes to time the subtitle with"))
+            return False
+        name = Path(self.audio_path).stem if self.audio_path is not None else "untitled"
+        suggested = Path(self._start_directory()) / f"{name}.ass"
+        chosen, _filter = QFileDialog.getSaveFileName(
+            self,
+            i18n.tr("Export ASS subtitle"),
+            str(suggested),
+            _ass_filter(),
+        )
+        if not chosen:
+            return False
+        return self.export_ass(chosen)
+
+    def export_ass(self, path: str | Path) -> bool:
+        """Write the karaoke subtitle to `path`, adding the `.ass` suffix if missing."""
+        target = Path(path)
+        if target.suffix.lower() != ".ass":
+            target = target.with_name(target.name + ".ass")
+        try:
+            text = generate_ass(self.lyrics_text, self.view.lyric_times, settings=self._ass_settings())
+        except KrcError as error:
+            self.statusBar().showMessage(i18n.tr("The subtitle could not be built: {error}", error=error))
+            return False
+        try:
+            write_text(target, text)
+        except OSError as failure:
+            self.statusBar().showMessage(i18n.tr("Subtitle file could not be written: {error}", error=failure))
+            return False
+        self.statusBar().showMessage(i18n.tr("Exported {name}", name=target.name))
+        return True
+
+    def _ass_settings(self) -> AssSettings:
+        """The subtitle's own preferences, gathered for `karaoke.generate_ass`."""
+        stored = self.settings.ass
+        return AssSettings(
+            font=stored.font,
+            overlay_color=stored.overlay_color,
+            fade_in_ms=stored.fade_in_ms,
+            fade_out_ms=stored.fade_out_ms,
+            lead_time_ms=stored.lead_time_ms,
+            guide_dot_duration_ms=stored.guide_dot_duration_ms,
+        )
 
     def load_project(self, path: str | Path) -> bool:
         """Open a project: its values come over the running ones, and its notes replace the roll."""

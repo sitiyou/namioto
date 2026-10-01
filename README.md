@@ -61,8 +61,8 @@ chosen in the window that opens an audio file, filled in from the habits the las
 ## Projects
 
 The **Project** block of the transport row holds `Open` and `Save` (`Ctrl+O`, `Ctrl+S`, `Ctrl+Shift+S`
-for Save As), and `Export` beside them, a menu that writes either the notes as a MIDI file or the
-lyrics as a `.krc`. A `.nto` project is a plain
+for Save As), and `Export` beside them, a menu that writes the notes as a MIDI file, the lyrics as a
+`.krc`, or a karaoke subtitle as `.ass`. A `.nto` project is a plain
 JSON file that keeps the notes together with what they were drawn over and the values that belong to
 that piece of work: the audio file, the tempo, the analysis parameters, the spectrum display, the snap
 grid and the view. It is a few kilobytes, so it is diffable, searchable and editable by hand.
@@ -114,7 +114,10 @@ exactly on the tick that grid names, and one taken from the audio keeps the time
 the nearest tick; a hidden channel goes in like any other, since hiding is about the drawing and not
 the notes. **Export lyrics** folds the current mapping back into a `.krc` - a run of sounds sharing a
 note becomes `(...)` and every word gets the notes it covers as its `.N` - writing a file of its own,
-for another karaoke tool or a read-only pass. **WaveTone compatibility**, in the settings, is
+for another karaoke tool or a read-only pass. **Export ASS subtitle** times the same mapping onto a
+`.ass` karaoke subtitle - the `\k` of every syllable, its ruby and the gaps between notes - with the
+header the Aegisub kara-templater expects, so an existing video pipeline picks it up as it is.
+**WaveTone compatibility**, in the settings, is
 on by default: WaveTone's own MIDI export starts every note one bar late, so a file it wrote is read
 back with that bar removed, and a file written here carries it again - which is what its own tools
 expect. Turn it off to exchange plain MIDI with anything else,
@@ -134,8 +137,10 @@ TempoCNN - with the two windows the beat tracker fits under an `ADVANCED` headin
 an HTTP **Proxy** for downloads and the lyrics API), and **Lyrics** (the OpenAI-compatible endpoint
 the lyrics window may call - **API base** up to its `/v1`, **API key**, **Model**, the temperature
 and timeout under an `ADVANCED` heading - and the **External editor** command a `.krc` is opened
-with) - a page per group. `Restore defaults` puts everything back, and `Apply` lets the change go
-live without closing the window.
+with), and **ASS subtitle** (the **Font** and **Overlay colour** a subtitle is drawn with, the
+**Fade in** and **Fade out** lengths, the **Lead time** a line appears before its first word, and
+the **Guide dot** length) - a page per group. `Restore defaults` puts everything back, and `Apply`
+lets the change go live without closing the window.
 
 ![settings](docs/settings.png)
 
@@ -236,7 +241,7 @@ namioto/params.py     the Field primitive every parameter table is built from, n
 namioto/state.py      the window's size, position, last folder and the habits a new document starts from, no Qt
 namioto/lyrics.py     the .krc sidecar beside a project, and the model call that fills it, no Qt
 namioto/ipc.py        the remote control's protocol, endpoint and `namioto-ctl` client, no Qt
-namioto/karaoke/      the .krc model, its parser, its writer and its timeline (lark), no Qt
+namioto/karaoke/      the .krc model, its parser, its writer, its timeline and the ASS subtitle (lark), no Qt
 namioto/utils.py      the app's directories, a file's identity, kana to romaji tokens, no Qt
 namioto/i18n.py       the language catalogs and the language in force, no Qt
 LICENSE-CC-BY-NC-SA-4.0.txt  the license text of the downloaded TempoCNN model
@@ -320,7 +325,7 @@ external synth receives the real GM program on the channel's own number.
 | Play or pause | `Space` or the play/pause button |
 | Open a project | `Ctrl+O`, or `Open` in the Project block |
 | Save a project | `Ctrl+S` (Save As on the first save, or `Ctrl+Shift+S`), or `Save` in the Project block |
-| Export MIDI / lyrics | `Export` in the Project block, next to `Save`: a menu with `Export MIDI…` and `Export lyrics (.krc)…` |
+| Export MIDI / lyrics / subtitle | `Export` in the Project block, next to `Save`: a menu with `Export MIDI…`, `Export lyrics (.krc)…` and `Export ASS subtitle…` |
 | Move the playhead | A press anywhere in the roll - over the grid or over a note, in either mode - or a click in the timeline ruler (any mode, and it works while the file plays), or the rewind / forward buttons for the ends. A press on a note moves, resizes or selects it *and* moves the playhead. Dragging carries the playhead along with the pointer, and sounding every row it crosses like a glissando. While the audio plays the roll keeps its cursor so editing does not jump the sound; seeking then is what the ruler is for, and the file carries on from there |
 | Double / halve the tempo | Right-click the Tempo field, or press `*` / `/` while it has the focus |
 | Pan | Middle drag, a scrollbar, or drag in the timeline ruler to scroll horizontally |

@@ -2781,7 +2781,7 @@ def test_the_settings_window_lists_every_visible_field(own_window) -> None:
     }
     assert names == expected  # `editor` has no page: its switches are what the program remembers itself
     pages = [dialog.findChild(QTabWidget).tabText(index) for index in range(dialog.findChild(QTabWidget).count())]
-    assert pages == ["General", "Devices", "Tempo", "Lyrics", "Network", "MIDI", "Remote"]
+    assert pages == ["General", "Devices", "Tempo", "Lyrics", "Network", "MIDI", "ASS subtitle", "Remote"]
     dialog.close()
 
 
@@ -3098,11 +3098,13 @@ def test_the_transport_carries_the_project_buttons() -> None:
     bar.save_requested.connect(lambda: seen.append("save"))
     bar.export_midi_requested.connect(lambda: seen.append("export midi"))
     bar.export_krc_requested.connect(lambda: seen.append("export lyrics"))
+    bar.export_ass_requested.connect(lambda: seen.append("export subtitle"))
     bar.open.click()
     bar.save.click()
     bar.export_midi_action.trigger()
     bar.export_krc_action.trigger()
-    assert seen == ["open", "save", "export midi", "export lyrics"]
+    bar.export_ass_action.trigger()
+    assert seen == ["open", "save", "export midi", "export lyrics", "export subtitle"]
 
 
 def test_the_edit_bar_carries_the_wand() -> None:
@@ -4777,6 +4779,32 @@ def test_the_export_button_writes_a_midi_file(own_window, monkeypatch, tmp_path)
     target = tmp_path / "exported.mid"  # the export adds its own suffix
     assert [note.pitch for note in midi.read(target, wavetone=True).notes] == [60]
     assert own_window.project_path is None  # an export leaves the document where it was
+
+
+def test_the_export_button_writes_an_ass_subtitle(own_window, monkeypatch, tmp_path) -> None:
+    own_window.view.set_channels((Channel(channel=0),))
+    own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 1.0, 0)))
+    own_window.lyrics_text = "あい"
+    own_window._load_sounds()
+    monkeypatch.setattr(
+        QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "exported"), "ASS subtitle (*.ass)")
+    )
+
+    assert own_window._on_export_ass() is True
+    target = tmp_path / "exported.ass"  # the export adds its own suffix
+    text = target.read_text(encoding="utf-8")
+    assert "[Script Info]" in text
+    assert "Dialogue: 0," in text
+    assert own_window.project_path is None
+
+
+def test_a_subtitle_needs_lyrics_and_notes(own_window) -> None:
+    assert own_window._on_export_ass() is False
+    assert "no lyrics" in own_window.statusBar().currentMessage()
+    own_window.lyrics_text = "あ"
+    own_window._load_sounds()  # the lyrics are readable; now the subtitle needs a note to sit on
+    assert own_window._on_export_ass() is False
+    assert "no notes" in own_window.statusBar().currentMessage()
 
 
 def test_a_narrow_sound_still_names_itself(window) -> None:

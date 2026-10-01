@@ -3,10 +3,12 @@
 
 `model.py` holds the tree (`Word`/`Ruby`/`Line`/`Chapter`/`Lyrics`), `parser.parse` reads a `.krc`
 into it, `writer.dumps` writes an edited tree back out, `transforms` holds the optional passes over
-one, and `timeline` turns a parsed lyric into the sounds the editor draws and the aligner times. The
-whole package is Qt-free; the names it re-exports are its public surface.
+one, and `timeline` turns a parsed lyric into the sounds the editor draws and the aligner times,
+and `ass` writes the subtitle those sounds time. The whole package is Qt-free; the names it
+re-exports are its public surface.
 """
 
+from namioto.karaoke.ass import AssSettings, generate_ass
 from namioto.karaoke.model import Chapter, Group, KrcError, Line, Lyrics, Ruby, Unit, Word
 from namioto.karaoke.parser import parse
 from namioto.karaoke.timeline import (
@@ -34,6 +36,7 @@ from namioto.karaoke.transforms import flatten_ruby, merge_words
 from namioto.karaoke.writer import dumps
 
 __all__ = [
+    "AssSettings",
     "Chapter",
     "Group",
     "KrcError",
@@ -53,6 +56,7 @@ __all__ = [
     "dumps",
     "export_krc",
     "flatten_ruby",
+    "generate_ass",
     "group_sounds",
     "map_faithful",
     "map_sounds",
