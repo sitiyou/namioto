@@ -5052,7 +5052,7 @@ def test_a_sound_that_covers_no_note_is_marked_grey(own_window, tmp_path) -> Non
     assert own_window.view.lyric_zero == ((False, True),)
 
 
-def test_a_sound_that_loses_a_shared_note_is_marked_grey(own_window, tmp_path) -> None:
+def test_three_sounds_on_one_note_all_share_it(own_window, tmp_path) -> None:
     (tmp_path / "song.krc").write_text("きにく\n", encoding="utf-8")
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(
@@ -5061,11 +5061,12 @@ def test_a_sound_that_loses_a_shared_note_is_marked_grey(own_window, tmp_path) -
     own_window._lyric_key = ""
     own_window.transport.bpm.setValue(60.0)
     own_window.view.set_channels((Channel(channel=0),))
-    own_window.view.set_notes(((60, 0.0, 1.0, 0),))  # one note under three sounds: two fall to .0
+    own_window.view.set_notes(((60, 0.0, 1.0, 0),))  # one note under three sounds: all share it
     own_window._watch_lyrics()
 
     assert own_window.view.lyric_raw == (((0.0, 0.9), (0.9, 0.95), (0.95, 1.0)),)
-    assert own_window.view.lyric_zero == ((False, True, True),)
+    assert own_window.view.lyric_zero == ((False, False, False),)
+    assert own_window.view.lyric_group == ((0, 0, 0),)
 
 
 def test_a_block_is_the_note_the_sound_maps_to(own_window, tmp_path) -> None:
@@ -5080,10 +5081,12 @@ def test_a_block_is_the_note_the_sound_maps_to(own_window, tmp_path) -> None:
     own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 0.4, 0)))
     own_window._watch_lyrics()
 
-    # に is .0 and sits inside タ's note; タ's block is that whole note, に has none
-    assert own_window.view.lyric_zero == ((False, True, False),)
+    # タ sits on note 0; に and ク both reach note 1, so they share it - a block is the whole note a
+    # sound maps to, not the sound's own raw span
+    assert own_window.view.lyric_zero == ((False, False, False),)
     assert own_window.view.lyric_times[0][0] == (0.0, 1.0)
-    assert own_window.view.lyric_times[0][1] == (0.8, 0.8)
+    # に's raw span (0.8, 1.05) crosses the boundary, but its block is note 1 whole
+    assert own_window.view.lyric_times[0][1] == (1.0, 1.4)
     # ク's raw start is off the beat line, but its block is the note, which starts on it
     assert own_window.view.lyric_raw[0][2][0] == 1.05
     assert own_window.view.lyric_times[0][2] == (1.0, 1.4)

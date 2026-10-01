@@ -13,12 +13,13 @@ sound to align it to.
 the times against the notes, and `with_counts` writes each word's mora back out as `.N`.
 
 `map_sounds` lays the sounds on the notes of the mapped channel (`MainWindow._mapped_notes`, channel
-1 for now): with aligned times a sound covers every note its time overlaps, a note no sound reaches
-is given to the one before it and doubted, and a note several sounds share stays the own of each that
-keeps at least a quarter of it, the weaker sharers falling to no length. Without times `map_faithful`
-reads the `.krc`'s own mora counts onto the notes, one unit at a time. `contiguous` makes a line a
-chain of onsets - the aligner's own end is dropped and every sound's end is the next sound's start -
-so the count of covered notes matches the count of sounds.
+1 for now): each sound's onset snaps onto a note, the snapped notes non-decreasing, and the sound
+owns the notes from its own to the next sound's - so a note several sounds enter is shared, and a
+sound whose time reaches no note covers none. The whole line is snapped at once, the cheapest such
+assignment of every sound, rather than each note judged on its own against a share of its length.
+Without times `map_faithful` reads the `.krc`'s own mora counts onto the notes, one unit at a time.
+`contiguous` makes a line a chain of onsets - the aligner's own end is dropped and every sound's end
+is the next sound's start - so the count of covered notes matches the count of sounds.
 
 Qt-free.
 """
@@ -39,8 +40,6 @@ SMALL_KANA = frozenset("ャュョァィゥェォゃゅょぁぃぅぇぉゎヮ")
 OWN_SOUND = frozenset("ーっッ")
 # how far a sound's time may sit from the note it should start and end on, one aligner frame of slack
 TOLERANCE = 0.05
-# the least of a shared note a sound must keep for the note to stay its own; below it the sound loses it
-SHARE = 0.25
 
 
 @dataclass(frozen=True)
@@ -515,65 +514,65 @@ def assign_by_order(blocks: int, notes: int) -> list[int | None]:
     return [index if index < notes else None for index in range(blocks)]
 
 
-def assign_by_time(
-    blocks: Sequence[tuple[float | None, float | None]], notes: Sequence[tuple[float, float]]
-) -> list[int | None]:
-    """Match every block to one note, in order, by the note its aligned onset falls in.
-
-    A block takes the note holding its start, or the nearest note when it lands in a rest, and the
-    whole match is the cheapest monotone one: every block gets a note, a note may take several
-    blocks, and a note no block reaches is skipped. Monotonicity keeps noisy times from reordering
-    the blocks, and the search passes over an instrumental note between two sung ones rather than
-    claiming it. None means there was no note at all to give it.
-    """
-    if not blocks:
-        return []
-    if not notes:
-        return [None] * len(blocks)
-    count, total = len(blocks), len(notes)
-    inf = math.inf
-    reach = [[inf] * (total + 1) for _ in range(count + 1)]  # blocks[:i] among notes[:j], any end
-    last = [[inf] * (total + 1) for _ in range(count + 1)]  # the same, with block i-1 on note j-1
-    opens = [[False] * (total + 1) for _ in range(count + 1)]  # last came from opening a new note
-    takes = [[False] * (total + 1) for _ in range(count + 1)]  # reach came from last, not a skip
-    for column in range(total + 1):
-        reach[0][column] = 0.0
-    for i in range(1, count + 1):
-        for j in range(1, total + 1):
-            cost = _onset_distance(blocks[i - 1], notes[j - 1])
-            grouped = last[i - 1][j] if i > 1 else inf
-            opened = reach[i - 1][j - 1]
-            opens[i][j] = opened < grouped
-            last[i][j] = cost + (opened if opens[i][j] else grouped)
-            takes[i][j] = last[i][j] <= reach[i][j - 1]
-            reach[i][j] = min(reach[i][j - 1], last[i][j])
-    found: list[int | None] = [None] * count
-    i, j, on_last = count, total, False
-    while i > 0:
-        if not on_last:
-            if not takes[i][j]:
-                j -= 1  # the note takes no block, so step past it
-                continue
-            on_last = True
-            continue
-        found[i - 1] = j - 1
-        opened = opens[i][j]
-        i -= 1
-        if opened:
-            j -= 1
-            on_last = False  # back to the note before, still unassigned
-    return found
-
-
-def _onset_distance(span: tuple[float | None, float | None], note: tuple[float, float]) -> float:
-    """How far a block's onset is from a note: zero inside it, else the gap to its nearer edge."""
-    start = span[0]
-    if start is None:
-        return 0.0
+def _overlaps(start: float | None, end: float | None, note: tuple[float, float]) -> bool:
+    """Whether a sound's span touches a note's own, so it can be said to sit on it."""
+    if start is None or end is None:
+        return False
     low, high = note
-    if low <= start <= high:
-        return 0.0
-    return min(abs(start - low), abs(start - high))
+    return min(end, high) > max(start, low)
+
+
+def _snap_owners(
+    flat: Sequence[tuple[int, int, float | None, float | None]], notes: Sequence[tuple[float, float]]
+) -> list[list[int]]:
+    """Each sound's onset snapped onto a note, the whole assignment the cheapest, as the owners per note.
+
+    The snapped notes do not decrease, so the sounds keep their reading order; the first snapped sound
+    owns the notes ahead of the next one's snap and the last owns to the end, which covers every note.
+    A note several sounds snap onto is shared. A sound whose span reaches no note is left out, so it
+    owns none; when no sound reaches a note the aligned ones fall back to the nearest, monotone, since
+    the notes still have to be answered for.
+    """
+    total = len(notes)
+    starts = [note[0] for note in notes]
+    owner: list[list[int]] = [[] for _note in notes]
+    snapped = [
+        index
+        for index, (_row, _column, start, end) in enumerate(flat)
+        if any(_overlaps(start, end, note) for note in notes)
+    ]
+    if not snapped:
+        snapped = [index for index, (_row, _column, start, _end) in enumerate(flat) if start is not None]
+    if not snapped:
+        return owner
+    onsets = [flat[index][2] for index in snapped]
+    inf = math.inf
+    best = [inf] * total
+    best[0] = abs(onsets[0] - starts[0])
+    back: list[list[int]] = []
+    for onset in onsets[1:]:
+        row = [inf] * total
+        step = [0] * total
+        running, running_at = inf, 0
+        for note in range(total):
+            if best[note] < running:
+                running, running_at = best[note], note
+            row[note] = running + abs(onset - starts[note])
+            step[note] = running_at
+        back.append(step)
+        best = row
+    entry = min(range(total), key=lambda note: best[note])
+    entries = [0] * len(snapped)
+    entries[-1] = entry
+    for at in range(len(snapped) - 1, 0, -1):
+        entry = back[at - 1][entry]
+        entries[at - 1] = entry
+    for at, sound in enumerate(snapped):
+        low = entries[at]
+        high = total - 1 if at == len(snapped) - 1 else max(low, entries[at + 1] - 1)
+        for note in range(low, high + 1):
+            owner[note].append(sound)
+    return owner
 
 
 @dataclass(frozen=True)
@@ -697,17 +696,19 @@ def map_sounds(
     *,
     aligned: bool = True,
 ) -> list[list[Placement]]:
-    """Put every sound on the notes its time covers, and settle the notes its neighbours share.
+    """Put every sound on the note the whole line's cheapest snap gives it, and settle the shares.
 
-    With `aligned`, a sound covers every note its time overlaps; a note several sounds share stays the
-    own of each that keeps a share of it of at least `SHARE` (a quarter), and the ones left under
-    that fall to no length - so a strong sound is never dragged down by a weak neighbour on the same
-    note. A sound in a group only occupies that note: one that also owns a note of its own keeps that
-    note and gives the share up, and one offered several shares keeps only the first - so a group
-    never holds a sound that occupies another note. A note no sound reaches is given to a neighbouring
-    sound that can hold it and doubted, so every note is answered for. Without `aligned` the sounds
-    and the notes are paired one for one, in reading order, until the shorter side runs out. `flagged`
-    marks the lines the aligner itself doubted, which reddens the whole line.
+    With `aligned`, each sound's onset takes a note - the snapped notes non-decreasing - and the sound
+    owns every note from its own up to the next sound's, so a sound whose time crosses a note holds
+    it and a note several sounds snap onto is shared. The snap of the whole line is the cheapest one,
+    not each note judged on its own, so a note a sound barely reaches does not steal it from the sound
+    that owns it. A sound whose time reaches no note covers none. A sound in a group only occupies
+    that note: one that also owns a note of its own keeps that note and gives the share up, and one
+    offered several shares keeps only the first - so a group never holds a sound that occupies
+    another note. A note no sound reaches is given to a neighbouring sound that can hold it, and the
+    owner of a note no sound's time reaches at all is doubted, so every note is answered for. Without
+    `aligned` the sounds and the notes are paired one for one, in reading order, until the shorter
+    side runs out. `flagged` marks the lines the aligner itself doubted, which reddens the whole line.
     """
     flat: list[tuple[int, int, float | None, float | None]] = []
     for row, line in enumerate(lines):
@@ -721,26 +722,7 @@ def map_sounds(
     if not flat or not notes:
         return [[Placement((None, None)) for _sound in line.sounds] for line in lines]
 
-    holders: list[list[int]] = [[] for _note in notes]
-    for index, (_row, _column, start, end) in enumerate(flat):
-        if start is None or end is None or end < start:
-            continue
-        for note, (low, high) in enumerate(notes):
-            if min(end, high) > max(start, low):
-                holders[note].append(index)
-
-    owner: list[list[int]] = [[] for _note in notes]
-    for note, sharers in enumerate(holders):
-        if not sharers:
-            continue
-        if len(sharers) == 1:
-            owner[note] = list(sharers)
-            continue
-        shares = [_share(flat, notes[note], sound) for sound in sharers]
-        kept = [sound for sound, share in zip(sharers, shares, strict=True) if share >= SHARE]
-        if not kept:
-            kept = [sharers[max(range(len(sharers)), key=lambda at: shares[at])]]
-        owner[note] = kept
+    owner = _snap_owners(flat, notes)
 
     # a sound in a group only occupies that note: one that also owns a note of its own keeps that
     # note and gives the share up, and one offered several shares keeps only the first - so a group
@@ -790,6 +772,15 @@ def map_sounds(
         for sound in owners:
             covered.setdefault(sound, []).append(note)
 
+    # a note no sound's time reaches at all is handed to a neighbour to answer for, and that
+    # neighbour - not every sound merely stretched past its own note - is the one doubted
+    reached = [
+        any(_overlaps(start, end, notes[note]) for _row, _column, start, end in flat) for note in range(len(notes))
+    ]
+    for note, owners in enumerate(owner):
+        if not reached[note]:
+            doubted.update(owners)
+
     marked = list(flagged) if flagged is not None else []
     found: list[list[Placement]] = []
     index = 0
@@ -830,18 +821,6 @@ def _by_order(lines: Sequence[SoundLine], notes: Sequence[tuple[float, float]], 
             at += 1
         out.append(row)
     return out
-
-
-def _share(flat: Sequence[tuple], note: tuple[float, float], index: int) -> float:
-    """A sound's share of a note, its end free to reach the next sound's start but not past the note."""
-    start, end = flat[index][2], flat[index][3]
-    low, high = note
-    if start is None or end is None or high <= low:
-        return 0.0
-    left = max(start, low)
-    following = flat[index + 1][2] if index + 1 < len(flat) else None
-    right = high if following is None else min(following, high)
-    return (max(right, left) - left) / (high - low)
 
 
 def _zero_point(start: float | None, notes: Sequence[tuple[float, float]]) -> float | None:
