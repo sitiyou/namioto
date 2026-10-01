@@ -315,7 +315,8 @@ class Lyrics(NamedTuple):
     The text is the baseline: the `.krc` beside the project is a copy written for editing and
     export, so a project still opens with the lyrics it was saved with once that file is gone.
     `key` is the hash of the text the times were made from, so a changed text invalidates them;
-    `lines` holds one `(start, end)` in seconds per sound, `None` where none was found; `mode` is
+    `lines` holds one `(start, end)` in seconds per sound, `None` where none was found; `flagged`
+    holds one bool per line, true where the aligner itself doubted the times it made; `mode` is
     `edit` while the aligner's times lay the sounds out, or `read` while the `.krc`'s own `.N` and
     groups do.
     """
@@ -325,6 +326,7 @@ class Lyrics(NamedTuple):
     model: str = ""
     mode: str = "edit"
     lines: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
+    flagged: tuple[bool, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -388,6 +390,7 @@ def _lyrics_dict(lyrics: Lyrics | None) -> dict | None:
         "model": lyrics.model,
         "mode": lyrics.mode,
         "lines": [[list(span) for span in line] for line in lyrics.lines],
+        "flagged": list(lyrics.flagged),
     }
 
 
@@ -481,6 +484,7 @@ def _lyrics(value: Any) -> Lyrics | None:
         return None
     key, lines = value.get("key"), value.get("lines")
     model, text, mode = value.get("model"), value.get("text"), value.get("mode")
+    flagged = value.get("flagged")
     if not isinstance(key, str) or not isinstance(lines, list):
         return None
     rows: list[tuple[tuple[float | None, float | None], ...]] = []
@@ -508,6 +512,7 @@ def _lyrics(value: Any) -> Lyrics | None:
         model=model if isinstance(model, str) else "",
         mode=mode if mode in LYRIC_MODES else "edit",
         lines=tuple(rows),
+        flagged=tuple(bool(flag) for flag in flagged) if isinstance(flagged, list) else (),
     )
 
 

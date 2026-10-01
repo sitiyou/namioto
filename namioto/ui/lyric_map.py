@@ -15,12 +15,13 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from namioto.karaoke import map_faithful, map_sounds
 
 
-def map_lyrics(lines, times, notes, text, aligned, mode="edit"):
+def map_lyrics(lines, times, notes, text, aligned, mode="edit", flagged=None):
     """The mapping for the mode in force: the `.krc`'s own `.N` and groups in read mode, the
     aligner's times in edit mode, and the sounds and notes paired in order when there are no times.
 
     The raw times come back with the tables: read mode has none of its own, so the mapped spans are
-    what the strip draws and edits.
+    what the strip draws and edits. `flagged` is one bool per line, the ones the aligner itself
+    doubted, and is carried by the times it made.
     """
     if mode == "read":
         # a text that failed to parse has no lines to map, and `map_faithful` would parse it again
@@ -36,7 +37,7 @@ def map_lyrics(lines, times, notes, text, aligned, mode="edit"):
             spans,
         )
     if notes:
-        spans, red, zero, group = _placement_tables(map_sounds(lines, times, notes, text, aligned=aligned))
+        spans, red, zero, group = _placement_tables(map_sounds(lines, times, notes, text, flagged, aligned=aligned))
         return spans, red, zero, group, times
     spans = [list(row) for row in times]
     return (
@@ -60,7 +61,7 @@ class LyricMapper(QThread):
     mapped = pyqtSignal(object)
     failed = pyqtSignal(str)
 
-    def __init__(self, revision, lines, times, notes, text, aligned, mode, parent=None):
+    def __init__(self, revision, lines, times, notes, text, aligned, mode, flagged, parent=None):
         super().__init__(parent)
         self.revision = revision
         self.lines = lines
@@ -69,11 +70,12 @@ class LyricMapper(QThread):
         self.text = text
         self.aligned = aligned
         self.mode = mode
+        self.flagged = flagged
 
     def run(self) -> None:
         try:
             spans, red, zero, group, raw = map_lyrics(
-                self.lines, self.times, self.notes, self.text, self.aligned, self.mode
+                self.lines, self.times, self.notes, self.text, self.aligned, self.mode, self.flagged
             )
             self.mapped.emit((self.revision, self.lines, spans, red, raw, zero, group))
         except Exception as error:

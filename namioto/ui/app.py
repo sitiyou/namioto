@@ -229,6 +229,7 @@ class MainWindow(QMainWindow):
         self._lyric_mode = "edit"
         self._lyric_key = ""
         self._lyric_model = ""
+        self._lyric_flags: tuple[bool, ...] = ()
         self._lyric_error = ""
         self._auto_align_thread: Aligner | None = None
         self._auto_align_key = ""
@@ -1100,6 +1101,7 @@ class MainWindow(QMainWindow):
                 model=self._lyric_model,
                 mode=self._lyric_mode,
                 lines=self.view.lyric_raw,
+                flagged=self._lyric_flags,
             )
             if self.lyrics_text
             else None
@@ -1338,8 +1340,10 @@ class MainWindow(QMainWindow):
         if lines and stored is not None and stored.key == key and len(stored.lines) == len(lines):
             self._lyric_model = stored.model
             raw = [list(row) for row in stored.lines]
+            self._lyric_flags = stored.flagged if len(stored.flagged) == len(lines) else ()
         else:
             raw = [[(None, None)] * len(line.sounds) for line in lines]
+            self._lyric_flags = ()
         self.view.load_lyrics(lines, raw, raw=raw)
         self._remap_lyrics(lines)
 
@@ -1362,6 +1366,7 @@ class MainWindow(QMainWindow):
             self.lyrics_text,
             any(span[0] is not None for row in times for span in row),
             self._lyric_mode,
+            self._lyric_flags,
         )
         self._apply_lyric_mapping(lines, spans, red, raw, zero, group)
 
@@ -1380,6 +1385,7 @@ class MainWindow(QMainWindow):
             self.lyrics_text,
             any(span[0] is not None for row in times for span in row),
             self._lyric_mode,
+            tuple(self._lyric_flags),
         )
         self._lyric_map_revision += 1
         request = (self._lyric_map_revision, snapshot)
@@ -1389,8 +1395,8 @@ class MainWindow(QMainWindow):
         self._start_lyric_mapper(request)
 
     def _start_lyric_mapper(self, request) -> None:
-        revision, (lines, times, notes, text, aligned, mode) = request
-        thread = LyricMapper(revision, lines, times, notes, text, aligned, mode, self)
+        revision, (lines, times, notes, text, aligned, mode, flagged) = request
+        thread = LyricMapper(revision, lines, times, notes, text, aligned, mode, flagged, self)
         thread.mapped.connect(self._on_lyric_mapping)
         thread.failed.connect(self._on_lyric_mapping_failed)
         thread.finished.connect(partial(self._on_lyric_mapper_finished, thread))
@@ -1520,11 +1526,11 @@ class MainWindow(QMainWindow):
         if text_key(self.lyrics_text) != self._auto_align_key:
             self._auto_align()  # the text moved on while the pass ran, so catch up with the new one
             return
-        rows, model, _problems = result
+        rows, model, _problems, flagged = result
         cells = align.load_parameters()["quantize"]
         if cells:
             rows = snap_to_beats(rows, self.view.bpm, 1.0 / cells, self.view.offset)
-        self._adopt_alignment(rows, model)
+        self._adopt_alignment(rows, model, flagged)
 
     def _on_auto_failed(self, message: str) -> None:
         self._auto_align_thread = None
@@ -1561,12 +1567,13 @@ class MainWindow(QMainWindow):
         dialog.aligned.connect(self._adopt_alignment)
         dialog.exec()
 
-    def _adopt_alignment(self, times, model: str) -> None:
+    def _adopt_alignment(self, times, model: str, flagged=()) -> None:
         lines = self.view.lyric_lines
         if not lines or len(times) != len(lines):
             return
         self._lyric_key = text_key(self.lyrics_text)
         self._lyric_model = model
+        self._lyric_flags = tuple(flagged) if len(flagged) == len(lines) else ()
         raw = [list(row) for row in times]
         self.view.load_lyrics(lines, raw, raw=raw)
         self._remap_lyrics(lines)

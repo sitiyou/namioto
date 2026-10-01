@@ -303,7 +303,10 @@ def load_alignments(audio: str | pathlib.Path) -> dict[str, dict]:
 
 
 def find_alignment(audio: str | pathlib.Path, model: str, provider: str, text: str, chunk: str = DEFAULT_MODE):
-    """The lines and doubts an alignment with these exact inputs already found, or None when there is none."""
+    """The lines, doubts and per-line flags an alignment with these exact inputs already found, or None.
+
+    A store written before the flags existed has none, so it comes back empty rather than as a miss.
+    """
     entry = load_alignments(audio).get(alignment_key(audio, model, provider, text, chunk))
     if not entry:
         return None
@@ -311,11 +314,23 @@ def find_alignment(audio: str | pathlib.Path, model: str, provider: str, text: s
     if rows is None:
         return None
     problems = entry.get("problems")
-    return rows, [str(problem) for problem in problems] if isinstance(problems, list) else []
+    flagged = entry.get("flagged")
+    return (
+        rows,
+        [str(problem) for problem in problems] if isinstance(problems, list) else [],
+        [bool(flag) for flag in flagged] if isinstance(flagged, list) else [],
+    )
 
 
 def save_alignment(
-    audio: str | pathlib.Path, model: str, provider: str, text: str, rows, problems, chunk: str = DEFAULT_MODE
+    audio: str | pathlib.Path,
+    model: str,
+    provider: str,
+    text: str,
+    rows,
+    problems,
+    flagged,
+    chunk: str = DEFAULT_MODE,
 ) -> pathlib.Path:
     """Keep one entry per alignment key: running the same one again replaces what it found last time."""
     entries = load_alignments(audio)
@@ -324,6 +339,7 @@ def save_alignment(
         "model": model,
         "rows": [[[start, end] for start, end in row] for row in rows],
         "problems": [str(problem) for problem in problems],
+        "flagged": [bool(flag) for flag in flagged],
     }
     target = _store_path(audio)
     target.parent.mkdir(parents=True, exist_ok=True)

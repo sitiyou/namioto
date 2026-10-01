@@ -167,7 +167,9 @@ def test_notes_that_are_not_a_list_leave_an_empty_project() -> None:
 
 
 def test_the_lyric_times_survive_a_round_trip() -> None:
-    lyrics = project.Lyrics(text="あん\n", key="abc", model="mms", mode="read", lines=(((0.0, 1.0), (None, None)),))
+    lyrics = project.Lyrics(
+        text="あん\n", key="abc", model="mms", mode="read", lines=(((0.0, 1.0), (None, None)),), flagged=(True,)
+    )
     written = project.to_dict(make(lyrics=lyrics))
     assert written["lyrics"] == {
         "text": "あん\n",
@@ -175,6 +177,7 @@ def test_the_lyric_times_survive_a_round_trip() -> None:
         "model": "mms",
         "mode": "read",
         "lines": [[[0.0, 1.0], [None, None]]],
+        "flagged": [True],
     }
     assert project.from_dict(written).lyrics == lyrics
 

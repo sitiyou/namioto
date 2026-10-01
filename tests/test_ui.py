@@ -5393,8 +5393,8 @@ def test_the_aligned_times_are_kept_in_the_project(own_window, tmp_path) -> None
 def test_the_align_dialog_hands_the_times_over(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あい\n", 120.0, parent=own_window)
     got: list = []
-    dialog.aligned.connect(lambda times, model: got.append((times, model)))
-    dialog._done(([[(0.0, 1.0), (1.0, 2.0)]], "mms", []))
+    dialog.aligned.connect(lambda times, model, flagged: got.append((times, model)))
+    dialog._done(([[(0.0, 1.0), (1.0, 2.0)]], "mms", [], []))
     assert got == [([[(0.0, 1.0), (1.0, 2.0)]], "mms")]
     assert dialog.run.isEnabled()
 
@@ -5414,8 +5414,8 @@ def test_the_align_dialog_snaps_to_the_beat_grid_when_asked(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
     parameter_writer(dialog, "quantize")(1)  # 1/4 notes, one beat
     got: list = []
-    dialog.aligned.connect(lambda times, model: got.append(times))
-    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", []))
+    dialog.aligned.connect(lambda times, model, flagged: got.append(times))
+    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
     assert got == [[[(0.0, 0.5), (0.5, 1.0)]]]
 
 
@@ -5423,8 +5423,8 @@ def test_the_align_dialog_can_quantize_to_eighth_notes(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
     parameter_writer(dialog, "quantize")(2)  # 1/8 notes, half a beat
     got: list = []
-    dialog.aligned.connect(lambda times, model: got.append(times))
-    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", []))
+    dialog.aligned.connect(lambda times, model, flagged: got.append(times))
+    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
     assert got == [[[(0.0, 0.5), (0.5, 1.0)]]]
 
 
@@ -5432,18 +5432,18 @@ def test_the_align_dialog_quantizes_onto_the_offset_grid(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window, offset=0.25)
     parameter_writer(dialog, "quantize")(1)  # 1/4 notes, one beat
     got: list = []
-    dialog.aligned.connect(lambda times, model: got.append(times))
-    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", []))
+    dialog.aligned.connect(lambda times, model, flagged: got.append(times))
+    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
     assert got == [[[(0.25, 0.75), (0.75, 1.25)]]]
 
 
 def test_a_cached_alignment_is_reused_and_resnapped(own_window, monkeypatch) -> None:
-    align.save_alignment("/tmp/vocal.wav", "mms", "cpu", "あん\n", [[(0.1, 0.6), (0.6, 1.1)]], [])
+    align.save_alignment("/tmp/vocal.wav", "mms", "cpu", "あん\n", [[(0.1, 0.6), (0.6, 1.1)]], [], [])
     monkeypatch.setattr(align, "align", lambda *args, **kwargs: pytest.fail("must not run the model"))
     dialog = AlignDialog("/tmp/vocal.wav", "あん\n", 120.0, parent=own_window, offset=0.25)
     parameter_writer(dialog, "quantize")(1)  # 1/4 notes, one beat
     got: list = []
-    dialog.aligned.connect(lambda times, model: got.append(times))
+    dialog.aligned.connect(lambda times, model, flagged: got.append(times))
 
     dialog._start()
 
@@ -5453,12 +5453,12 @@ def test_a_cached_alignment_is_reused_and_resnapped(own_window, monkeypatch) -> 
 
 
 def test_a_cached_whole_song_alignment_is_reused_when_chunking_is_off(own_window, monkeypatch) -> None:
-    align.save_alignment("/tmp/vocal.wav", "mms", "cpu", "あん\n", [[(0.1, 0.6), (0.6, 1.1)]], [], chunk="off")
+    align.save_alignment("/tmp/vocal.wav", "mms", "cpu", "あん\n", [[(0.1, 0.6), (0.6, 1.1)]], [], [], chunk="off")
     monkeypatch.setattr(align, "align", lambda *args, **kwargs: pytest.fail("must not run the model"))
     dialog = AlignDialog("/tmp/vocal.wav", "あん\n", 120.0, parent=own_window)
     parameter_writer(dialog, "chunk")("off")
     got: list = []
-    dialog.aligned.connect(lambda times, model: got.append(times))
+    dialog.aligned.connect(lambda times, model, flagged: got.append(times))
 
     dialog._start()
 
@@ -5486,8 +5486,8 @@ def test_the_align_dialog_runs_chunked_unless_told_otherwise(own_window) -> None
 def test_the_align_dialog_leaves_the_times_alone_by_default(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
     got: list = []
-    dialog.aligned.connect(lambda times, model: got.append(times))
-    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", []))
+    dialog.aligned.connect(lambda times, model, flagged: got.append(times))
+    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
     assert got == [[[(0.1, 0.6), (0.6, 1.1)]]]
 
 
@@ -5501,7 +5501,7 @@ def test_the_align_dialog_shows_a_failure(own_window) -> None:
 def test_the_align_dialog_keeps_its_progress_beside_the_problems(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あい\n", 120.0, parent=own_window)
     dialog.log.setPlainText("Aligning over 204.0s of audio…")
-    dialog._done(([[(0.0, 1.0), (1.0, 2.0)]], "mms", ["あい: empty"]))
+    dialog._done(([[(0.0, 1.0), (1.0, 2.0)]], "mms", ["あい: empty"], [True]))
     assert "Aligning over 204.0s of audio…" in dialog.log.toPlainText()
     assert "あい: empty" in dialog.log.toPlainText()
 
@@ -5519,7 +5519,9 @@ def test_the_aligner_logs_a_download_a_tenth_at_a_time(qt_app) -> None:
 def test_the_aligner_reports_the_lines_it_doubts() -> None:
     lines = sound_lines("あい\n")
     found = align.AlignedSegment(0.0, 2.0, (align.Token("a"), align.Token("i")))
-    assert Aligner._problems(found, lines) == ["あい: empty"]
+    flagged, reported = Aligner._problems(found, lines)
+    assert flagged == [True]
+    assert reported == ["あい: empty"]
 
 
 def test_the_align_button_opens_the_dialog(own_window, monkeypatch, tmp_path) -> None:
@@ -5577,7 +5579,7 @@ class _FakeAligner(QObject):
         _FakeAligner.calls.append((audio, text, model, provider, chunk))
 
     def start(self) -> None:
-        self.aligned.emit(([[(0.0, 1.0), (1.0, 2.0)]], "mms", []))
+        self.aligned.emit(([[(0.0, 1.0), (1.0, 2.0)]], "mms", [], [True]))
         self.finished.emit()
 
 
@@ -5594,6 +5596,7 @@ def test_auto_align_reuses_the_cached_pass(lyrics_window, monkeypatch, tmp_path)
 
     assert _FakeAligner.calls == [(str(tmp_path / "vocal.wav"), "あい\n", "mms", "cpu", align.DEFAULT_MODE)]
     assert lyrics_window.view.lyric_raw == (((0.0, 1.0), (1.0, 2.0)),)
+    assert lyrics_window._lyric_flags == (True,)  # the aligner's doubt is kept with the times
     assert lyrics_window._auto_align_thread is None
 
 

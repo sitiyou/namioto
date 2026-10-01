@@ -69,18 +69,19 @@ def test_the_alignment_parameters_are_remembered_and_checked():
 def test_the_alignment_cache_holds_the_raw_lines_and_reuses_them_by_their_inputs():
     rows = [[(0.0, 0.5), (0.5, 1.0), (None, None)]]
     problems = ["あい: empty"]
-    align.save_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", rows, problems)
+    flagged = [True]
+    align.save_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", rows, problems, flagged)
 
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n") == (rows, problems)
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n") == (rows, problems, flagged)
     assert align.find_alignment("/tmp/song.wav", "yohane", "cpu", "あい\n") is None
     assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "うえ\n") is None
 
 
 def test_the_alignment_cache_tells_the_cutting_modes_apart():
     rows = [[(0.0, 0.5)]]
-    align.save_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", rows, [], chunk="off")
+    align.save_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", rows, [], [], chunk="off")
 
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk="off") == (rows, [])
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk="off") == (rows, [], [])
     assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk="silence") is None
 
 

@@ -91,11 +91,11 @@ class Aligner(LoadingThread):
         found = align.align_whole(segment, emission, dictionary, blank_id=blank_id)
         self.message.emit(tr("Fitting the sounds to the voice\u2026"))
         rows = align.correct_times(split(found.tokens, lines), audio)
-        problems = self._problems(found, lines)
+        flagged, problems = self._problems(found, lines)
         with suppress(OSError):  # the cache is disposable, and the alignment itself already came back
-            align.save_alignment(self.path, self.model, self.provider, self.text, rows, problems, self.chunk)
+            align.save_alignment(self.path, self.model, self.provider, self.text, rows, problems, flagged, self.chunk)
         self.message.emit(tr("Alignment took {seconds:.1f}s", seconds=time.monotonic() - started))
-        self.aligned.emit((rows, self.model, problems))
+        self.aligned.emit((rows, self.model, problems, flagged))
 
     def _downloading(self, done: int, total: int) -> None:
         """A download of a model that was not installed, logged a tenth at a time."""
@@ -109,22 +109,24 @@ class Aligner(LoadingThread):
             self.message.emit(tr("Downloading the {model} model\u2026 {percent}%", model=self.model, percent=percent))
 
     @staticmethod
-    def _problems(found, lines) -> list[str]:
-        reported = []
+    def _problems(found, lines) -> tuple[list[bool], list[str]]:
+        """One flag per line the aligner doubted, and the same trouble named for the log."""
+        flagged, reported = [], []
         at = 0
         for line in lines:
             chunk = found.tokens[at : at + len(line.sounds)]
             at += len(chunk)
             trouble = align.problems(align.AlignedSegment(found.start, found.end, tuple(chunk)))
+            flagged.append(bool(trouble))
             if trouble:
                 reported.append(f"{line.text}: {', '.join(trouble)}")
-        return reported
+        return flagged, reported
 
 
 class AlignDialog(QDialog):
     """The model choice, the run, and what it found. The result is handed over as it arrives."""
 
-    aligned = pyqtSignal(object, str)
+    aligned = pyqtSignal(object, str, object)
 
     def __init__(self, audio: str, text: str, tempo: float, parent=None, offset: float = 0.0):
         super().__init__(parent)
@@ -196,8 +198,8 @@ class AlignDialog(QDialog):
         chunk = self._parameters["chunk"]
         cached = align.find_alignment(self.audio, model, provider, self.text, chunk)
         if cached is not None:
-            rows, problems = cached
-            self._done((rows, model, problems))  # re-snapped with the tempo and grid offset in hand
+            rows, problems, flagged = cached
+            self._done((rows, model, problems, flagged))  # re-snapped with the tempo and grid offset in hand
             self.log.setPlainText("\n".join([tr("saved alignment reused"), *problems]))
             return
         self.progress.setRange(0, 0)  # busy until the first chunk of the model's pass comes back
@@ -215,7 +217,7 @@ class AlignDialog(QDialog):
         self.progress.setValue(done)
 
     def _done(self, result) -> None:
-        times, model, problems = result
+        times, model, problems, flagged = result
         cells = self.parameters()["quantize"]  # read now, so a change made while the run went counts
         if cells:
             times = snap_to_beats(times, self.tempo, 1.0 / cells, self.offset)
@@ -226,7 +228,7 @@ class AlignDialog(QDialog):
         self.status.setText(tr("Aligned {lines} lines", lines=len(times)))
         if problems:
             self.log.appendPlainText("\n".join(problems))
-        self.aligned.emit(times, model)
+        self.aligned.emit(times, model, flagged)
 
     def _fail(self, message: str) -> None:
         self._thread = None

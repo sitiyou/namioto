@@ -219,15 +219,17 @@ group    # 共享的 NOTE 下标；-1 表示独立
 - `AlignDialog` 产出每 mora `(start, end)`；若选了 Quantize，先过 `karaoke.snap_to_beats`。
 - `snap_to_beats` 会把两端落在同一格内的 mora 收成零长（`start == end`）——这是 `.0` 的一个来源，
   等价于「对齐时选的 snap 决定初值」。
-- 结果存 `project.Lyrics`，并 `_remap_lyrics`。
+- 结果存 `project.Lyrics`（`lines` = 每 mora 时间，`flagged` = 每行 `problems()` 是否非空），并
+  `_remap_lyrics`；alignment store 里也存一份 `flagged`，复用一个缓存 pass 时一并取回。
 - `.krc` 外部改动：有缓存 pass 时 `lyrics.auto_align` 后台重对齐；否则保持 1:1 映射并提示。
 
 ---
 
 ## 9. 持久化与 dirty
 
-- `.nto` 的 `lyrics: Lyrics{text, key, model, mode, lines}`；`key` = `.krc` 文本 hash，`model` = 对齐模型。
-  `lines` 每 mora `(start, end)`。
+- `.nto` 的 `lyrics: Lyrics{text, key, model, mode, lines, flagged}`；`key` = `.krc` 文本 hash，
+  `model` = 对齐模型。`lines` 每 mora `(start, end)`；`flagged` 每行一个 bool，aligner 自己怀疑的行
+  （`problems()` 非空）→ 整行红。alignment store 的同名字段是它的来源，旧 store 缺它就退化为空。
 - 载入：`MainWindow._watch_lyrics` 用 `Lyrics` 还原 raw（再过 `contiguous`）。
 - 保存：`save_project` 写 `view.lyric_raw`。
 - dirty：歌词编辑经 `notes_changed` 触发 `_mark_dirty`；`_state_data` 含 `lyric_raw`。
