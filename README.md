@@ -369,9 +369,10 @@ and comma-separated. `Copy prompt` puts it on the clipboard together with the ly
 model - paste it there, paste the answer back into the lyrics box and save. With an OpenAI-compatible
 endpoint set up under **Lyrics** in the settings, `Convert with the API` does that round trip in
 the background instead, and a box under the plain-text lyrics streams the model's own output as it
-arrives - its reasoning first, then the answer. An answer that changes the lyrics rather than adding
-the rubies is refused, so a bad round trip never lands in the project, and a `.krc` that does not
-parse is not written either. Until an endpoint is set up the button is off and a
+arrives - its reasoning first, then the answer. An answer is only taken when it parses, carries the
+same lyrics and gives every kanji a reading; a refusal is sent back to the model with what it wrote
+and why, up to a few tries, and one that outlives them is not applied at all - the plain-text lyrics
+then offer the refusal as the next prompt to copy. Until an endpoint is set up the button is off and a
 line under the lyrics says to copy the prompt instead. The streamed box appears only once the API is
 asked for; the clipboard and hand-editing routes never need it. Closing with unsaved lyrics asks
 before they are dropped. The key lives in `~/.config/namioto/settings.json` in plain text; a `.krc`

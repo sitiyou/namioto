@@ -80,9 +80,22 @@ def save(path: str | Path, text: str) -> Path:
     return write_text(path, text)
 
 
-def build_prompt(lyrics: str, prompt: str = DEFAULT_PROMPT) -> str:
-    """The prompt that goes to a model, with the text to annotate under it."""
-    return f"{prompt}\n{lyrics}"
+def build_prompt(lyrics: str, prompt: str = DEFAULT_PROMPT, retry: str = "") -> str:
+    """The prompt that goes to a model, with the text to annotate under it.
+
+    `retry` is what an earlier refusal said, appended so a second try knows what to fix.
+    """
+    text = f"{prompt}\n{lyrics}"
+    return f"{text}\n\n{retry}" if retry else text
+
+
+def retry_prompt(answer: str, error: str) -> str:
+    """What a rejected answer earns: the model's own output again, and why it was refused."""
+    return (
+        f"你上一次的输出：\n{answer}\n\n"
+        f"它没有通过检查：{error}\n"
+        "请严格按上面的规则重新注音，只输出修正后的歌词本身，不要任何解释。"
+    )
 
 
 def conversion_error(text: str, source: str) -> str:
@@ -90,8 +103,9 @@ def conversion_error(text: str, source: str) -> str:
 
     The model is asked for the readings alone, never to rewrite, so once the readings and the `.krc`
     markers are taken away the two must carry the same characters; a model that dropped a line,
-    changed a word or answered with prose is caught here. Whether the readings themselves are right
-    is the user's to judge.
+    changed a word or answered with prose is caught here. Every kanji must also carry a reading: an
+    unread one has no sound to align. Whether the readings themselves are right is the user's to
+    judge.
     """
     try:
         converted = parse(text)
@@ -100,6 +114,15 @@ def conversion_error(text: str, source: str) -> str:
     spoken = "".join(unit.text for chapter in converted.chapters for line in chapter.lines for unit in line.units)
     if _squeezed(spoken) != _squeezed(source):
         return "the answer changed the lyrics instead of annotating them"
+    unread = [
+        unit.text
+        for chapter in converted.chapters
+        for line in chapter.lines
+        for unit in line.units
+        if unit.ruby is None and unit.is_kanji()
+    ]
+    if unread:
+        return f"these kanji have no reading: {' '.join(unread)}"
     return ""
 
 
@@ -125,6 +148,7 @@ def convert(
     api_key: str,
     model: str,
     prompt: str = DEFAULT_PROMPT,
+    retry: str = "",
     temperature: float = 0.2,
     timeout: float = 120.0,
     stream: bool = False,
@@ -134,7 +158,8 @@ def convert(
     """Ask an OpenAI-compatible endpoint to annotate `lyrics`, and return what it wrote.
 
     `base_url` is the endpoint up to its `/v1`. The key rides in the header and nowhere else, and
-    nothing raised here repeats it. With `stream`, every delta is handed to `on_delta(kind, text)`
+    nothing raised here repeats it. `retry` is what an earlier refusal said, sent with the lyrics so
+    the model can correct itself. With `stream`, every delta is handed to `on_delta(kind, text)`
     as it arrives - `kind` being `"reasoning"` or `"content"` - and the answer is still returned.
     Without an `opener`, the request goes through the proxy named in the settings.
     """
@@ -143,7 +168,7 @@ def convert(
         "temperature": temperature,
         "messages": [
             {"role": "system", "content": prompt},
-            {"role": "user", "content": lyrics},
+            {"role": "user", "content": f"{lyrics}\n\n{retry}" if retry else lyrics},
         ],
     }
     if stream:

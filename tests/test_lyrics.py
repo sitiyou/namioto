@@ -141,6 +141,19 @@ def test_an_unreadable_answer_is_refused() -> None:
     assert lyrics.conversion_error("見[み", "見")
 
 
+def test_a_kanji_without_a_reading_is_refused() -> None:
+    assert lyrics.conversion_error("歌[うた]", "歌") == ""
+    assert "no reading" in lyrics.conversion_error("歌", "歌")
+    assert "no reading" in lyrics.conversion_error("四季", "四季")
+
+
+def test_a_refusal_goes_back_to_the_model_with_the_answer() -> None:
+    retry = lyrics.retry_prompt("別の歌詞", "the answer changed the lyrics")
+    assert "別の歌詞" in retry
+    assert "changed the lyrics" in retry
+    assert lyrics.build_prompt("歌", retry=retry) == f"{lyrics.DEFAULT_PROMPT}\n歌\n\n{retry}"
+
+
 def test_the_syntax_is_checked_apart_from_the_source() -> None:
     assert lyrics.syntax_error("") == ""  # clearing the lyrics is a write of its own
     assert lyrics.syntax_error("   \n") == ""
@@ -170,6 +183,12 @@ def test_the_call_posts_the_prompt_and_the_lyrics() -> None:
 def test_a_trailing_slash_on_the_base_does_not_double() -> None:
     _text, call = convert(answer("x"), base_url=f"{BASE}/")
     assert call["request"].get_full_url() == f"{BASE}/chat/completions"
+
+
+def test_a_retry_travels_with_the_lyrics() -> None:
+    _text, call = convert(answer("歌[うた]"), retry="再試行")
+    body = json.loads(call["request"].data)
+    assert body["messages"][1]["content"] == "君の名は\n\n再試行"
 
 
 def test_the_timeout_and_the_prompt_are_the_callers() -> None:

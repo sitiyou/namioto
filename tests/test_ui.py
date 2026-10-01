@@ -3635,20 +3635,72 @@ def test_the_converter_asks_the_model_and_reports_it_back(lyrics_window, monkeyp
     dialog.close()
 
 
-def test_a_wrong_answer_is_not_applied(lyrics_window, monkeypatch) -> None:
-    warned: list[str] = []
-    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, message: warned.append(message))
+def test_a_wrong_answer_is_sent_back_for_another_try(lyrics_window, monkeypatch) -> None:
+    monkeypatch.setattr(LyricsConverter, "start", lambda self: None)
     dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
+    dialog.source.setPlainText("歌")
     dialog.result.setPlainText("元の歌詞")
     converter = LyricsConverter("歌", dialog.config, dialog.path)
     dialog.converter = converter
     converter.converted.connect(dialog._converted)
 
-    converter.converted.emit("別の歌詞[べつ,の,か,し]")  # the model rewrote the lyrics
+    converter.converted.emit("別[べつ]の歌詞[か,し]")  # the model rewrote the lyrics
 
     assert dialog.result.toPlainText() == "元の歌詞"  # the box keeps the last good lyrics
-    assert "not applied" in dialog.status_label.text()
+    assert dialog.converter is not converter  # a correction request replaced the first one
+    assert "別[べつ]" in dialog.converter.retry
+    assert "changed the lyrics" in dialog.converter.retry
+    assert "asking the model" in dialog.status_label.text()
+    dialog.close()
+
+
+def test_the_last_bad_answer_warns_and_keeps_the_correction(lyrics_window, monkeypatch) -> None:
+    warned: list[str] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, message: warned.append(message))
+    monkeypatch.setattr(LyricsConverter, "start", lambda self: None)
+    dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
+    dialog.source.setPlainText("歌")
+    converter = LyricsConverter("歌", dialog.config, dialog.path)
+    dialog.converter = converter
+    converter.converted.connect(dialog._converted)
+
+    for _ in range(3):
+        dialog.converter.converted.emit("別[べつ]の歌詞[か,し]")
+
+    assert dialog.result.toPlainText() == ""
     assert warned
+    assert "copy the prompt" in dialog.status_label.text()
+    dialog.close()
+
+
+def test_copying_after_a_refusal_carries_the_correction(lyrics_window) -> None:
+    dialog = lyrics_dialog(lyrics_window)
+    dialog.source.setPlainText("歌")
+    dialog._rejected = ("別[べつ]の歌詞[か,し]", "the answer changed the lyrics instead of annotating them")
+
+    dialog.copy_button.click()
+
+    text = QGuiApplication.clipboard().text()
+    assert "別[べつ]" in text
+    assert "changed the lyrics" in text
+    assert "web model" in dialog.status_label.text()
+    dialog.close()
+
+
+def test_a_manual_answer_without_readings_is_refused_at_save(lyrics_window, monkeypatch) -> None:
+    warned: list[str] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, message: warned.append(message))
+    dialog = lyrics_dialog(lyrics_window)
+    dialog.source.setPlainText("歌")
+    dialog.result.setPlainText("歌")  # every kanji still wants a reading
+
+    dialog.save_button.click()
+
+    assert lyrics.load(lyrics_window.lyrics_path()) == ""
+    assert warned
+    assert dialog._rejected is not None
+    dialog.copy_button.click()
+    assert "no reading" in QGuiApplication.clipboard().text()
     dialog.close()
 
 

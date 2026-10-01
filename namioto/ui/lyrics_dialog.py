@@ -3,8 +3,10 @@
 
 The project's lyrics are the box at the top, and the plain text below is the optional upstream that
 feeds it - the model, through the endpoint in the settings or through the clipboard, turns it into
-the `.krc` above. A request runs off the GUI thread (`LyricsConverter`), and `LyricsWatcher` follows
-the sidecar file so one edited outside the editor is seen.
+the `.krc` above. A request runs off the GUI thread (`LyricsConverter`) and a refused answer is fed
+back for another try, up to `MAX_ATTEMPTS`; a refusal that outlives them is kept so `Copy prompt` can
+carry it to a web model. `LyricsWatcher` follows the sidecar file so one edited outside the editor is
+seen.
 """
 
 from __future__ import annotations
@@ -36,6 +38,7 @@ from namioto.ui.loading import LoadingThread
 
 LOAD_HEIGHT = 180
 LOG_HEIGHT = 120
+MAX_ATTEMPTS = 3
 
 
 class LyricsConverter(LoadingThread):
@@ -43,15 +46,17 @@ class LyricsConverter(LoadingThread):
 
     The endpoint is asked to stream, so `delta` carries the model's own output while it comes - the
     reasoning first, then the answer - and `converted` still carries the answer alone at the end.
+    `retry` is what an earlier refusal said, sent with the source for another try.
     """
 
     converted = pyqtSignal(str)
     delta = pyqtSignal(str, str)
 
-    def __init__(self, source: str, config, path, parent=None):
+    def __init__(self, source: str, config, path, retry: str = "", parent=None):
         super().__init__(path, parent)
         self.source = source
         self.config = config
+        self.retry = retry
 
     def load(self) -> None:
         self.converted.emit(
@@ -62,6 +67,7 @@ class LyricsConverter(LoadingThread):
                 model=self.config.model,
                 temperature=self.config.temperature,
                 timeout=self.config.timeout,
+                retry=self.retry,
                 stream=True,
                 on_delta=lambda kind, text: self.delta.emit(kind, text),
             )
@@ -139,6 +145,8 @@ class LyricsDialog(QDialog):
         self.path = Path(path)
         self.config = config
         self.converter: LyricsConverter | None = None
+        self._rejected: tuple[str, str] | None = None
+        self._attempts = 0
         self._log_kind: str | None = None
 
         self.path_label = QLabel(str(self.path))
@@ -287,21 +295,32 @@ class LyricsDialog(QDialog):
         self.status_label.setText(tr("Loaded {name} — convert it, or copy the prompt", name=Path(chosen).name))
 
     def _copy_prompt(self) -> None:
-        QGuiApplication.clipboard().setText(lyrics.build_prompt(self.source.toPlainText()))
+        source = self.source.toPlainText()
+        prompt = lyrics.build_prompt(source)
+        if self._rejected is not None:
+            prompt = lyrics.build_prompt(source, retry=lyrics.retry_prompt(*self._rejected))
+        QGuiApplication.clipboard().setText(prompt)
         self.status_label.setText(
             tr("Prompt copied: paste it into a web model, then paste its answer into the box above and save")
         )
 
     def _convert(self) -> None:
-        source = self.source.toPlainText().strip()
-        if not source:
+        if not self.source.toPlainText().strip():
             self.status_label.setText(tr("Paste the lyrics to annotate first"))
             return
+        retry = lyrics.retry_prompt(*self._rejected) if self._rejected is not None else ""
+        self._attempts = 1 if retry else 0
+        self._request(retry)
+
+    def _request(self, retry: str) -> None:
         self._set_running(True)
-        self.log.clear()
+        if retry:
+            self.log.appendPlainText("")
+        else:
+            self.log.clear()
         self.log.show()
         self._log_kind = None
-        converter = LyricsConverter(source, self.config, self.path, parent=self)
+        converter = LyricsConverter(self.source.toPlainText().strip(), self.config, self.path, retry=retry, parent=self)
         self.converter = converter
         converter.converted.connect(self._converted)
         converter.delta.connect(self._on_delta)
@@ -322,16 +341,25 @@ class LyricsDialog(QDialog):
         self._set_running(False)
         source = self.converter.source if self.converter is not None else ""
         problem = lyrics.conversion_error(text, source)
-        if problem:
-            QMessageBox.warning(
-                self,
-                tr("Lyrics"),
-                tr("The model did not annotate the lyrics: {error}", error=problem),
-            )
-            self.status_label.setText(tr("The answer was not applied: {error}", error=problem))
+        if not problem:
+            self._rejected = None
+            self.result.setPlainText(text)
+            self.status_label.setText(tr("Converted: check it over, then save"))
             return
-        self.result.setPlainText(text)
-        self.status_label.setText(tr("Converted: check it over, then save"))
+        self._rejected = (text, problem)
+        self._attempts += 1
+        if self._attempts < MAX_ATTEMPTS:
+            self.status_label.setText(tr("Not annotated: {error} — asking the model to correct it", error=problem))
+            self._request(lyrics.retry_prompt(text, problem))
+            return
+        QMessageBox.warning(
+            self,
+            tr("Lyrics"),
+            tr("The model did not annotate the lyrics: {error}", error=problem),
+        )
+        self.status_label.setText(
+            tr("The answer was not applied — copy the prompt to try again: {error}", error=problem)
+        )
 
     def _failed(self, message: str) -> None:
         self._set_running(False)
@@ -343,12 +371,17 @@ class LyricsDialog(QDialog):
 
     def _save(self) -> None:
         text = self.result.toPlainText()
-        problem = lyrics.syntax_error(text)
+        source = self.source.toPlainText().strip()
+        problem = lyrics.conversion_error(text, source) if source else lyrics.syntax_error(text)
         if problem:
+            if source:
+                self._rejected = (text, problem)
             QMessageBox.warning(
                 self,
                 tr("Lyrics"),
-                tr("The lyrics are not a readable .krc: {error}", error=problem),
+                tr("The lyrics are not the plain text annotated: {error}", error=problem)
+                if source
+                else tr("The lyrics are not a readable .krc: {error}", error=problem),
             )
             self.status_label.setText(tr("Not saved: {error}", error=problem))
             return
@@ -357,6 +390,7 @@ class LyricsDialog(QDialog):
         except OSError as error:
             self.status_label.setText(tr("Could not save: {error}", error=error))
             return
+        self._rejected = None
         self._saved_text = text
         self.status_label.setText(tr("Saved to {name}", name=self.path.name))
         self.saved.emit(text)
