@@ -59,7 +59,7 @@ from namioto.ui.app import MainWindow, TempoLoader
 from namioto.ui.audio import BuiltinSynth, MidiPortOut, find_port, find_synth_port
 from namioto.ui.controls import Cluster, EditBar, TransportBar, ValueSlider
 from namioto.ui.form import WrappedLabel, _show_device_status, field_editor
-from namioto.ui.lyrics_dialog import LyricsDialog, LyricsTranslator
+from namioto.ui.lyrics_dialog import LyricsConverter, LyricsDialog
 from namioto.ui.midi_dialog import MidiImportDialog
 from namioto.ui.open_dialog import OpenAudioDialog
 from namioto.ui.roll import (
@@ -3493,7 +3493,7 @@ def test_the_plain_text_panel_stays_folded_over_existing_lyrics(lyrics_window) -
 
 def test_an_unset_api_points_at_the_prompt(lyrics_window) -> None:
     dialog = lyrics_dialog(lyrics_window)
-    assert dialog.translate_button.isEnabled() is False
+    assert dialog.convert_button.isEnabled() is False
     assert dialog.copy_button.isEnabled() is True
     assert dialog.hint.isVisibleTo(dialog) is True
     dialog.close()
@@ -3501,7 +3501,7 @@ def test_an_unset_api_points_at_the_prompt(lyrics_window) -> None:
 
 def test_a_set_api_hides_the_prompt_hint(lyrics_window) -> None:
     dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
-    assert dialog.translate_button.isEnabled() is True
+    assert dialog.convert_button.isEnabled() is True
     assert dialog.hint.isVisibleTo(dialog) is False
     dialog.close()
 
@@ -3585,30 +3585,30 @@ def test_saving_writes_the_lyrics_beside_the_project(lyrics_window) -> None:
 
 def test_the_api_button_waits_for_the_settings(lyrics_window) -> None:
     dialog = lyrics_dialog(lyrics_window)
-    assert dialog.translate_button.isEnabled() is False
+    assert dialog.convert_button.isEnabled() is False
     dialog.close()
 
     dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
-    assert dialog.translate_button.isEnabled() is True
+    assert dialog.convert_button.isEnabled() is True
     dialog.close()
 
 
 def test_a_missing_source_is_not_sent(lyrics_window, monkeypatch) -> None:
-    monkeypatch.setattr(lyrics, "translate", lambda *args, **kwargs: pytest.fail("must not call"))
+    monkeypatch.setattr(lyrics, "convert", lambda *args, **kwargs: pytest.fail("must not call"))
     dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
-    dialog.translate_button.click()
+    dialog.convert_button.click()
     assert "Paste the lyrics" in dialog.status_label.text()
     dialog.close()
 
 
-def test_the_translator_asks_the_model_and_reports_it_back(lyrics_window, monkeypatch) -> None:
+def test_the_converter_asks_the_model_and_reports_it_back(lyrics_window, monkeypatch) -> None:
     asked: dict = {}
 
     def fake(source, **fields):
         asked.update(fields, source=source)
         return "歌[うた]"
 
-    monkeypatch.setattr(lyrics, "translate", fake)
+    monkeypatch.setattr(lyrics, "convert", fake)
     dialog = lyrics_dialog(
         lyrics_window,
         api_base="https://api.example.com/v1",
@@ -3617,9 +3617,10 @@ def test_the_translator_asks_the_model_and_reports_it_back(lyrics_window, monkey
         temperature=0.5,
         timeout=30.0,
     )
-    translator = LyricsTranslator("歌", dialog.config, dialog.path)
-    translator.translated.connect(dialog._translated)
-    translator.load()
+    converter = LyricsConverter("歌", dialog.config, dialog.path)
+    dialog.converter = converter
+    converter.converted.connect(dialog._converted)
+    converter.load()
 
     assert asked["source"] == "歌"
     assert asked["base_url"] == "https://api.example.com/v1"
@@ -3630,25 +3631,56 @@ def test_the_translator_asks_the_model_and_reports_it_back(lyrics_window, monkey
     assert asked["stream"] is True
     assert callable(asked["on_delta"])
     assert dialog.result.toPlainText() == "歌[うた]"
-    assert "Translated" in dialog.status_label.text()
+    assert "Converted" in dialog.status_label.text()
     dialog.close()
 
 
-def test_a_failed_translation_shows_why(lyrics_window) -> None:
+def test_a_wrong_answer_is_not_applied(lyrics_window, monkeypatch) -> None:
+    warned: list[str] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, message: warned.append(message))
+    dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
+    dialog.result.setPlainText("元の歌詞")
+    converter = LyricsConverter("歌", dialog.config, dialog.path)
+    dialog.converter = converter
+    converter.converted.connect(dialog._converted)
+
+    converter.converted.emit("別の歌詞[べつ,の,か,し]")  # the model rewrote the lyrics
+
+    assert dialog.result.toPlainText() == "元の歌詞"  # the box keeps the last good lyrics
+    assert "not applied" in dialog.status_label.text()
+    assert warned
+    dialog.close()
+
+
+def test_a_failed_conversion_shows_why(lyrics_window) -> None:
     dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
     dialog._failed("HTTP 401 Unauthorized")
     assert "HTTP 401" in dialog.status_label.text()
-    assert dialog.translate_button.isEnabled() is True
+    assert dialog.convert_button.isEnabled() is True
+    dialog.close()
+
+
+def test_a_broken_krc_is_not_saved(lyrics_window, monkeypatch) -> None:
+    warned: list[str] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, message: warned.append(message))
+    dialog = lyrics_dialog(lyrics_window)
+    dialog.result.setPlainText("見[み")
+
+    dialog.save_button.click()
+
+    assert lyrics.load(lyrics_window.lyrics_path()) == ""
+    assert "Not saved" in dialog.status_label.text()
+    assert warned
     dialog.close()
 
 
 def test_the_output_box_is_only_shown_once_the_api_is_asked(lyrics_window, monkeypatch) -> None:
-    monkeypatch.setattr(LyricsTranslator, "start", lambda self: None)
+    monkeypatch.setattr(LyricsConverter, "start", lambda self: None)
     dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
     assert dialog.log.isHidden() is True
 
     dialog.source.setPlainText("歌")
-    dialog.translate_button.click()
+    dialog.convert_button.click()
 
     assert dialog.log.isHidden() is False
     assert dialog.log.toPlainText() == ""  # it starts empty, waiting for the model

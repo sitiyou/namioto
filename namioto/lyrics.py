@@ -3,9 +3,10 @@
 """Lyrics: the `.krc` file beside a project, the prompt that fills it, and the model call.
 
 Qt-free on purpose. The `.krc` is a working copy: the project keeps the text itself as its
-baseline, and this reads and writes the sidecar beside it. Nothing here checks the `.krc` syntax - a
-file with a mistake in it is still the user's to fix in an editor. `translate` takes its opener as
-an argument, so a call can be exercised without a network.
+baseline, and this reads and writes the sidecar beside it. `load` and `save` do not check the syntax
+- a file with a mistake in it is still the user's to fix in an editor - while `conversion_error` and
+`syntax_error` are what tell a model's answer, or a box about to be written, from a readable one.
+`convert` takes its opener as an argument, so a call can be exercised without a network.
 
 `mode` (`project.Lyrics.mode`) is `edit` (the aligner's times lay the sounds out and the strip may
 drag them) or `read` (the `.krc`'s own `.N` and groups do, and the strip is read-only); aligning
@@ -30,6 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from namioto import net
+from namioto.karaoke import KrcError, parse
 from namioto.utils import write_text
 
 SUFFIX = ".krc"
@@ -83,7 +85,40 @@ def build_prompt(lyrics: str, prompt: str = DEFAULT_PROMPT) -> str:
     return f"{prompt}\n{lyrics}"
 
 
-def translate(
+def conversion_error(text: str, source: str) -> str:
+    """Why `text` is not `source` with the readings added, or "" when it is.
+
+    The model is asked for the readings alone, never to rewrite, so once the readings and the `.krc`
+    markers are taken away the two must carry the same characters; a model that dropped a line,
+    changed a word or answered with prose is caught here. Whether the readings themselves are right
+    is the user's to judge.
+    """
+    try:
+        converted = parse(text)
+    except KrcError as error:
+        return str(error)
+    spoken = "".join(unit.text for chapter in converted.chapters for line in chapter.lines for unit in line.units)
+    if _squeezed(spoken) != _squeezed(source):
+        return "the answer changed the lyrics instead of annotating them"
+    return ""
+
+
+def syntax_error(text: str) -> str:
+    """Why `text` is not a readable `.krc`, or "" when it is; empty text is readable."""
+    if not text.strip():
+        return ""
+    try:
+        parse(text)
+    except KrcError as error:
+        return str(error)
+    return ""
+
+
+def _squeezed(text: str) -> str:
+    return "".join(char for char in text if not char.isspace())
+
+
+def convert(
     lyrics: str,
     *,
     base_url: str,

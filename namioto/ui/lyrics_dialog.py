@@ -3,7 +3,7 @@
 
 The project's lyrics are the box at the top, and the plain text below is the optional upstream that
 feeds it - the model, through the endpoint in the settings or through the clipboard, turns it into
-the `.krc` above. A request runs off the GUI thread (`LyricsTranslator`), and `LyricsWatcher` follows
+the `.krc` above. A request runs off the GUI thread (`LyricsConverter`), and `LyricsWatcher` follows
 the sidecar file so one edited outside the editor is seen.
 """
 
@@ -38,14 +38,14 @@ LOAD_HEIGHT = 180
 LOG_HEIGHT = 120
 
 
-class LyricsTranslator(LoadingThread):
+class LyricsConverter(LoadingThread):
     """One request to the model, off the GUI thread; `LoadingThread` reports whatever it throws.
 
     The endpoint is asked to stream, so `delta` carries the model's own output while it comes - the
-    reasoning first, then the answer - and `translated` still carries the answer alone at the end.
+    reasoning first, then the answer - and `converted` still carries the answer alone at the end.
     """
 
-    translated = pyqtSignal(str)
+    converted = pyqtSignal(str)
     delta = pyqtSignal(str, str)
 
     def __init__(self, source: str, config, path, parent=None):
@@ -54,8 +54,8 @@ class LyricsTranslator(LoadingThread):
         self.config = config
 
     def load(self) -> None:
-        self.translated.emit(
-            lyrics.translate(
+        self.converted.emit(
+            lyrics.convert(
                 self.source,
                 base_url=self.config.api_base,
                 api_key=self.config.api_key,
@@ -138,7 +138,7 @@ class LyricsDialog(QDialog):
         self.resize(680, 640)
         self.path = Path(path)
         self.config = config
-        self.translator: LyricsTranslator | None = None
+        self.converter: LyricsConverter | None = None
         self._log_kind: str | None = None
 
         self.path_label = QLabel(str(self.path))
@@ -183,15 +183,15 @@ class LyricsDialog(QDialog):
         self.load_text_button.setToolTip(tr("Load a plain-text lyrics file to annotate"))
         self.load_text_button.clicked.connect(self._load_source)
         self.configured = bool(config.api_base.strip() and config.api_key.strip() and config.model.strip())
-        self.translate_button = QPushButton(tr("Translate with the API"))
-        self.translate_button.setIcon(icons.icon("translate"))
-        self.translate_button.setEnabled(self.configured)
-        self.translate_button.setToolTip(
+        self.convert_button = QPushButton(tr("Convert with the API"))
+        self.convert_button.setIcon(icons.icon("translate"))
+        self.convert_button.setEnabled(self.configured)
+        self.convert_button.setToolTip(
             tr("Ask the endpoint in the settings to annotate the text above")
             if self.configured
             else tr("Set the API base, key and model in the settings first")
         )
-        self.translate_button.clicked.connect(self._translate)
+        self.convert_button.clicked.connect(self._convert)
         self.copy_button = QPushButton(tr("Copy prompt"))
         self.copy_button.setIcon(icons.icon("copy"))
         self.copy_button.setToolTip(tr("Put the prompt and the lyrics on the clipboard, for a web model"))
@@ -211,7 +211,7 @@ class LyricsDialog(QDialog):
         text_buttons.addWidget(self.load_text_button)
         text_buttons.addStretch(1)
         text_buttons.addWidget(self.copy_button)
-        text_buttons.addWidget(self.translate_button)
+        text_buttons.addWidget(self.convert_button)
 
         plain = QWidget()
         plain_body = QVBoxLayout(plain)
@@ -284,7 +284,7 @@ class LyricsDialog(QDialog):
             self.status_label.setText(tr("That file could not be read"))
             return
         self.source.setPlainText(text)
-        self.status_label.setText(tr("Loaded {name} — translate it, or copy the prompt", name=Path(chosen).name))
+        self.status_label.setText(tr("Loaded {name} — convert it, or copy the prompt", name=Path(chosen).name))
 
     def _copy_prompt(self) -> None:
         QGuiApplication.clipboard().setText(lyrics.build_prompt(self.source.toPlainText()))
@@ -292,7 +292,7 @@ class LyricsDialog(QDialog):
             tr("Prompt copied: paste it into a web model, then paste its answer into the box above and save")
         )
 
-    def _translate(self) -> None:
+    def _convert(self) -> None:
         source = self.source.toPlainText().strip()
         if not source:
             self.status_label.setText(tr("Paste the lyrics to annotate first"))
@@ -301,12 +301,12 @@ class LyricsDialog(QDialog):
         self.log.clear()
         self.log.show()
         self._log_kind = None
-        translator = LyricsTranslator(source, self.config, self.path, parent=self)
-        self.translator = translator
-        translator.translated.connect(self._translated)
-        translator.delta.connect(self._on_delta)
-        translator.failed.connect(self._failed)
-        translator.start()
+        converter = LyricsConverter(source, self.config, self.path, parent=self)
+        self.converter = converter
+        converter.converted.connect(self._converted)
+        converter.delta.connect(self._on_delta)
+        converter.failed.connect(self._failed)
+        converter.start()
 
     def _on_delta(self, kind: str, text: str) -> None:
         """Show the model's own stream, starting the answer on a line of its own."""
@@ -318,21 +318,40 @@ class LyricsDialog(QDialog):
         cursor.insertText(text)
         self.log.setTextCursor(cursor)
 
-    def _translated(self, text: str) -> None:
-        self.result.setPlainText(text)
+    def _converted(self, text: str) -> None:
         self._set_running(False)
-        self.status_label.setText(tr("Translated: check it over, then save"))
+        source = self.converter.source if self.converter is not None else ""
+        problem = lyrics.conversion_error(text, source)
+        if problem:
+            QMessageBox.warning(
+                self,
+                tr("Lyrics"),
+                tr("The model did not annotate the lyrics: {error}", error=problem),
+            )
+            self.status_label.setText(tr("The answer was not applied: {error}", error=problem))
+            return
+        self.result.setPlainText(text)
+        self.status_label.setText(tr("Converted: check it over, then save"))
 
     def _failed(self, message: str) -> None:
         self._set_running(False)
-        self.status_label.setText(tr("Translation failed: {error}", error=message))
+        self.status_label.setText(tr("Conversion failed: {error}", error=message))
 
     def _set_running(self, running: bool) -> None:
-        self.translate_button.setEnabled(self.configured and not running)
-        self.translate_button.setText(tr("Translating …") if running else tr("Translate with the API"))
+        self.convert_button.setEnabled(self.configured and not running)
+        self.convert_button.setText(tr("Converting …") if running else tr("Convert with the API"))
 
     def _save(self) -> None:
         text = self.result.toPlainText()
+        problem = lyrics.syntax_error(text)
+        if problem:
+            QMessageBox.warning(
+                self,
+                tr("Lyrics"),
+                tr("The lyrics are not a readable .krc: {error}", error=problem),
+            )
+            self.status_label.setText(tr("Not saved: {error}", error=problem))
+            return
         try:
             lyrics.save(self.path, text)
         except OSError as error:
@@ -362,12 +381,12 @@ class LyricsDialog(QDialog):
 
     def _detach(self) -> None:
         """A request already on its way cannot be recalled, so it is left to finish unobserved."""
-        translator, self.translator = self.translator, None
-        if translator is None:
+        converter, self.converter = self.converter, None
+        if converter is None:
             return
-        translator.blockSignals(True)
-        if translator.isRunning():
-            translator.setParent(QApplication.instance())
+        converter.blockSignals(True)
+        if converter.isRunning():
+            converter.setParent(QApplication.instance())
 
     def reject(self) -> None:
         if not self._confirm_close():

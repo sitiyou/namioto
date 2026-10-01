@@ -362,19 +362,21 @@ without reopening the project. The plain-text panel folds away when there are al
 on, and opens by itself when the box is empty.
 
 Plain text is the exception, and only so a model can make a `.krc` of it: the panel takes pasted
-lyrics or a `.txt`/`.md`/`.lrc` (`Load text…`), and `Translate with the API` or `Copy prompt` fills
+lyrics or a `.txt`/`.md`/`.lrc` (`Load text…`), and `Convert with the API` or `Copy prompt` fills
 the lyrics box above. The prompt is built in and adds the rubies: it is the same rule set an external
 `lyrics.md` role would carry, asking for the kana of each kanji in square brackets, grouped per word
 and comma-separated. `Copy prompt` puts it on the clipboard together with the lyrics, for a web
 model - paste it there, paste the answer back into the lyrics box and save. With an OpenAI-compatible
-endpoint set up under **Lyrics** in the settings, `Translate with the API` does that round trip in
+endpoint set up under **Lyrics** in the settings, `Convert with the API` does that round trip in
 the background instead, and a box under the plain-text lyrics streams the model's own output as it
-arrives - its reasoning first, then the answer. Until an endpoint is set up the button is off and a
+arrives - its reasoning first, then the answer. An answer that changes the lyrics rather than adding
+the rubies is refused, so a bad round trip never lands in the project, and a `.krc` that does not
+parse is not written either. Until an endpoint is set up the button is off and a
 line under the lyrics says to copy the prompt instead. The streamed box appears only once the API is
 asked for; the clipboard and hand-editing routes never need it. Closing with unsaved lyrics asks
-before they are dropped. The key lives in `~/.config/namioto/settings.json` in plain text, and
-nothing here
-checks the `.krc` syntax: a file with a mistake in it is still one you can fix in an editor.
+before they are dropped. The key lives in `~/.config/namioto/settings.json` in plain text; a `.krc`
+an external hand edit leaves broken is kept as it is for you to fix where it lives, but the window
+will not write one that does not parse.
 
 The lock button beside the lyrics one in the Edit bar picks how the sounds are laid on the notes.
 Off, the aligner's times do it and the strip can be dragged; on, the `.krc`'s own `.N` and groups do

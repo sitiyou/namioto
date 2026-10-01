@@ -83,11 +83,11 @@ def fake_opener(payload=None, error=None):
     return open
 
 
-def translate(payload=None, error=None, **fields):
+def convert(payload=None, error=None, **fields):
     opener = fake_opener(payload, error)
     parameters = {"base_url": BASE, "api_key": KEY, "model": "a-model"}
     parameters.update(fields)
-    text = lyrics.translate("君の名は", opener=opener, **parameters)
+    text = lyrics.convert("君の名は", opener=opener, **parameters)
     return text, opener.calls[0]
 
 
@@ -127,8 +127,29 @@ def test_the_prompt_carries_the_lyrics_under_it() -> None:
     assert lyrics.build_prompt("君の名は", "注音：") == "注音：\n君の名は"
 
 
+def test_an_annotated_answer_matches_its_source() -> None:
+    assert lyrics.conversion_error("季節[き,せつ]は移[うつ]ろい", "季節は移ろい") == ""
+    assert lyrics.conversion_error("季節[き,せつ]は移[うつ]ろい\n", "季節は移ろい") == ""
+
+
+def test_a_rewritten_answer_is_refused() -> None:
+    assert lyrics.conversion_error("春[はる]は移[うつ]ろい", "季節は移ろい")
+    assert lyrics.conversion_error("季節[き,せつ]は移[うつ]ろい\n説明", "季節は移ろい")
+
+
+def test_an_unreadable_answer_is_refused() -> None:
+    assert lyrics.conversion_error("見[み", "見")
+
+
+def test_the_syntax_is_checked_apart_from_the_source() -> None:
+    assert lyrics.syntax_error("") == ""  # clearing the lyrics is a write of its own
+    assert lyrics.syntax_error("   \n") == ""
+    assert lyrics.syntax_error("歌[うた]") == ""
+    assert lyrics.syntax_error("見[み")
+
+
 def test_the_call_posts_the_prompt_and_the_lyrics() -> None:
-    text, call = translate(answer("覚[おぼ]えてる"))
+    text, call = convert(answer("覚[おぼ]えてる"))
     request = call["request"]
 
     assert text == "覚[おぼ]えてる"
@@ -147,12 +168,12 @@ def test_the_call_posts_the_prompt_and_the_lyrics() -> None:
 
 
 def test_a_trailing_slash_on_the_base_does_not_double() -> None:
-    _text, call = translate(answer("x"), base_url=f"{BASE}/")
+    _text, call = convert(answer("x"), base_url=f"{BASE}/")
     assert call["request"].get_full_url() == f"{BASE}/chat/completions"
 
 
 def test_the_timeout_and_the_prompt_are_the_callers() -> None:
-    _text, call = translate(answer("x"), prompt="注音：", temperature=0.7, timeout=5.0)
+    _text, call = convert(answer("x"), prompt="注音：", temperature=0.7, timeout=5.0)
     assert call["timeout"] == 5.0
     body = json.loads(call["request"].data)
     assert body["temperature"] == 0.7
@@ -160,13 +181,13 @@ def test_the_timeout_and_the_prompt_are_the_callers() -> None:
 
 
 def test_a_fenced_answer_is_unwrapped() -> None:
-    text, _call = translate(answer("覚[おぼ]えてる", fenced=True))
+    text, _call = convert(answer("覚[おぼ]えてる", fenced=True))
     assert text == "覚[おぼ]えてる"
 
 
 def test_a_fenced_answer_with_a_preamble_is_unwrapped_too() -> None:
     answer_with_prose = {"choices": [{"message": {"content": "Here it is:\n```\n歌[うた]\n```"}}]}
-    text, _call = translate(answer_with_prose)
+    text, _call = convert(answer_with_prose)
     assert text == "歌[うた]"
 
 
@@ -184,7 +205,7 @@ def test_streaming_asks_for_a_stream_and_reports_every_delta() -> None:
         calls.append(request)
         return StreamResponse(lines)
 
-    text = lyrics.translate(
+    text = lyrics.convert(
         "x",
         base_url=BASE,
         api_key=KEY,
@@ -200,7 +221,7 @@ def test_streaming_asks_for_a_stream_and_reports_every_delta() -> None:
 
 def test_a_fenced_streamed_answer_is_unwrapped() -> None:
     lines = sse({"content": "```\n歌[うた]\n```"})
-    text = lyrics.translate(
+    text = lyrics.convert(
         "x", base_url=BASE, api_key=KEY, model="m", stream=True, opener=lambda *a, **k: StreamResponse(lines)
     )
     assert text == "歌[うた]"
@@ -208,7 +229,7 @@ def test_a_fenced_streamed_answer_is_unwrapped() -> None:
 
 def test_an_endpoint_that_ignores_the_stream_is_still_read() -> None:
     whole = json.dumps(answer("歌[うた]")) + "\n"
-    text = lyrics.translate(
+    text = lyrics.convert(
         "x", base_url=BASE, api_key=KEY, model="m", stream=True, opener=lambda *a, **k: StreamResponse([whole])
     )
     assert text == "歌[うた]"
@@ -216,7 +237,7 @@ def test_an_endpoint_that_ignores_the_stream_is_still_read() -> None:
 
 def test_a_stream_of_nothing_is_refused() -> None:
     with pytest.raises(ValueError, match="not JSON"):
-        lyrics.translate(
+        lyrics.convert(
             "x", base_url=BASE, api_key=KEY, model="m", stream=True, opener=lambda *a, **k: StreamResponse([])
         )
 
@@ -225,7 +246,7 @@ def test_an_http_error_names_the_status_and_never_the_key() -> None:
     error = urllib.error.HTTPError(f"{BASE}/chat/completions", 401, "Unauthorized", None, None)
     try:
         with pytest.raises(ValueError) as caught:
-            translate(error=error)
+            convert(error=error)
     finally:
         error.close()  # an HTTPError is a file object, and an unclosed one warns when it is collected
     message = str(caught.value)
@@ -235,19 +256,19 @@ def test_an_http_error_names_the_status_and_never_the_key() -> None:
 
 def test_an_unreachable_service_says_so() -> None:
     with pytest.raises(ValueError, match="could not be reached"):
-        translate(error=urllib.error.URLError("connection refused"))
+        convert(error=urllib.error.URLError("connection refused"))
 
 
 def test_an_answer_that_is_not_json_is_refused() -> None:
     with pytest.raises(ValueError, match="not JSON"):
-        lyrics.translate("x", base_url=BASE, api_key=KEY, model="m", opener=lambda *a, **k: HtmlResponse())
+        lyrics.convert("x", base_url=BASE, api_key=KEY, model="m", opener=lambda *a, **k: HtmlResponse())
 
 
 def test_an_answer_without_a_message_is_refused() -> None:
     with pytest.raises(ValueError, match="without a message"):
-        translate({"choices": []})
+        convert({"choices": []})
     with pytest.raises(ValueError, match="without a message"):
-        translate({"choices": [{"message": {"content": 3}}]})
+        convert({"choices": [{"message": {"content": 3}}]})
 
 
 def test_the_set_editor_command_wins() -> None:
