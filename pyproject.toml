@@ -28,6 +28,7 @@ webgpu = ["onnxruntime>=1.24.4", "onnxruntime-ep-webgpu"]
 
 [project.scripts]
 namioto = "namioto.ui.app:main"
+namioto-ctl = "namioto.ipc:main"
 namioto-tempo = "namioto.analysis.beats:main"
 namioto-wavetone = "namioto.analysis.wavetone:main"
 namioto-spectrum = "namioto.analysis.spectrum:main"

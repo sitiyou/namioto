@@ -156,6 +156,45 @@ half-written one falls back to the defaults field by field instead of refusing t
 The command line still wins for one run: `--channels`, `--t-num`, `--gain` and `--contrast` shape
 this run alone and are never written back into the file.
 
+## Remote control
+
+The editor can listen for a small JSON-lines interface, so a script or another machine can drive
+the transport, the notes and the project without touching the window. It is off unless it is asked
+for: `namioto --ipc` turns it on for that run, and **Remote control** on the **Remote** page of
+the settings turns it on for good. The command line wins for one run: `--ipc ADDRESS` chooses where
+it listens, `--no-ipc` keeps it off even when the setting is on.
+
+The default endpoint is a per-user unix socket (`$XDG_RUNTIME_DIR/namioto/control.sock`, mode 0600
+inside a 0700 directory); `--ipc tcp://host:port` listens over TCP instead, which always carries a
+generated token. A listening editor records its endpoint in `$XDG_RUNTIME_DIR/namioto/ipc.json`, so
+`namioto-ctl` finds it without arguments; `$NAMIOTO_IPC`, `$NAMIOTO_IPC_TOKEN` and `--endpoint`
+override that for one call. A client passes the token with `--token` or `$NAMIOTO_IPC_TOKEN`, and
+the server takes one from `$NAMIOTO_IPC_TOKEN`, generating one when it is unset.
+
+`namioto-ctl` is the client:
+
+```bash
+namioto-ctl status                       # the whole session as JSON
+namioto-ctl play                         # also pause, stop, toggle
+namioto-ctl seek 12.5                    # seconds; also `seek beat=8` or `seek fraction=0.5`
+namioto-ctl bpm 132                      # tempo of the beat grid
+namioto-ctl notes                        # every note, in seconds
+namioto-ctl document.add_notes notes='[{"pitch":60,"start":0.5,"duration":1.0}]'
+namioto-ctl project.save path=song.nto
+namioto-ctl audio.open path=song.mp3 analysis='{"channels":"both"}'
+namioto-ctl methods                      # what this editor offers, with each method's parameters
+namioto-ctl --watch toggle               # keep printing the events: hello, state, message
+```
+
+Parameters are `NAME=VALUE`, their JSON type kept, and a single positional value fills the obvious
+parameter of a short alias. Every message on the wire is one JSON object per line: a request
+`{"id":1,"method":"transport.play"}`, an answer `{"id":1,"ok":true,"result":{...}}` or
+`{"id":1,"ok":false,"error":{"code":...,"message":...}}`, and an event
+`{"event":"state","data":{...}}` the server pushes to every client, so a watcher can follow
+without polling. The protocol is small enough to speak from any language, and
+`namioto.ipc.Client` is a Python client for it. A call that would discard unsaved notes is refused
+with `dirty` unless it carries `force=true`.
+
 ## Build
 
 ```bash
@@ -196,6 +235,7 @@ namioto/settings.py   the program's own preferences: the spec table, its file an
 namioto/params.py     the Field primitive every parameter table is built from, no Qt
 namioto/state.py      the window's size, position, last folder and the habits a new document starts from, no Qt
 namioto/lyrics.py     the .krc sidecar beside a project, and the model call that fills it, no Qt
+namioto/ipc.py        the remote control's protocol, endpoint and `namioto-ctl` client, no Qt
 namioto/karaoke/      the .krc model, its parser, its writer and its timeline (lark), no Qt
 namioto/utils.py      the app's directories, a file's identity, kana to romaji tokens, no Qt
 namioto/i18n.py       the language catalogs and the language in force, no Qt
@@ -209,7 +249,9 @@ namioto/ui/           PyQt6 editor (app.py: window, controls.py: control bars,
                       spectrum colour map, image cache and loader, audio.py: note playback
                       outputs - the external MIDI synth, or the built-in synth on the native engine,
                       song.py: the audio file streamed to the native engine, channel_panel.py:
-                      the sidebar, form.py: the pieces a settings form is built from, and one
+                      the sidebar, form.py: the pieces a settings form is built from,
+                      ipc_server.py: the remote control's socket on the Qt event loop,
+                      ipc_commands.py: the methods it offers, and one
                       module per dialog: settings, lyrics, transcription, align, MIDI import,
                       open audio)
 audio/                the native audio backend (C++17): Signalsmith Stretch for the speed, miniaudio

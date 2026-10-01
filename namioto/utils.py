@@ -35,6 +35,17 @@ def config_dir(*parts: str) -> Path:
     return Path(platformdirs.user_config_dir(APP_DIRECTORY), *parts)
 
 
+def runtime_dir(*parts: str) -> Path:
+    """A path under the app's runtime root, where a socket or a lock file belongs.
+
+    `$XDG_RUNTIME_DIR` when the session has one - it is cleared on logout, which is exactly right
+    for something that only exists while the program runs - and the config directory otherwise.
+    """
+    base = os.environ.get("XDG_RUNTIME_DIR")
+    root = Path(base) / APP_DIRECTORY if base else config_dir()
+    return root.joinpath(*parts)
+
+
 def resolved(path: str | Path) -> Path:
     """`path` made absolute, with `~` and symlinks taken out, so two names for one file compare equal."""
     return Path(path).expanduser().resolve()

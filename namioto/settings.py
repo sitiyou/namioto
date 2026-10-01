@@ -235,6 +235,26 @@ SECTIONS: tuple[Section, ...] = (
             ),
         ),
     ),
+    Section(
+        "remote",
+        "Remote",
+        (
+            Field(
+                "enabled",
+                "bool",
+                False,
+                "Remote control",
+                "Listen for the namioto-ctl remote control interface; off unless it is asked for",
+            ),
+            Field(
+                "address",
+                "text",
+                "",
+                "Address",
+                "Where to listen: a socket path, tcp://host:port, or empty for a per-user socket",
+            ),
+        ),
+    ),
 )
 
 Settings = params.build(SECTIONS)

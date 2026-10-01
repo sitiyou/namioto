@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -46,7 +47,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from namioto import i18n, lyrics, midi, params, project
+from namioto import i18n, ipc, lyrics, midi, params, project
 from namioto import settings as store
 from namioto import state as window_state
 from namioto.analysis import align, bpm, devices
@@ -61,6 +62,8 @@ from namioto.ui.align_dialog import AlignDialog, Aligner
 from namioto.ui.audio import open_player
 from namioto.ui.channel_panel import ChannelPanel
 from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
+from namioto.ui.ipc_commands import WindowBridge
+from namioto.ui.ipc_server import IpcServer
 from namioto.ui.loading import LoadingThread
 from namioto.ui.lyric_map import LyricMapper, map_lyrics
 from namioto.ui.lyrics_dialog import LyricsDialog, LyricsWatcher
@@ -193,6 +196,8 @@ class SongLoader(LoadingThread):
 
 
 class MainWindow(QMainWindow):
+    transport_changed = pyqtSignal(bool)  # whether the transport is running, on every change
+
     def __init__(self, settings=None, overrides: dict | None = None):
         super().__init__()
         self.setWindowTitle("Namioto")
@@ -232,6 +237,9 @@ class MainWindow(QMainWindow):
         # the audio a result belongs to: a loader the window replaced may still report its own
         self._audio_generation = 0
         self._workers: set[QThread] = set()
+        self.ipc: IpcServer | None = None
+        self._bridge: WindowBridge | None = None
+        self._reported_playing: bool | None = None
 
         editor = self.project_settings.editor
         self.view = PianoRollView()
@@ -386,6 +394,8 @@ class MainWindow(QMainWindow):
         self._watch_lyrics()
         self._update_status()
         self.view.setFocus()  # the roll holds the keyboard, so the bar opens without a focus ring on its first button
+        if self.settings.remote.enabled:
+            self.start_ipc()
 
     def _make_player(self):
         return open_player(self, a4=self.project_settings.analysis.a4)
@@ -409,6 +419,80 @@ class MainWindow(QMainWindow):
         finally:
             self._seeding = False
         self._on_spectrum_parameters()  # the seed was quiet, so show the roll what it landed on
+
+    def start_ipc(self, address: str | None = None) -> ipc.Endpoint | None:
+        """Listen for the remote-control interface and say where on the status bar.
+
+        `address` comes from the command line; without one the setting and the environment decide, and
+        an editor already listening keeps what it has. A port already taken is reported and leaves
+        the editor running without the interface.
+        """
+        if self.ipc is not None:
+            return self.ipc.endpoint
+        endpoint = ipc.listen_endpoint(address or self.settings.remote.address or None)
+        found = ipc.read_run()
+        if found is not None:
+            running, pid = found
+            if pid != os.getpid() and running.kind == endpoint.kind and running.address == endpoint.address:
+                # a unix socket is removed before the bind, so refusing here keeps a live editor's own
+                self.statusBar().showMessage(
+                    i18n.tr("Remote control is already listening on {address}", address=running.describe())
+                )
+                return None
+        server = IpcServer(endpoint, parent=self)
+        self._bridge = WindowBridge(self, server)
+        try:
+            bound = server.start()
+        except OSError as error:
+            self.statusBar().showMessage(i18n.tr("Remote control could not start: {error}", error=error))
+            self._bridge = None
+            return None
+        self.ipc = server
+        ipc.write_run(bound)
+        self.statusBar().showMessage(i18n.tr("Remote control listening on {address}", address=bound.describe()))
+        return bound
+
+    def stop_ipc(self) -> None:
+        if self.ipc is None:
+            return
+        if self._bridge is not None:
+            self._bridge.close()
+        self.ipc.stop()
+        ipc.remove_run(os.getpid())
+        self.ipc = None
+        self._bridge = None
+
+    def reset_document(self, analysis: dict | None = None) -> None:
+        """Start an untitled document from the remembered habits and the analysis values given.
+
+        The remote interface uses this where the open dialog would otherwise ask: a fresh document
+        points at no file, its notes and lyrics are gone, and the analysis values that came with it
+        are the ones the next `load_audio` reads.
+        """
+        self._loading = True
+        try:
+            self.project_settings = project.default_settings(self.state.project)
+            for name, value in (analysis or {}).items():
+                if ("analysis", name) in project.FIELD_SPECS:
+                    params.set_value(self.project_settings, "analysis", name, value)
+            self.project_path = None
+            self.project_dirty = False
+            self.autosave_timer.stop()
+            self._stored_lyrics = None
+            self.lyrics_text = ""
+            self.transport.bpm.setValue(project.FIELD_SPECS[("tempo", "bpm")].default)
+            self.transport.grid_offset.setValue(project.FIELD_SPECS[("editor", "grid_offset_ms")].default)
+            # the notes go first: `set_channels` gives a channel back to every note it still finds,
+            # so setting the channels over the old notes would leave their channels behind
+            self.view.clear_notes()
+            self.view.set_channels([Channel(channel=0)])
+            self.view.set_spectrum(None)
+            self.view.undo_stack.clear()
+            self._apply_project_settings()
+            self._watch_lyrics()
+        finally:
+            self._loading = False
+        self._update_status()
 
     def _open_settings(self) -> None:
         dialog = SettingsDialog(
@@ -592,6 +676,10 @@ class MainWindow(QMainWindow):
         self._seed_bindings(lambda binding: binding.model is None)
         self._apply_theme()
         self._update_status()
+        if settings.remote.enabled and self.ipc is None:
+            self.start_ipc()  # a switch flipped on reaches a running editor at once
+        elif not settings.remote.enabled and self.ipc is not None:
+            self.stop_ipc()
 
     def _apply_project_settings(self) -> None:
         """A document was opened or started: its values take over the bars, the roll and the player."""
@@ -864,7 +952,11 @@ class MainWindow(QMainWindow):
         )
         if not chosen:
             return False
-        target = Path(chosen)
+        return self.export_krc(chosen)
+
+    def export_krc(self, path: str | Path) -> bool:
+        """Write the lyrics and the current mapping to `path`, adding the `.krc` suffix if missing."""
+        target = Path(path)
         if target.suffix.lower() != lyrics.SUFFIX:
             target = target.with_name(target.name + lyrics.SUFFIX)
         text, problem = self._mapped_krc()
@@ -1006,6 +1098,23 @@ class MainWindow(QMainWindow):
             if dialog.exec() != QDialog.DialogCode.Accepted:
                 return False
             mode, mapping = dialog.mode(), tuple(dialog.mapping())
+        self.apply_midi(imported, mode, mapping)
+        verb = i18n.tr("Merged") if mode == "merge" else i18n.tr("Imported")
+        message = [i18n.tr("{verb} {notes} notes from {origin}", verb=verb, notes=len(imported.notes), origin=origin)]
+        if imported.tempo_changes:
+            message.append(
+                i18n.tr("{notes} tempo changes; the grid takes the first tempo", notes=imported.tempo_changes)
+            )
+        if imported.dropped:
+            message.append(i18n.tr("{notes} note events left out", notes=imported.dropped))
+        if imported.left_out:
+            numbers = " ".join(str(channel + 1) for channel in imported.left_out)
+            message.append(i18n.tr("channels {numbers} left out", numbers=numbers))
+        self.statusBar().showMessage(" — ".join(message))
+        return True
+
+    def apply_midi(self, imported, mode: str = "replace", mapping=()) -> None:
+        """Put an imported MIDI into the running session, as the import dialog decided."""
         self._loading = True
         try:
             if mode == "merge":
@@ -1023,19 +1132,6 @@ class MainWindow(QMainWindow):
         finally:
             self._loading = False
         self._mark_dirty()
-        verb = i18n.tr("Merged") if mode == "merge" else i18n.tr("Imported")
-        message = [i18n.tr("{verb} {notes} notes from {origin}", verb=verb, notes=len(imported.notes), origin=origin)]
-        if imported.tempo_changes:
-            message.append(
-                i18n.tr("{notes} tempo changes; the grid takes the first tempo", notes=imported.tempo_changes)
-            )
-        if imported.dropped:
-            message.append(i18n.tr("{notes} note events left out", notes=imported.dropped))
-        if imported.left_out:
-            numbers = " ".join(str(channel + 1) for channel in imported.left_out)
-            message.append(i18n.tr("channels {numbers} left out", numbers=numbers))
-        self.statusBar().showMessage(" — ".join(message))
-        return True
 
     def _merge_midi(self, imported, mapping) -> None:
         """Add the file's notes to the roll, on the channels the dialog pointed them at.
@@ -1465,6 +1561,7 @@ class MainWindow(QMainWindow):
         self._remember_session()
         self.settings_store.flush()
         self._save_state()
+        self.stop_ipc()
         self.song.close()  # the engine owns the audio device, so it leaves before the window does
         super().closeEvent(event)
 
@@ -1690,6 +1787,9 @@ class MainWindow(QMainWindow):
         playing = self._is_playing()
         self.transport.set_position(seconds)
         self.transport.set_playing(playing)
+        if playing != self._reported_playing:
+            self._reported_playing = playing
+            self.transport_changed.emit(playing)
         self.view.playing = playing
         self.view.set_playhead(seconds)
         if playing and self.transport.auto_page.isChecked():
@@ -1790,6 +1890,14 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--t-num", type=float, help="spectrum frames per second, over the settings")
     parser.add_argument("--gain", type=float, help="spectrum gain for this run")
     parser.add_argument("--contrast", type=float, help="spectrum contrast for this run")
+    parser.add_argument(
+        "--ipc",
+        nargs="?",
+        const="",
+        metavar="ADDRESS",
+        help="listen for remote control on ADDRESS (a socket path, tcp://host:port, or empty for the default)",
+    )
+    parser.add_argument("--no-ipc", action="store_true", help="do not listen for remote control")
     return parser.parse_args(argv)
 
 
@@ -1798,6 +1906,13 @@ def main() -> int:
     app = QApplication(sys.argv)
     window = MainWindow(overrides={"channels": args.channels, "t_num": args.t_num})
     window.apply_overrides(gain=args.gain, contrast=args.contrast)
+    if args.no_ipc:
+        window.stop_ipc()
+    elif args.ipc:
+        window.stop_ipc()  # an address on the command line wins over the one already listening
+        window.start_ipc(args.ipc)
+    elif args.ipc is not None:
+        window.start_ipc()
     window.show()
     if args.audio is not None:
         # a file waits for the window. Naming a project opens the platform's file chooser, and on

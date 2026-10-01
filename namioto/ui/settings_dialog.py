@@ -37,7 +37,7 @@ from namioto.ui.form import add_row, advanced_section, field_editor
 SAVE_DELAY_MS = 1000
 
 # the sections that get a page, in the order they are shown; `editor` is deliberately left out
-PAGES = ("general", "devices", "tempo", "lyrics", "network", "midi")
+PAGES = ("general", "devices", "tempo", "lyrics", "network", "midi", "remote")
 # the rows a page folds away under its Advanced heading
 ADVANCED = {
     "tempo": ("window_seconds", "window_hop_seconds"),
