@@ -4899,6 +4899,61 @@ def test_hovering_a_shared_note_lights_the_whole_group(window) -> None:
     assert window.sound_strip._group_run(None) is None
 
 
+def test_the_lyric_note_lights_with_the_sounds_that_map_to_it(own_window) -> None:
+    own_window.transport.bpm.setValue(60.0)  # a beat is a second, so the spans read in seconds
+    view = own_window.view
+    view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 1.0, 0)))
+    view.load_lyrics(natural_sounds("あい"), [[(0.0, 1.0), (1.0, 2.0)]], mapped=[[(1,), (2,)]])
+
+    view.set_playhead(0.5)  # the highlight follows the playhead, playing or paused
+    assert view.highlight_note == 1
+    assert view.highlight_sounds == ((0, 0),)
+
+    view.set_playhead(1.5)
+    assert view.highlight_note == 2
+    assert view.highlight_sounds == ((0, 1),)
+
+    view.set_playhead(2.5)  # past the last note: nothing is sung there
+    assert view.highlight_note is None
+    assert view.highlight_sounds == ()
+
+
+def test_a_merge_lights_the_whole_run(own_window) -> None:
+    own_window.transport.bpm.setValue(60.0)
+    view = own_window.view
+    view.set_notes(((60, 0.0, 1.0, 0),))
+    view.load_lyrics(
+        natural_sounds("あい"), [[(0.0, 0.5), (0.5, 1.0)]], raw=[[(0.0, 0.5), (0.5, 1.0)]], mapped=[[(1,), (1,)]]
+    )
+
+    view.set_playhead(0.25)
+    assert view.highlight_note == 1
+    assert view.highlight_sounds == ((0, 0), (0, 1))
+
+    view.playing = False  # a pause keeps the highlight where the playhead rests
+    assert view.highlight_note == 1
+    assert view.highlight_sounds == ((0, 0), (0, 1))
+
+
+def test_the_strip_paints_the_lyric_highlight(own_window) -> None:
+    own_window.transport.bpm.setValue(60.0)
+    view = own_window.view
+    view.set_notes(((60, 0.0, 1.0, 0),))
+    view.load_lyrics(natural_sounds("あ"), [[(0.0, 1.0)]], mapped=[[(1,)]])
+    own_window.sound_strip.setVisible(True)
+    QApplication.processEvents()
+
+    view.set_playhead(0.5)
+    QApplication.processEvents()
+    image = own_window.sound_strip.grab().toImage()
+    pixels = [image.pixelColor(x, y).rgb() for x in range(image.width()) for y in range(image.height())]
+    assert QColor(theme.LYRIC_HIGHLIGHT).rgb() in pixels  # the NOTE block takes the blue
+    assert QColor(theme.LYRIC_SELECT).rgb() in pixels  # its text takes the group colour, not blue
+
+    view.set_playhead(None)
+    own_window.sound_strip.setVisible(False)
+
+
 def test_the_sound_strip_lays_a_row_out_once_per_refresh(window) -> None:
     window.view.load_lyrics(natural_sounds("あい\nうえ"), [[(0.0, 1.0), (1.0, 2.0)], [(3.0, 4.0), (4.0, 5.0)]])
     window.sound_strip.setVisible(True)
@@ -5329,6 +5384,7 @@ def test_read_mode_lays_the_krcs_own_dot_n_onto_the_notes(own_window, tmp_path) 
 
     assert own_window._lyric_mode == "read"
     assert own_window.view.lyric_times == (((0.0, 2.0),),)  # one sound held over both notes
+    assert own_window.view.lyric_mapped == (((1, 2),),)  # the ids the playback highlight reads
     assert own_window.view.lyric_editable is False
     assert own_window.edit.align.isEnabled() is False
 

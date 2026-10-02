@@ -37,6 +37,7 @@ class LyricResult:
     raw: tuple = ()
     zero: tuple = ()
     group: tuple = ()
+    mapped: tuple = ()
     operations: tuple = ()
     filtered: tuple = ()
     readings: tuple = ()
@@ -77,7 +78,7 @@ def map_lyrics(
 
 def _read_result(text, lines, raw, notes) -> LyricResult:
     resolved = resolve([TimedNote(*note) for note in notes])
-    spans = faithful.read(text, resolved.stream)
+    spans, ids = faithful.lay_out(text, resolved.stream)
     rows = _rows(lines, spans)
     empty = tuple(tuple(False for _sound in line.sounds) for line in lines)
     zero = tuple(tuple(span is None or span[0] is None for span in row) for row in rows)
@@ -89,6 +90,7 @@ def _read_result(text, lines, raw, notes) -> LyricResult:
         raw=_pairs(rows),
         zero=zero,
         group=groups,
+        mapped=tuple(tuple(tuple(chunk) for chunk in row) for row in ids),
         filtered=tuple(resolved.filtered),
     )
 
@@ -99,7 +101,7 @@ def _edit_result(lines, raw, scores, flagged, notes, anchors) -> LyricResult:
     operations = tuple(solve(lines, rows, resolved.stream, anchors))
     readings = tuple(confidence.read(lines, rows, resolved.stream, operations, flagged))
     spans = sound_spans([len(line.sounds) for line in lines], operations, resolved.stream)
-    red, zero, group = _tables(lines, operations, readings, resolved.stream)
+    red, zero, group, mapped = _tables(lines, operations, readings, resolved.stream)
     return LyricResult(
         lines=tuple(lines),
         spans=_pairs(spans),
@@ -107,6 +109,7 @@ def _edit_result(lines, raw, scores, flagged, notes, anchors) -> LyricResult:
         raw=_pairs(raw),
         zero=zero,
         group=group,
+        mapped=mapped,
         operations=operations,
         filtered=tuple(resolved.filtered),
         readings=readings,
@@ -123,6 +126,7 @@ def _failed(lines, raw, message: str) -> LyricResult:
         raw=_pairs(raw),
         zero=empty,
         group=groups,
+        mapped=tuple(tuple(() for _sound in line.sounds) for line in lines),
         error=message,
     )
 
@@ -152,23 +156,31 @@ def _rows(lines, spans) -> list[list[Span]]:
 
 
 def _tables(lines, operations, readings, stream) -> tuple:
-    """The strip's doubt, grey and shared-note tables, read off the operations and their readings."""
+    """The strip's doubt, grey, shared-note and note-id tables, read off the operations and readings."""
     at = {note.id: index for index, note in enumerate(stream)}
     red = [[False] * len(line.sounds) for line in lines]
     zero = [[False] * len(line.sounds) for line in lines]
     group = [[-1] * len(line.sounds) for line in lines]
+    mapped: list[list[tuple[int, ...]]] = [[() for _sound in line.sounds] for line in lines]
     for operation, reading in zip(operations, readings, strict=True):
         if isinstance(operation, Match):
             red[operation.sound.line][operation.sound.index] = reading.low
+            mapped[operation.sound.line][operation.sound.index] = tuple(operation.notes)
         elif isinstance(operation, Merge):
             note = at[operation.note]
             for ref in operation.sounds:
                 red[ref.line][ref.index] = reading.low
                 group[ref.line][ref.index] = note
+                mapped[ref.line][ref.index] = (operation.note,)
         else:
             red[operation.sound.line][operation.sound.index] = reading.low
             zero[operation.sound.line][operation.sound.index] = True
-    return tuple(tuple(row) for row in red), tuple(tuple(row) for row in zero), tuple(tuple(row) for row in group)
+    return (
+        tuple(tuple(row) for row in red),
+        tuple(tuple(row) for row in zero),
+        tuple(tuple(row) for row in group),
+        tuple(tuple(row) for row in mapped),
+    )
 
 
 class LyricMapper(QThread):

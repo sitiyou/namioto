@@ -206,13 +206,16 @@ def note_shades(body: QColor) -> tuple[QColor, QColor, QColor]:
     return body, shade(QColor("#ffffff")), shade(QColor("#000000"))
 
 
-# A lyric sound that sits on its own notes, one that does not, one that covers none, and the highlight
-# a group of them shares while the pointer is on it.
+# A lyric sound that sits on its own notes, one that does not, one that covers none, the highlight
+# a group of them shares while the pointer is on it, and the lyric NOTE highlight beside it.
 LYRIC_OK = "#3fae5a"
 LYRIC_BAD = "#d0534e"
 LYRIC_ZERO = "#8a8a8a"
 LYRIC_TEXT = "#ffffff"
 LYRIC_SELECT = "#ffd52f"
+
+# The lyric NOTE block under the playhead, and the sounds that map to it, share one blue.
+LYRIC_HIGHLIGHT = "#3b9dff"
 
 
 _LYRIC_SHADES: dict[bool, tuple[QColor, QColor, QColor]] = {}

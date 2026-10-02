@@ -40,7 +40,7 @@
 | `Sound` | edit 模式的稳定、最小自然读音原子。 |
 | raw time | aligner 为 Sound 提供的 `(start, end, score?)`；是匹配证据，不是最终 NOTE 边界。score 可缺失，缺失时降低置信度。 |
 | target channel | 当前歌词映射使用的唯一 MIDI channel。 |
-| target NOTE stream | target channel 的 NOTE 经过冲突预处理后得到的单声部、有序预览流。 |
+| target NOTE stream（歌词 NOTE，lyrics note） | target channel 的 NOTE 经过冲突预处理后得到的单声部、有序预览流；就是 timeline 上显示的歌词 NOTE，每个元素对应条带上的一块 NOTE block。 |
 | operation | 最终映射的一个 `match`、`merge` 或 `drop`。 |
 | suggested | 自动算法产生、尚未由用户确认的 operation。 |
 | confirmed | 用户直接建立或明确确认的 operation；重算时作为硬锚点。 |

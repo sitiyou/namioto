@@ -3,7 +3,10 @@
 
 One line of the `.krc` reads across the strip, each sound marked by a `|` at its own start and its
 label just after it - green while it sits on its notes, red while the mapping doubts it, grey while
-it covers none. Hovering a sound in a group lights up the whole run the note shares. The `|` is the
+it covers none. Hovering a sound in a group lights up the whole run the note shares; while the
+playhead rests inside a NOTE, that NOTE's block is tinted in the highlight blue and the `|` and
+label of every sound mapped to it take the group's own colour, so the text is marked without blue.
+The `|` is the
 editor: dragging it slides that boundary of the raw aligned times, the notes and the mapping over
 them following on release. The block is the note span the mapping derives (`lyric_times`), so it
 lines up with the roll and covers the whole note; the `|` and the label are the raw start
@@ -68,6 +71,7 @@ class SoundStrip(ViewportStrip):
         view.viewport_changed.connect(self._refresh)
         view.lyrics_changed.connect(self._invalidate)
         view.notes_changed.connect(self._invalidate)
+        view.lyric_highlight_changed.connect(self.update)
 
     def paintEvent(self, event) -> None:
         painter = QPainter(self)
@@ -112,7 +116,7 @@ class SoundStrip(ViewportStrip):
                         rect = QRectF(self._x(bstart, left), top, self._x(bend, left) - self._x(bstart, left), height)
                         blocks.append((rect, good, row, column))
                 color = QColor(theme.LYRIC_TEXT) if not zero else QColor(theme.LYRIC_ZERO)
-                labels.append((x0, self._fit_label(sound, metrics, room), color))
+                labels.append((row, column, x0, self._fit_label(sound, metrics, room), color))
         # narrow blocks last, so one flattened against its neighbour still shows over it
         groups = self.view.lyric_group
         for rect, good, row, column in sorted(blocks, key=lambda block: block[0].width()):
@@ -125,7 +129,12 @@ class SoundStrip(ViewportStrip):
             self._paint_body(painter, rect, good, left_join, right_join)
         # the run that shares one note tints the blocks it holds, so the pointer can pick it out
         self._paint_groups(painter, top, height)
-        for x0, text, color in labels:
+        self._paint_highlight(painter, top, height)
+        playing = set(self.view.highlight_sounds)
+        for row, column, x0, text, color in labels:
+            if (row, column) in playing:
+                # the NOTE block takes the blue; its text takes the group's own colour, never blue
+                color = QColor(theme.LYRIC_SELECT)
             painter.setPen(QPen(color, SOUND_LINE_PX))
             painter.drawLine(int(x0), top, int(x0), top + height)
             if not text:
@@ -351,8 +360,31 @@ class SoundStrip(ViewportStrip):
         end = mapped[last][1] if mapped[last][1] is not None else self._boundary_seconds(mapped, last + 1)
         if start is None or end is None:
             return
-        color = QColor(theme.LYRIC_SELECT)
         rect = QRectF(self._x(start), top, self._x(end) - self._x(start), height)
+        self._paint_run(painter, rect, QColor(theme.LYRIC_SELECT))
+
+    def _paint_highlight(self, painter: QPainter, top: float, height: float) -> None:
+        """The sounds the lyric NOTE under the playhead maps from, in the highlight blue."""
+        found = self.view.highlight_sounds
+        if not found:
+            return
+        spans: list[tuple[float, float]] = []
+        for row, column in found:
+            mapped = self.view.lyric_times[row] if row < len(self.view.lyric_times) else ()
+            if column >= len(mapped):
+                continue
+            start, end = mapped[column]
+            if start is None or end is None:
+                continue
+            spans.append((self._x(start), self._x(end)))
+        if not spans:
+            return
+        left = min(x for x, _ in spans)
+        right = max(y for _, y in spans)
+        self._paint_run(painter, QRectF(left, top, right - left, height), QColor(theme.LYRIC_HIGHLIGHT))
+
+    def _paint_run(self, painter: QPainter, rect: QRectF, color: QColor) -> None:
+        """A run of sounds tinted and outlined: the shared shape of the hover and lyric highlights."""
         tint = QColor(color)
         tint.setAlpha(70)
         painter.save()

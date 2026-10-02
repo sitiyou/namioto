@@ -23,21 +23,33 @@ Span = tuple[float, float] | None
 
 def read(text: str, notes: Sequence[Note]) -> list[list[Span]]:
     """The input `.krc`'s own NOTE slots, one span per natural Sound, in lines."""
+    return lay_out(text, notes)[0]
+
+
+def lay_out(text: str, notes: Sequence[Note]) -> tuple[list[list[Span]], list[list[tuple[int, ...]]]]:
+    """The `.N` spans, and beside them the stable ids of the notes each Sound takes.
+
+    The ids say which notes a Sound landed on where a span alone cannot: a Sound over several notes
+    carries several, and Sounds sharing one note each carry that same id.
+    """
     lines = natural_sounds(text)
     if not text.strip():
-        return []
+        return [], []
     parsed = [line for chapter in parse(text).chapters for line in chapter.lines]
     rows: list[list[Span]] = []
+    found: list[list[tuple[int, ...]]] = []
     at = 0
     for sound_line, line in zip(lines, parsed, strict=True):
         row: list[Span] = [None] * len(sound_line.sounds)
+        ids: list[tuple[int, ...]] = [() for _sound in sound_line.sounds]
         for override, indices in _leaves(line, sound_line):
             slots = override if override is not None else len(indices)
             taken = list(notes[at : at + slots])
             at += len(taken)
-            _distribute(row, indices, taken, slots)
+            _distribute(row, ids, indices, taken, slots)
         rows.append(row)
-    return rows
+        found.append(ids)
+    return rows, found
 
 
 def consumes(text: str, notes: Sequence[Note]) -> int:
@@ -111,12 +123,15 @@ def _leaves(line: Line, sound_line: SoundLine) -> list[tuple[int | None, list[in
     return leaves
 
 
-def _distribute(row: list[Span], indices: list[int], taken: Sequence[Note], slots: int) -> None:
+def _distribute(
+    row: list[Span], ids: list[tuple[int, ...]], indices: list[int], taken: Sequence[Note], slots: int
+) -> None:
     """Lay `slots` notes over the Sounds `indices`, holding, sharing or running out."""
     natural = len(indices)
     if not taken:
         for index in indices:
             row[index] = None
+            ids[index] = ()
         return
     if slots >= natural:
         for position, sound_index in enumerate(indices):
@@ -124,6 +139,7 @@ def _distribute(row: list[Span], indices: list[int], taken: Sequence[Note], slot
             high = (position + 1) * slots // natural
             chunk = taken[low:high]
             row[sound_index] = (chunk[0].start, chunk[-1].end) if chunk else None
+            ids[sound_index] = tuple(note.id for note in chunk)
         return
     for slot in range(slots):
         low = slot * natural // slots
@@ -132,6 +148,7 @@ def _distribute(row: list[Span], indices: list[int], taken: Sequence[Note], slot
         for position in range(low, high):
             start = taken[slot].start + (position - low) * width
             row[indices[position]] = (start, start + width)
+            ids[indices[position]] = (taken[slot].id,)
 
 
-__all__ = ["Span", "consumes", "read"]
+__all__ = ["Span", "consumes", "lay_out", "read"]

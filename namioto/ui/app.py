@@ -1480,6 +1480,7 @@ class MainWindow(QMainWindow):
             raw=[list(row) for row in result.raw],
             zero=result.zero,
             group=result.group,
+            mapped=result.mapped,
             editable=self._lyric_mode != "read",
             operations=result.operations if not result.error else None,
         )
