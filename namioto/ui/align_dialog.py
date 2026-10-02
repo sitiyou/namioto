@@ -30,7 +30,8 @@ from PyQt6.QtWidgets import (
 
 from namioto.analysis import align, devices
 from namioto.i18n import tr
-from namioto.karaoke import align_tokens, snap_to_beats, sound_lines, split
+from namioto.karaoke.sounds import natural_sounds, natural_tokens, split_tokens
+from namioto.lyricmap import snap_to_beats
 from namioto.params import Field
 from namioto.ui.form import add_row, field_editor
 from namioto.ui.loading import LoadingThread
@@ -63,7 +64,7 @@ class Aligner(LoadingThread):
 
     def load(self) -> None:
         started = time.monotonic()
-        lines = sound_lines(self.text)
+        lines = natural_sounds(self.text)
         sounds = sum(len(line.sounds) for line in lines)
         self.message.emit(tr("Read {lines} lines, {sounds} sounds", lines=len(lines), sounds=sounds))
         audio = align.load_audio(self.path)
@@ -87,10 +88,10 @@ class Aligner(LoadingThread):
         else:
             self.message.emit(tr("Reusing the model's pass over the audio\u2026"))
         dictionary, blank_id = align.load_dictionary(directory / align.VOCAB_FILE)
-        segment = align.Segment(0.0, seconds, tuple(align_tokens(lines)))
+        segment = align.Segment(0.0, seconds, tuple(natural_tokens(lines)))
         found = align.align_whole(segment, emission, dictionary, blank_id=blank_id)
         self.message.emit(tr("Fitting the sounds to the voice\u2026"))
-        rows = align.correct_times(split(found.tokens, lines), audio)
+        rows = align.correct_times(split_tokens(found.tokens, lines), audio)
         flagged, problems = self._problems(found, lines)
         with suppress(OSError):  # the cache is disposable, and the alignment itself already came back
             align.save_alignment(self.path, self.model, self.provider, self.text, rows, problems, flagged, self.chunk)

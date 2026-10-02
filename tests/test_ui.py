@@ -52,9 +52,9 @@ from namioto.analysis.bpm import BpmEstimate
 from namioto.analysis.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.channels import Channel
 from namioto.interaction import Interaction, Tool
-from namioto.karaoke import sound_lines, text_key
 from namioto.karaoke.operations import Drop, Merge
 from namioto.karaoke.sounds import natural_sounds
+from namioto.lyrics import text_key
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner
 from namioto.ui.app import MainWindow, TempoLoader
@@ -4812,7 +4812,7 @@ def test_a_subtitle_needs_lyrics_and_notes(own_window) -> None:
 
 
 def test_a_narrow_sound_still_names_itself(window) -> None:
-    window.view.load_lyrics(sound_lines("あい"), [[(0.0, 1.0), (1.0, 2.0)]])
+    window.view.load_lyrics(natural_sounds("あい"), [[(0.0, 1.0), (1.0, 2.0)]])
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
     window.sound_strip._update_hover((0, 1))
@@ -4822,7 +4822,7 @@ def test_a_narrow_sound_still_names_itself(window) -> None:
 
 
 def test_the_sound_strip_shows_every_line(window) -> None:
-    window.view.load_lyrics(sound_lines("あい\nうえ"), [[(0.0, 1.0), (1.0, 2.0)], [(3.0, 4.0), (4.0, 5.0)]])
+    window.view.load_lyrics(natural_sounds("あい\nうえ"), [[(0.0, 1.0), (1.0, 2.0)], [(3.0, 4.0), (4.0, 5.0)]])
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
     # the second line's blocks show too, not just the first line's
@@ -4833,7 +4833,7 @@ def test_the_sound_strip_shows_every_line(window) -> None:
 
 
 def test_the_sound_strip_renders_the_current_line(window) -> None:
-    window.view.load_lyrics(sound_lines("あい"), [[(0.0, 1.0), (1.0, 2.0)]])
+    window.view.load_lyrics(natural_sounds("あい"), [[(0.0, 1.0), (1.0, 2.0)]])
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
     image = window.sound_strip.grab()
@@ -4844,7 +4844,7 @@ def test_the_sound_strip_renders_the_current_line(window) -> None:
 
 def test_dragging_a_sound_boundary_moves_the_shared_edge(window) -> None:
     raw = [[(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]]
-    window.view.load_lyrics(sound_lines("あいう"), raw, raw=raw)
+    window.view.load_lyrics(natural_sounds("あいう"), raw, raw=raw)
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
     before = window.view.undo_stack.count()
@@ -4865,7 +4865,7 @@ def test_dragging_a_sound_boundary_moves_the_shared_edge(window) -> None:
 
 def test_a_boundary_drag_stops_at_its_own_sound_end(window) -> None:
     raw = [[(0.0, 1.0), (1.0, 2.0)]]
-    window.view.load_lyrics(sound_lines("あい"), raw, raw=raw)
+    window.view.load_lyrics(natural_sounds("あい"), raw, raw=raw)
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
 
@@ -4878,7 +4878,7 @@ def test_a_boundary_drag_stops_at_its_own_sound_end(window) -> None:
 
 def test_a_lyric_drag_is_smooth_but_magnets_to_the_drawn_grid(window) -> None:
     window.view.set_zoom(48.0, 16.0)
-    window.view.load_lyrics(sound_lines("あい"), [[(0.0, 1.0), (1.0, 2.0)]])
+    window.view.load_lyrics(natural_sounds("あい"), [[(0.0, 1.0), (1.0, 2.0)]])
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
     strip = window.sound_strip
@@ -4893,14 +4893,14 @@ def test_a_lyric_drag_is_smooth_but_magnets_to_the_drawn_grid(window) -> None:
 
 def test_hovering_a_shared_note_lights_the_whole_group(window) -> None:
     times = [[(0.0, 1.0), (1.0, 2.0)]]
-    window.view.load_lyrics(sound_lines("あい"), times, raw=times, group=[[0, 0]])
+    window.view.load_lyrics(natural_sounds("あい"), times, raw=times, group=[[0, 0]])
     assert window.sound_strip._group_run((0, 0)) == (0, 0, 1)
     assert window.sound_strip._group_run((0, 1)) == (0, 0, 1)
     assert window.sound_strip._group_run(None) is None
 
 
 def test_the_sound_strip_lays_a_row_out_once_per_refresh(window) -> None:
-    window.view.load_lyrics(sound_lines("あい\nうえ"), [[(0.0, 1.0), (1.0, 2.0)], [(3.0, 4.0), (4.0, 5.0)]])
+    window.view.load_lyrics(natural_sounds("あい\nうえ"), [[(0.0, 1.0), (1.0, 2.0)], [(3.0, 4.0), (4.0, 5.0)]])
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
     strip = window.sound_strip
@@ -4925,7 +4925,7 @@ def test_the_sound_strip_lays_a_row_out_once_per_refresh(window) -> None:
 
 def test_two_bars_never_land_on_each_other(window) -> None:
     raw = [[(0.0, 1.0), (1.0, 1.0), (1.0, 2.0)]]  # the middle sound has no length at all
-    window.view.load_lyrics(sound_lines("あいう"), raw, raw=raw)
+    window.view.load_lyrics(natural_sounds("あいう"), raw, raw=raw)
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
 
@@ -4938,7 +4938,7 @@ def test_two_bars_never_land_on_each_other(window) -> None:
 
 def test_a_grabbed_bar_drops_back_to_its_true_time(window) -> None:
     raw = [[(0.0, 1.0), (1.0, 1.0), (1.0, 2.0)]]  # the middle sound has no length
-    window.view.load_lyrics(sound_lines("あいう"), raw, raw=raw)
+    window.view.load_lyrics(natural_sounds("あいう"), raw, raw=raw)
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
     strip = window.sound_strip
@@ -5092,7 +5092,7 @@ def test_the_overlapping_blocks_of_a_shared_note_draw_no_edge_between_them(windo
     text = "あい"
     window.transport.bpm.setValue(60.0)
     window.view.load_lyrics(
-        sound_lines(text),
+        natural_sounds(text),
         [[(0.0, 2.0), (1.0, 2.0)]],
         raw=[[(0.0, 1.5), (1.5, 2.0)]],
         zero=[[False, False]],
@@ -5444,7 +5444,7 @@ def test_the_aligned_times_are_kept_in_the_project(own_window, tmp_path) -> None
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = None
     own_window._watch_lyrics()
-    own_window.view.set_lyrics(sound_lines("あい\n"), [[(0.0, 1.0), (1.0, 2.0)]])
+    own_window.view.set_lyrics(natural_sounds("あい\n"), [[(0.0, 1.0), (1.0, 2.0)]])
     own_window._lyric_key = text_key("あい\n")
     own_window._lyric_model = "mms"
 
@@ -5583,7 +5583,7 @@ def test_the_aligner_logs_a_download_a_tenth_at_a_time(qt_app) -> None:
 
 
 def test_the_aligner_reports_the_lines_it_doubts() -> None:
-    lines = sound_lines("あい\n")
+    lines = natural_sounds("あい\n")
     found = align.AlignedSegment(0.0, 2.0, (align.Token("a"), align.Token("i")))
     flagged, reported = Aligner._problems(found, lines)
     assert flagged == [True]
@@ -5703,7 +5703,7 @@ def test_exporting_is_not_gated_on_the_lyrics(own_window, monkeypatch, tmp_path)
     own_window.transport.bpm.setValue(60.0)  # a beat is a second, so notes read in seconds
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 2.0, 0),))  # one note where two sounds need two
-    own_window.view.set_lyrics(sound_lines("あん\n"), [[(0.0, 1.0), (1.0, 2.0)]])
+    own_window.view.set_lyrics(natural_sounds("あん\n"), [[(0.0, 1.0), (1.0, 2.0)]])
     own_window._lyric_key = text_key("あん\n")
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "out"), "MIDI"))
 
@@ -5718,7 +5718,7 @@ def test_exporting_leaves_the_krc_alone(own_window, monkeypatch, tmp_path) -> No
     own_window.transport.bpm.setValue(60.0)
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 1.0, 0), (64, 2.0, 1.0, 0)))
-    own_window.view.set_lyrics(sound_lines("あん\n"), [[(0.0, 1.0), (1.0, 3.0)]])
+    own_window.view.set_lyrics(natural_sounds("あん\n"), [[(0.0, 1.0), (1.0, 3.0)]])
     own_window._lyric_key = text_key("あん\n")
     monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "out"), "MIDI"))
 

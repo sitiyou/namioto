@@ -28,7 +28,7 @@ from namioto.ui import theme
 from namioto.ui.viewport import ViewportStrip
 
 if TYPE_CHECKING:
-    from namioto.karaoke.timeline import Sound
+    from namioto.karaoke.sounds import Sound
     from namioto.ui.roll import PianoRollView
 
 SOUND_HEIGHT = 44

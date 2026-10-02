@@ -15,6 +15,7 @@ reads, and the whole line's tokens are the token stream the aligner is given. Qt
 from __future__ import annotations
 
 import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from namioto.karaoke.model import LATIN, Group, KrcError, Line, Unit
@@ -102,6 +103,36 @@ def natural_sounds(text: str) -> list[SoundLine]:
 def natural_tokens(lines: list[SoundLine]) -> list[str]:
     """The token stream the aligner reads: every line's Sounds, in order, one token each."""
     return [sound.token for line in lines for sound in line.sounds]
+
+
+def split_tokens(tokens: Sequence, lines: list[SoundLine]) -> list[list[tuple[float | None, float | None]]]:
+    """The aligner's flat tokens, one per Sound in order, cut back into the lines' rows."""
+    rows = []
+    at = 0
+    for line in lines:
+        row = tokens[at : at + len(line.sounds)]
+        rows.append([(token.start, token.end) for token in row])
+        at += len(row)
+    return rows
+
+
+def contiguous(
+    times: Sequence[Sequence[tuple[float | None, float | None]]],
+) -> list[list[tuple[float | None, float | None]]]:
+    """Every Sound's end taken from the next Sound's start: the aligner's own end is dropped.
+
+    The strip reads a line as a chain of onsets - each `|` marks where a Sound begins and the Sound
+    ends where the next begins - so only the starts carry the timing and a Sound's own end says
+    nothing. The last Sound of a line keeps the end it came with, since no `|` follows it.
+    """
+    rows = []
+    for row in times:
+        spans = [list(span) for span in row]
+        for index in range(len(spans) - 1):
+            if spans[index][0] is not None and spans[index + 1][0] is not None:
+                spans[index][1] = spans[index + 1][0]
+        rows.append([tuple(span) for span in spans])
+    return rows
 
 
 def _line_sounds(line: Line, line_index: int, chapter_index: int) -> SoundLine:

@@ -46,7 +46,7 @@ from namioto.channels import Channel, free_channel
 from namioto.document import MIN_DURATION, PITCH_COUNT, PITCH_MAX, PITCH_MIN, Document, Note
 from namioto.i18n import tr
 from namioto.interaction import Interaction, Tool
-from namioto.karaoke.timeline import SoundLine, contiguous
+from namioto.karaoke.sounds import SoundLine, contiguous
 from namioto.ui import theme
 from namioto.ui.blocks import CLICK_SLOP_PX, Press, block_part
 from namioto.ui.spectrogram import SpectrumImage

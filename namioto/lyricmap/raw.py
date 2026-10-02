@@ -37,6 +37,31 @@ def chain(raw: Sequence[Sequence[Raw]]) -> list[list[Raw]]:
     return rows
 
 
+def snap_to_beats(
+    times: Sequence[Sequence[tuple[float | None, float | None]]], bpm: float, division: float = 1.0, offset: float = 0.0
+) -> list[list[tuple[float | None, float | None]]]:
+    """Every Sound's start and end rounded to the grid of `division` beats at `bpm` off `offset`.
+
+    The grid is the one that is drawn: `offset` is the editor's slid grid, 0 the absolute beats. A
+    Sound rounds on its own, so one whose two ends land in the same cell comes back with no length -
+    a Sound nothing is sung on - rather than pushing the rest of its line one cell per collision off
+    the beat. A line with an unaligned Sound is left alone, since its boundaries say nothing yet.
+    """
+    step = 60.0 / max(bpm, 1.0) * division
+    rows = []
+    for row in times:
+        if any(start is None or end is None for start, end in row):
+            rows.append([tuple(span) for span in row])
+            continue
+        snapped = []
+        for start, end in row:
+            start = offset + round((start - offset) / step) * step
+            end = offset + round((end - offset) / step) * step
+            snapped.append((start, max(start, end)))
+        rows.append(snapped)
+    return rows
+
+
 def validate(lines: Sequence[SoundLine], raw: Sequence[Sequence[Raw]]) -> None:
     """Refuse a mapping whose evidence is missing, reversed or out of order.
 

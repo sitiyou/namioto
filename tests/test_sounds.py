@@ -165,3 +165,21 @@ def test_the_tokens_are_the_folded_readings(text):
     lines = natural_sounds(text)
     kana = "".join(sound.reading for line in lines for sound in line.sounds)
     assert "".join(natural_tokens(lines)) == "".join(kana_tokens(kana))
+
+
+def test_contiguous_chains_a_line_of_onsets():
+    from namioto.karaoke.sounds import contiguous
+
+    assert contiguous([[(0.0, 9.0), (1.0, 9.0), (2.0, 9.0)]]) == [[(0.0, 1.0), (1.0, 2.0), (2.0, 9.0)]]
+
+
+def test_split_tokens_cuts_the_aligner_stream_into_lines():
+    from namioto.karaoke.sounds import split_tokens
+
+    class _Token:
+        def __init__(self, start, end):
+            self.start, self.end = start, end
+
+    lines = natural_sounds("あい\nう")
+    tokens = [_Token(0.0, 1.0), _Token(1.0, 2.0), _Token(2.0, 3.0)]
+    assert split_tokens(tokens, lines) == [[(0.0, 1.0), (1.0, 2.0)], [(2.0, 3.0)]]

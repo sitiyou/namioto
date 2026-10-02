@@ -11,8 +11,8 @@ walk that table, and `_seeding` keeps an apply's quiet writes from counting as u
 is the document: opening audio needs one (the sibling `.nto` when there is one, else a name from the
 chooser), a MIDI is imported into the project already open and never on its own, and the Open dialog
 offers its filter only inside a project; switching documents goes through `_confirm_discard` first.
-The Export button is a menu: MIDI, the lyrics as a `.krc` with the mapping folded in
-(`karaoke.export_krc`), or a karaoke subtitle as `.ass` (`karaoke.generate_ass`).
+The Export button is a menu: MIDI, the lyrics as a canonical `.krc` (`karaoke.rebuild`, gated by
+`lyricmap.verify`), or a karaoke subtitle as `.ass` (`karaoke.generate_ass`).
 
 Dirty state covers notes, channels, tempo, audio and the lyric times, and is asked about only once
 the document has a file name. `general.auto_save` (off by default) writes the open project once an
@@ -55,11 +55,12 @@ from namioto.analysis.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
 from namioto.channels import set_field as channel_set_field
-from namioto.karaoke import AssSettings, KrcError, generate_ass, snap_to_beats, text_key
+from namioto.karaoke import AssSettings, KrcError, generate_ass
 from namioto.karaoke.operations import Drop, Match, Merge, SoundRef
 from namioto.karaoke.sounds import natural_sounds
-from namioto.lyricmap import Raw, sound_spans, verify
+from namioto.lyricmap import Raw, snap_to_beats, sound_spans, verify
 from namioto.lyricmap.notes import TimedNote, resolve
+from namioto.lyrics import text_key
 from namioto.playback import note_frequency
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner

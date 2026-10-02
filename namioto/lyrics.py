@@ -18,6 +18,7 @@ built-in `DEFAULT_PROMPT` is the one here.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -60,6 +61,11 @@ DEFAULT_PROMPT = """请你为输入的歌词中的汉字进行注音标注，规
 现在请对以下歌词进行注音标注："""
 
 _FENCE = re.compile(r"```[^\n]*\n(?P<body>.*?)\n?```", re.DOTALL)
+
+
+def text_key(text: str) -> str:
+    """A short key for a `.krc` text, so the times stored beside it can tell when it changed."""
+    return hashlib.sha1(text.encode("utf-8")).hexdigest()[:16]
 
 
 def path_for(project: str | Path) -> Path:

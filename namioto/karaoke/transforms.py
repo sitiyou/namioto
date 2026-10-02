@@ -4,7 +4,7 @@
 A pass returns a new model and leaves its argument alone, so the caller decides whether to use it.
 `merge_words` is the normalization pass: it folds each run of kanji, or of Latin letters, into a
 `Group`, and recurses into rubies, which is the "auto `()`" the syntax would otherwise have to spell
-out. `flatten_ruby` expands a ruby into one unit per mora, the shape the timeline reads.
+out. `flatten_ruby` expands a ruby into one unit per mora, for a reader that wants one unit a mora.
 """
 
 from __future__ import annotations

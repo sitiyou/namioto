@@ -3,33 +3,24 @@
 
 `model.py` holds the tree (`Word`/`Ruby`/`Line`/`Chapter`/`Lyrics`), `parser.parse` reads a `.krc`
 into it, `writer.dumps` writes an edited tree back out, `transforms` holds the optional passes over
-one, and `timeline` turns a parsed lyric into the sounds the editor draws and the aligner times,
-and `ass` writes the subtitle those sounds time. The whole package is Qt-free; the names it
-re-exports are its public surface.
+one, `sounds.py` reads a lyric as its natural Sounds, `canonical.py` rebuilds a `.krc` from a
+mapping, `operations.py` holds the mapping's operations, and `ass` writes the subtitle those Sounds
+time. The whole package is Qt-free; the names it re-exports are its public surface.
 """
 
 from namioto.karaoke.ass import AssSettings, generate_ass
+from namioto.karaoke.canonical import rebuild
 from namioto.karaoke.model import Chapter, Group, KrcError, Line, Lyrics, Ruby, Unit, Word
+from namioto.karaoke.operations import Drop, Match, Merge, Operation, SoundRef
 from namioto.karaoke.parser import parse
-from namioto.karaoke.timeline import (
-    Placement,
+from namioto.karaoke.sounds import (
+    Container,
     Sound,
     SoundLine,
-    align_tokens,
-    assign_by_order,
-    conflicts,
     contiguous,
-    export_krc,
-    group_sounds,
-    map_faithful,
-    map_sounds,
-    note_counts,
-    snap_to_beats,
-    sound_lines,
-    sound_ok,
-    split,
-    text_key,
-    with_counts,
+    natural_sounds,
+    natural_tokens,
+    split_tokens,
 )
 from namioto.karaoke.transforms import flatten_ruby, merge_words
 from namioto.karaoke.writer import dumps
@@ -37,34 +28,29 @@ from namioto.karaoke.writer import dumps
 __all__ = [
     "AssSettings",
     "Chapter",
+    "Container",
+    "Drop",
     "Group",
     "KrcError",
     "Line",
     "Lyrics",
+    "Match",
+    "Merge",
+    "Operation",
+    "Ruby",
     "Sound",
     "SoundLine",
-    "Placement",
-    "Ruby",
+    "SoundRef",
     "Unit",
     "Word",
-    "align_tokens",
-    "assign_by_order",
-    "conflicts",
     "contiguous",
     "dumps",
-    "export_krc",
     "flatten_ruby",
     "generate_ass",
-    "group_sounds",
-    "map_faithful",
-    "map_sounds",
     "merge_words",
-    "sound_lines",
-    "sound_ok",
-    "note_counts",
+    "natural_sounds",
+    "natural_tokens",
     "parse",
-    "snap_to_beats",
-    "split",
-    "text_key",
-    "with_counts",
+    "rebuild",
+    "split_tokens",
 ]
