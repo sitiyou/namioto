@@ -27,10 +27,10 @@ def test_a_well_fitted_operation_is_not_low():
     assert readings[0].quality == 0.9
 
 
-def test_a_missing_aligner_score_lowers_confidence():
+def test_an_unknown_aligner_score_is_neither_high_nor_low():
     _lines, _operations, readings = _readings("あ", [[Raw(0.0, 1.0, None)]], _notes((0.0, 1.0)))
-    assert readings[0].quality == 0.0
-    assert readings[0].low and readings[0].code == "low_confidence_match"
+    assert readings[0].quality == QUALITY
+    assert not readings[0].low
 
 
 def test_a_flagged_line_lowers_confidence():

@@ -27,7 +27,7 @@ import contextlib
 import os
 import sys
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
 from typing import Any
@@ -55,7 +55,11 @@ from namioto.analysis.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
 from namioto.channels import set_field as channel_set_field
-from namioto.karaoke import AssSettings, KrcError, export_krc, generate_ass, snap_to_beats, sound_lines, text_key
+from namioto.karaoke import AssSettings, KrcError, generate_ass, snap_to_beats, text_key
+from namioto.karaoke.operations import Drop, Match, Merge, SoundRef
+from namioto.karaoke.sounds import natural_sounds
+from namioto.lyricmap import Raw, sound_spans, verify
+from namioto.lyricmap.notes import TimedNote, resolve
 from namioto.playback import note_frequency
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner
@@ -118,6 +122,11 @@ def _lyrics_filter() -> str:
 
 def _ass_filter() -> str:
     return i18n.tr("ASS subtitle (*.ass)")
+
+
+def _holds(operation, spots) -> bool:
+    """Whether an operation owns any of the `(line, index)` spots."""
+    return any((ref.line, ref.index) == spot for spot in spots for ref in operation.sounds)
 
 
 _translators: list[QTranslator] = []
@@ -229,7 +238,13 @@ class MainWindow(QMainWindow):
         self._lyric_mode = "edit"
         self._lyric_key = ""
         self._lyric_model = ""
+        self._lyric_channel = 0
+        self._lyric_channel_chosen = False
         self._lyric_flags: tuple[bool, ...] = ()
+        self._lyric_scores = None
+        self._lyric_problems = None
+        self._lyric_filtered: tuple = ()
+        self._lyric_readings: tuple = ()
         self._lyric_error = ""
         self._auto_align_thread: Aligner | None = None
         self._auto_align_key = ""
@@ -256,6 +271,7 @@ class MainWindow(QMainWindow):
         self.ruler = TimelineRuler(self.view)
         self.sound_strip = SoundStrip(self.view)
         self.sound_strip.setVisible(False)
+        self.sound_strip.lyric_action_requested.connect(self._on_lyric_action)
         self.keyboard = PianoKeyboard(self.view)
         self.player, self.player_name = self._make_player()
         self._current_player_key = self._player_key()
@@ -348,6 +364,7 @@ class MainWindow(QMainWindow):
         self.edit.transcribe_requested.connect(self._open_transcription)
         self.edit.lyrics_requested.connect(self._open_lyrics)
         self.edit.align_requested.connect(self._open_align)
+        self.edit.map_channel_requested.connect(self._map_to_channel)
         self.edit.lyric_mode_changed.connect(self._set_lyric_mode)
         self.player.finished.connect(self._on_playback_finished)
         self.song.finished.connect(self._on_playback_finished)
@@ -966,40 +983,60 @@ class MainWindow(QMainWindow):
         target = Path(path)
         if target.suffix.lower() != lyrics.SUFFIX:
             target = target.with_name(target.name + lyrics.SUFFIX)
-        text, problem = self._mapped_krc()
+        gate = self._verification()
+        if not gate.open():
+            self.statusBar().showMessage(self._gate_message(gate))
+            return False
         try:
-            lyrics.save(target, text)
+            lyrics.save(target, gate.canonical)
         except OSError as failure:
             self.statusBar().showMessage(i18n.tr("Lyrics file could not be written: {error}", error=failure))
             return False
-        if problem:
-            self.statusBar().showMessage(
-                i18n.tr(
-                    "Exported {name} — the mapping could not be written back: {error}",
-                    name=target.name,
-                    error=problem,
-                )
-            )
-        else:
-            self.statusBar().showMessage(i18n.tr("Exported {name}", name=target.name))
+        self.statusBar().showMessage(i18n.tr("Exported {name}", name=target.name))
         return True
 
-    def _mapped_krc(self) -> tuple[str, str]:
-        """The baseline `.krc` with the mapping folded in, and why it could not be, if it could not."""
+    def _verification(self, subtitle: bool = False):
+        """Run the one gate over the mapping the strip shows."""
         lines = list(self.view.lyric_lines)
-        if not lines or not self.lyrics_text:
-            return self.lyrics_text, ""
-        times = [list(row) for row in self.view.lyric_raw]
-        aligned = any(span[0] is not None for row in times for span in row)
-        try:
-            return export_krc(self.lyrics_text, lines, times, self._mapped_notes(), aligned=aligned), ""
-        except KrcError as error:
-            return self.lyrics_text, str(error)
+        raw = [list(row) for row in self.view.lyric_raw]
+        scores = self._lyric_scores or ()
+        rows = [
+            [
+                Raw(span[0], span[1], scores[index][at] if index < len(scores) and at < len(scores[index]) else None)
+                for at, span in enumerate(row)
+            ]
+            for index, row in enumerate(raw)
+        ]
+        notes = tuple(TimedNote(*note) for note in self._target_notes())
+        resolved = resolve(notes)
+        return verify(
+            self.lyrics_text,
+            lines,
+            rows,
+            resolved.stream,
+            self.view.lyric_operations,
+            filtered=resolved.filtered,
+            flagged=self._lyric_flags,
+            subtitle=subtitle,
+        )
+
+    def _gate_message(self, gate) -> str:
+        counts = gate.counts()
+        summary = ", ".join(f"{code} ×{count}" for code, count in sorted(counts.items()))
+        return i18n.tr("The mapping cannot be exported: {problems}", problems=summary)
+
+    def _derived_spans(self):
+        """The per-Sound times the mapping derives, as the subtitle reads them."""
+        lines = list(self.view.lyric_lines)
+        stream = resolve(tuple(TimedNote(*note) for note in self._target_notes())).stream
+        spans = sound_spans([len(line.sounds) for line in lines], self.view.lyric_operations, stream)
+        return [[(None, None) if span is None else (span[0], span[1]) for span in row] for row in spans]
 
     def _on_export_ass(self) -> bool:
         """Write the lyrics out as a karaoke subtitle, timed by the mapping the strip shows."""
         if not self.lyrics_text or not self.view.lyric_lines:
-            self.statusBar().showMessage(self._lyric_error or i18n.tr("There are no lyrics to export"))
+            message = self._lyric_error if self.lyrics_text else i18n.tr("There are no lyrics to export")
+            self.statusBar().showMessage(message or i18n.tr("There are no lyrics to export"))
             return False
         if not self.view.notes():
             self.statusBar().showMessage(i18n.tr("There are no notes to time the subtitle with"))
@@ -1021,8 +1058,12 @@ class MainWindow(QMainWindow):
         target = Path(path)
         if target.suffix.lower() != ".ass":
             target = target.with_name(target.name + ".ass")
+        gate = self._verification(subtitle=True)
+        if not gate.open():
+            self.statusBar().showMessage(self._gate_message(gate))
+            return False
         try:
-            text = generate_ass(self.lyrics_text, self.view.lyric_times, settings=self._ass_settings())
+            text = generate_ass(gate.canonical, self._derived_spans(), settings=self._ass_settings())
         except KrcError as error:
             self.statusBar().showMessage(i18n.tr("The subtitle could not be built: {error}", error=error))
             return False
@@ -1104,6 +1145,10 @@ class MainWindow(QMainWindow):
                 mode=self._lyric_mode,
                 lines=self.view.lyric_raw,
                 flagged=self._lyric_flags,
+                channel=self._lyric_channel,
+                scores=tuple(tuple(row) for row in (self._lyric_scores or ())),
+                problems=tuple(tuple(row) for row in (self._lyric_problems or ())),
+                operations=tuple(self.view.lyric_operations),
             )
             if self.lyrics_text
             else None
@@ -1307,6 +1352,7 @@ class MainWindow(QMainWindow):
         self.edit.lyrics.setEnabled(path is not None)
         stored = self._stored_lyrics
         self._lyric_mode = stored.mode if stored is not None else "edit"
+        self._lyric_channel_chosen = stored is not None and bool(stored.text)
         if stored is not None and stored.text:
             self.lyrics_text = stored.text
         else:
@@ -1316,6 +1362,7 @@ class MainWindow(QMainWindow):
                 lyrics.save(path, self.lyrics_text)
         self.lyrics_watcher.watch(path)
         self.edit.align.setEnabled(path is not None and self._lyric_mode == "edit")
+        self.edit.map_channel.setEnabled(path is not None and self._lyric_mode == "edit")
         self.edit.lyric_lock.setEnabled(path is not None)
         self.edit.set_lyric_mode(self._lyric_mode)
         self._load_sounds()
@@ -1332,7 +1379,7 @@ class MainWindow(QMainWindow):
         lines = []
         if text:
             try:
-                lines = sound_lines(text)
+                lines = natural_sounds(text)
             except KrcError as error:
                 self._lyric_error = str(error)
                 self.statusBar().showMessage(str(error))
@@ -1342,64 +1389,60 @@ class MainWindow(QMainWindow):
         stored = self._stored_lyrics
         if lines and stored is not None and stored.key == key and len(stored.lines) == len(lines):
             self._lyric_model = stored.model
+            self._lyric_channel = stored.channel
             raw = [list(row) for row in stored.lines]
             self._lyric_flags = stored.flagged if len(stored.flagged) == len(lines) else ()
+            self._lyric_scores = [list(row) for row in stored.scores] if len(stored.scores) == len(lines) else None
+            problems = stored.problems if len(stored.problems) == len(lines) else ()
+            self._lyric_problems = [list(row) for row in problems]
+            self.view.lyric_operations = list(stored.operations)
         else:
             raw = [[(None, None)] * len(line.sounds) for line in lines]
             self._lyric_flags = ()
+            self._lyric_scores = None
+            self._lyric_problems = None
+            self.view.lyric_operations = []
         self.view.load_lyrics(lines, raw, raw=raw)
         self._remap_lyrics(lines)
 
     def _remap_lyrics(self, lines=None) -> None:
-        """Map the open sounds onto the notes, and hand the strip the spans and doubts to draw.
-
-        The raw times the strip holds are what is mapped: without notes they are drawn as they came,
-        and without times the sounds and the notes pair one for one.
-        """
+        """Map the open sounds onto the target channel and hand the strip what to draw."""
         self._lyric_map_revision += 1
         self._lyric_map_pending = None
-        lines = list(self.view.lyric_lines if lines is None else lines)
-        times = [list(row) for row in self.view.lyric_raw]
-        if len(times) != len(lines):
-            times = [[(None, None)] * len(line.sounds) for line in lines]
-        spans, red, zero, group, raw = map_lyrics(
-            lines,
-            times,
-            self._mapped_notes(),
-            self.lyrics_text,
-            any(span[0] is not None for row in times for span in row),
-            self._lyric_mode,
-            self._lyric_flags,
-        )
-        self._apply_lyric_mapping(lines, spans, red, raw, zero, group)
+        result = map_lyrics(**self._mapping_request(self.view.lyric_lines if lines is None else lines))
+        self._apply_lyric_mapping(result)
+
+    def _mapping_request(self, lines) -> dict:
+        """Everything the mapper thread needs, snapshotted so the GUI thread may move on."""
+        lines = tuple(lines)
+        raw = [list(row) for row in self.view.lyric_raw]
+        if len(raw) != len(lines):
+            raw = [[(None, None)] * len(line.sounds) for line in lines]
+        return {
+            "text": self.lyrics_text,
+            "lines": lines,
+            "raw": raw,
+            "scores": tuple(tuple(row) for row in (self._lyric_scores or ())),
+            "flagged": tuple(self._lyric_flags),
+            "notes": tuple(self._target_notes()),
+            "mode": self._lyric_mode,
+            "anchors": tuple(operation for operation in self.view.lyric_operations if operation.confirmed),
+        }
 
     def _remap_lyrics_async(self) -> None:
         if not self.view.lyric_lines:
             self._remap_lyrics()
             return
-        lines = tuple(self.view.lyric_lines)
-        times = [list(row) for row in self.view.lyric_raw]
-        if len(times) != len(lines):
-            times = [[(None, None)] * len(line.sounds) for line in lines]
-        snapshot = (
-            lines,
-            tuple(tuple(row) for row in times),
-            tuple(self._mapped_notes()),
-            self.lyrics_text,
-            any(span[0] is not None for row in times for span in row),
-            self._lyric_mode,
-            tuple(self._lyric_flags),
-        )
         self._lyric_map_revision += 1
-        request = (self._lyric_map_revision, snapshot)
+        request = (self._lyric_map_revision, self._mapping_request(self.view.lyric_lines))
         if self._lyric_map_thread is not None:
             self._lyric_map_pending = request
             return
         self._start_lyric_mapper(request)
 
     def _start_lyric_mapper(self, request) -> None:
-        revision, (lines, times, notes, text, aligned, mode, flagged) = request
-        thread = LyricMapper(revision, lines, times, notes, text, aligned, mode, flagged, self)
+        revision, request = request
+        thread = LyricMapper(revision, request, self)
         thread.mapped.connect(self._on_lyric_mapping)
         thread.failed.connect(self._on_lyric_mapping_failed)
         thread.finished.connect(partial(self._on_lyric_mapper_finished, thread))
@@ -1408,10 +1451,10 @@ class MainWindow(QMainWindow):
         thread.start()
 
     def _on_lyric_mapping(self, result) -> None:
-        revision, lines, spans, red, times, zero, group = result
+        revision, mapping = result
         if revision != self._lyric_map_revision:
             return
-        self._apply_lyric_mapping(lines, spans, red, times, zero, group)
+        self._apply_lyric_mapping(mapping)
 
     def _on_lyric_mapping_failed(self, message: str) -> None:
         self.statusBar().showMessage(message)
@@ -1425,26 +1468,31 @@ class MainWindow(QMainWindow):
         if request is not None:
             self._start_lyric_mapper(request)
 
-    def _apply_lyric_mapping(self, lines, spans, red, times, zero, group) -> None:
+    def _apply_lyric_mapping(self, result) -> None:
+        self._lyric_error = result.error
+        self._lyric_filtered = result.filtered
+        self._lyric_readings = result.readings
         self.view.load_lyrics(
-            lines,
-            spans,
-            red,
-            raw=[list(row) for row in times],
-            zero=zero,
-            group=group,
+            result.lines,
+            result.spans,
+            result.red,
+            raw=[list(row) for row in result.raw],
+            zero=result.zero,
+            group=result.group,
             editable=self._lyric_mode != "read",
+            operations=result.operations if not result.error else None,
         )
-        self.sound_strip.setVisible(any(span[0] is not None for row in times for span in row))
+        self.sound_strip.setVisible(any(span[0] is not None for row in result.raw for span in row))
+        self.view.set_filtered_notes(note.id for note in result.filtered)
 
-    def _mapped_notes(self) -> list[tuple[float, float]]:
-        """The notes of the mapped MIDI channel, in time order; the lyrics map to channel 1 for now."""
+    def _target_notes(self) -> list[tuple[float, float, int, int]]:
+        """The target channel's notes in seconds, ordered by time then pitch then stable id."""
         found = [
-            (self.view.to_seconds(note.start), self.view.to_seconds(note.end))
+            (self.view.to_seconds(note.start), self.view.to_seconds(note.end), note.pitch, note.id)
             for note in self.view.notes()
-            if note.channel == 0
+            if note.channel == self._lyric_channel
         ]
-        return sorted(found)
+        return sorted(found, key=lambda note: (note[0], note[1], note[2], note[3]))
 
     def _open_lyrics(self) -> None:
         """Read a text into a `.krc` with a model, or by pasting what a web model answered."""
@@ -1462,6 +1510,7 @@ class MainWindow(QMainWindow):
             return
         self._lyric_mode = mode
         self.edit.align.setEnabled(self.lyrics_path() is not None and mode == "edit")
+        self.edit.map_channel.setEnabled(self.lyrics_path() is not None and mode == "edit")
         self._mark_dirty()
         self._remap_lyrics_async()
 
@@ -1481,7 +1530,7 @@ class MainWindow(QMainWindow):
             return  # our own save, or a change to another file in the project's folder
         if text:
             try:
-                sound_lines(text)
+                natural_sounds(text)
             except KrcError as error:
                 # keep the open lyrics: a broken file is the user's to fix where it lives
                 self._lyric_error = str(error)
@@ -1574,6 +1623,9 @@ class MainWindow(QMainWindow):
         lines = self.view.lyric_lines
         if not lines or len(times) != len(lines):
             return
+        if not self._lyric_channel_chosen:
+            self._lyric_channel = self.view.active_channel
+            self._lyric_channel_chosen = True
         self._lyric_key = text_key(self.lyrics_text)
         self._lyric_model = model
         self._lyric_flags = tuple(flagged) if len(flagged) == len(lines) else ()
@@ -1582,6 +1634,87 @@ class MainWindow(QMainWindow):
         self._remap_lyrics(lines)
         self._mark_dirty()
         self.statusBar().showMessage(i18n.tr("Aligned {lines} lines", lines=len(lines)))
+
+    def _map_to_channel(self) -> None:
+        """Map the lyrics to the channel the roll is on now; the old channel's anchors are dropped."""
+        if self._lyric_mode != "edit":
+            self.statusBar().showMessage(i18n.tr("Mapping the lyrics needs edit mode"))
+            return
+        channel = self.view.active_channel
+        if channel == self._lyric_channel and self.view.lyric_operations:
+            return
+        self._lyric_channel = channel
+        self._lyric_channel_chosen = True
+        self.view.lyric_operations = []  # anchors naming another channel's notes no longer hold
+        self._mark_dirty()
+        self._remap_lyrics_async()
+
+    def _on_lyric_action(self, kind: str, line: int, index: int) -> None:
+        """A Sound's context menu: one gesture, one undo step, one remap of the rest."""
+        if self._lyric_mode != "edit":
+            return
+        spots = [(line, index)]
+        if kind == "drop":
+            self._edit_lyric("Drop sound", Drop(SoundRef(line, index), confirmed=True), spots)
+        elif kind == "keep":
+            self._edit_lyric("Keep sound", None, spots, release=Drop)
+        elif kind == "merge":
+            self._merge_with_previous(line, index)
+        elif kind == "dissolve":
+            self._edit_lyric("Dissolve merge", None, spots, release=Merge)
+        elif kind == "confirm":
+            self._confirm_operation(line, index)
+
+    def _operation_at(self, line: int, index: int):
+        for operation in self.view.lyric_operations:
+            if any(ref.line == line and ref.index == index for ref in operation.sounds):
+                return operation
+        return None
+
+    def _first_note(self, line: int, index: int) -> int | None:
+        operation = self._operation_at(line, index)
+        if isinstance(operation, Match):
+            return operation.notes[0]
+        if isinstance(operation, Merge):
+            return operation.note
+        return None
+
+    def _merge_with_previous(self, line: int, index: int) -> None:
+        if index == 0:
+            return
+        note = self._first_note(line, index - 1)
+        if note is None:
+            return
+        anchor = Merge((SoundRef(line, index - 1), SoundRef(line, index)), note, confirmed=True)
+        self._edit_lyric("Merge sounds", anchor, [(line, index - 1), (line, index)])
+
+    def _confirm_operation(self, line: int, index: int) -> None:
+        operation = self._operation_at(line, index)
+        if operation is None or operation.confirmed:
+            return
+        self._edit_lyric("Confirm mapping", replace(operation, confirmed=True), [(line, index)])
+
+    def _edit_lyric(self, text: str, anchor, spots, *, release=None) -> None:
+        """Release the confirmed anchors over `spots`, add `anchor`, and re-solve everything else.
+
+        Only confirmed operations are released - the suggested ones are recomputed anyway - and a
+        `release` type keeps an anchor of another type (a merge standing while a drop is set).
+        """
+        with self.view.lyric_edit(i18n.tr(text)):
+            surviving = [
+                operation
+                for operation in self.view.lyric_operations
+                if not (
+                    operation.confirmed
+                    and (release is None or isinstance(operation, release))
+                    and _holds(operation, spots)
+                )
+            ]
+            if anchor is not None:
+                surviving.append(anchor)
+            self.view.lyric_operations = surviving
+            self._remap_lyrics()
+            self._mark_dirty()
 
     def _open_audio(self, target: Path | None) -> str:
         """Load the audio a project names, or say why there is none: its notes are worth having either way."""

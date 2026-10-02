@@ -95,7 +95,8 @@ def _quality(operation: Operation, rows: Sequence[Sequence[Raw]], flagged: Seque
     scores = [rows[ref.line][ref.index].score for ref in operation.sounds]
     known = [score for score in scores if score is not None]
     if not known:
-        return 0.0
+        # no score at all is an unknown alignment, not a doubted one: it neither passes nor fails
+        return QUALITY
     value = min(known)
     return value * 0.5 if len(known) < len(scores) else value
 

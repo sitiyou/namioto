@@ -13,9 +13,18 @@ from __future__ import annotations
 
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
-from typing import Protocol
+from typing import NamedTuple, Protocol
 
 from namioto.document import OVERLAP_SLACK
+
+
+class TimedNote(NamedTuple):
+    """A target-channel note where the mapping reads it: seconds, pitch and stable id."""
+
+    start: float
+    end: float
+    pitch: int
+    id: int
 
 
 class Note(Protocol):

@@ -20,8 +20,9 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QPointF, QRect, QRectF, Qt
-from PyQt6.QtGui import QColor, QFont, QPainter, QPen
+from PyQt6.QtCore import QPointF, QRect, QRectF, Qt, pyqtSignal
+from PyQt6.QtGui import QAction, QColor, QFont, QPainter, QPen
+from PyQt6.QtWidgets import QMenu
 
 from namioto.ui import theme
 from namioto.ui.viewport import ViewportStrip
@@ -51,6 +52,8 @@ class SoundStrip(ViewportStrip):
     the raw aligned times, unless the view is read-only. A label is drawn only when it fits - a
     rubied one drops the base in its brackets first - so it never runs under the next `|`.
     """
+
+    lyric_action_requested = pyqtSignal(str, int, int)
 
     def __init__(self, view: PianoRollView):
         super().__init__(view)
@@ -193,6 +196,30 @@ class SoundStrip(ViewportStrip):
         self._set_cursor(None)
         super().leaveEvent(event)
 
+    def contextMenuEvent(self, event) -> None:
+        """A Sound's own menu: drop it, merge it, dissolve its merge or confirm its operation."""
+        if not self.view.lyric_editable:
+            return
+        found = self._sound_at(event.pos().x())
+        if found is None:
+            return
+        row, column = found
+        menu = QMenu(self)
+        actions = (
+            ("drop", "Drop this sound"),
+            ("keep", "Keep this sound"),
+            ("merge", "Merge with the sound before it"),
+            ("dissolve", "Dissolve its merge"),
+            ("confirm", "Confirm its operation"),
+        )
+        for kind, label in actions:
+            action = QAction(label, menu)
+            action.triggered.connect(
+                lambda _checked=False, name=kind: self.lyric_action_requested.emit(name, row, column)
+            )
+            menu.addAction(action)
+        menu.exec(event.globalPos())
+
     def wheelEvent(self, event) -> None:
         hbar = self.view.horizontalScrollBar()
         hbar.setValue(hbar.value() - event.angleDelta().y())
@@ -255,8 +282,8 @@ class SoundStrip(ViewportStrip):
             return ""
         if metrics.horizontalAdvance(sound.label) <= room:
             return sound.label
-        if sound.rubied and metrics.horizontalAdvance(sound.ruby) <= room:
-            return sound.ruby
+        if sound.rubied and metrics.horizontalAdvance(sound.reading) <= room:
+            return sound.reading
         return ""
 
     def _boundary_seconds(self, spans, index: int) -> float | None:

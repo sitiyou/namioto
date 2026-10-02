@@ -109,10 +109,11 @@ class _RollState:
     active_channel: int
     lyrics: tuple = ()
     lyric_raw: tuple = ()
+    lyric_operations: tuple = ()
 
 
 def _state_data(state: _RollState) -> tuple:
-    return (state.channels, state.notes, state.lyric_raw)
+    return (state.channels, state.notes, state.lyric_raw, state.lyric_operations)
 
 
 class _RollEdit(QUndoCommand):
@@ -149,6 +150,7 @@ class NoteItem(QGraphicsRectItem):
     def __init__(self, note: Note):
         super().__init__()
         self.note = note
+        self.filtered = False
         self.fill, self.edge_light, self.edge_dark = theme.note_shades(QColor(theme.NOTE_PALETTE[0]))
         self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
@@ -214,6 +216,10 @@ class NoteItem(QGraphicsRectItem):
         painter.setPen(QPen(dark, 0))
         painter.drawLine(QPointF(left - px / 2, bottom), QPointF(right + px / 2, bottom))
         painter.drawLine(QPointF(right, top - py / 2), QPointF(right, bottom + py / 2))
+        if self.filtered:
+            painter.setPen(QPen(QColor(theme.LYRIC_BAD), max(1.0, 2 * px)))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(rect)
         painter.restore()
 
 
@@ -326,6 +332,7 @@ class PianoRollView(QGraphicsView):
         self._lyric_zero: tuple[tuple[bool, ...], ...] = ()
         self._lyric_group: tuple[tuple[int, ...], ...] = ()
         self._lyric_raw: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
+        self._lyric_operations: tuple = ()
         self._lyric_editable = True
 
         self.setRenderHint(QPainter.RenderHint.Antialiasing, True)
@@ -453,12 +460,29 @@ class PianoRollView(QGraphicsView):
         """Whether the strip may drag its raw times; off while the `.krc` itself lays them out."""
         return self._lyric_editable
 
+    @property
+    def lyric_operations(self) -> tuple:
+        """The mapping's operations, kept with the undo state so an edit is one step."""
+        return self._lyric_operations
+
+    @lyric_operations.setter
+    def lyric_operations(self, operations) -> None:
+        self._lyric_operations = tuple(operations or ())
+
+    @contextmanager
+    def lyric_edit(self, text: str):
+        """One user edit of the lyrics as one undo step, the way a note edit is recorded."""
+        with self._edit(text):
+            yield
+
     def set_lyrics(self, lines, times) -> None:
         """Take a whole aligned `.krc` over: every line's sounds and their times, as one step."""
         with self._edit("Align lyrics"):
             self.load_lyrics(lines, times)
 
-    def load_lyrics(self, lines, times, red=None, raw=None, zero=None, group=None, editable=True) -> None:
+    def load_lyrics(
+        self, lines, times, red=None, raw=None, zero=None, group=None, editable=True, operations=None
+    ) -> None:
         """The lyrics a `.krc` or a project brings in, with no undo step of their own.
 
         `times` are the spans the mapping draws, `raw` the aligned times it was made from and the
@@ -469,6 +493,8 @@ class PianoRollView(QGraphicsView):
         """
         self._lines = tuple(lines)
         self._lyric_editable = bool(editable)
+        if operations is not None:
+            self._lyric_operations = tuple(operations)
         self._lyric_times = tuple(tuple(span) for span in times)
         self._lyric_raw = tuple(tuple(span) for span in contiguous(times if raw is None else raw))
         self._lyric_red = (
@@ -516,6 +542,16 @@ class PianoRollView(QGraphicsView):
         if boundary < len(spans):
             spans[boundary] = (value, spans[boundary][1])
         self._lyric_raw = self._lyric_raw[:row] + (tuple(contiguous([spans])[0]),) + self._lyric_raw[row + 1 :]
+        touched = {boundary - 1, boundary} & set(range(len(spans)))
+        if touched and any(operation.confirmed for operation in self._lyric_operations):
+            # a confirmed operation over a Sound whose raw time just moved no longer holds
+            self._lyric_operations = tuple(
+                operation
+                for operation in self._lyric_operations
+                if not (
+                    operation.confirmed and any(ref.line == row and ref.index in touched for ref in operation.sounds)
+                )
+            )
         self.lyrics_changed.emit()
         return True
 
@@ -524,6 +560,13 @@ class PianoRollView(QGraphicsView):
 
     def notes(self) -> list[NoteItem]:
         return list(self._items)
+
+    def set_filtered_notes(self, ids) -> None:
+        """Mark the target channel's notes a conflict kept out of the preview stream."""
+        wanted = set(ids)
+        for item in self._items:
+            item.filtered = item.id in wanted
+            item.update()
 
     def _add_item(self, note: Note) -> NoteItem:
         item = NoteItem(note)
@@ -566,6 +609,7 @@ class PianoRollView(QGraphicsView):
             active_channel=self.active_channel,
             lyrics=self._lines,
             lyric_raw=self._lyric_raw,
+            lyric_operations=self._lyric_operations,
         )
 
     def _push(self, before: _RollState, after: _RollState, text: str) -> bool:
@@ -641,6 +685,7 @@ class PianoRollView(QGraphicsView):
         try:
             self._lines = state.lyrics
             self._lyric_raw = state.lyric_raw
+            self._lyric_operations = state.lyric_operations
             self.set_notes(
                 (pitch, self.to_beats(start), self.to_beats(duration), channel)
                 for pitch, start, duration, channel in state.notes

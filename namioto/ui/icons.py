@@ -45,6 +45,7 @@ GLYPHS = {
     "transcribe": "mdi.auto-fix",
     "lyrics": "mdi.text-box-outline",
     "align": "mdi.timeline-clock",
+    "map": "mdi.arrow-decision-outline",
     "channels": "mdi.layers",
     "lock": "mdi.lock",
     "unlock": "mdi.lock-open-variant",

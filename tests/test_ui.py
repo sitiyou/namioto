@@ -53,6 +53,8 @@ from namioto.analysis.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.channels import Channel
 from namioto.interaction import Interaction, Tool
 from namioto.karaoke import sound_lines, text_key
+from namioto.karaoke.operations import Drop, Merge
+from namioto.karaoke.sounds import natural_sounds
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner
 from namioto.ui.app import MainWindow, TempoLoader
@@ -4782,10 +4784,12 @@ def test_the_export_button_writes_a_midi_file(own_window, monkeypatch, tmp_path)
 
 
 def test_the_export_button_writes_an_ass_subtitle(own_window, monkeypatch, tmp_path) -> None:
+    own_window.transport.bpm.setValue(60.0)
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 1.0, 0)))
-    own_window.lyrics_text = "あい"
-    own_window._load_sounds()
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), lines=(((0.0, 1.0), (1.0, 2.0)),))
+    own_window._watch_lyrics()
     monkeypatch.setattr(
         QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "exported"), "ASS subtitle (*.ass)")
     )
@@ -4795,7 +4799,7 @@ def test_the_export_button_writes_an_ass_subtitle(own_window, monkeypatch, tmp_p
     text = target.read_text(encoding="utf-8")
     assert "[Script Info]" in text
     assert "Dialogue: 0," in text
-    assert own_window.project_path is None
+    assert own_window.project_path == tmp_path / "song.nto"  # an export leaves the document where it was
 
 
 def test_a_subtitle_needs_lyrics_and_notes(own_window) -> None:
@@ -4960,8 +4964,8 @@ class _Metrics:
 
 def test_a_label_is_dropped_when_it_does_not_fit(window) -> None:
     strip = window.sound_strip
-    rubied = sound_lines("世界[せ,かい]")[0].sounds[0]  # label せ(世), ruby せ
-    plain = sound_lines("あい")[0].sounds[0]  # label あ
+    rubied = natural_sounds("世界[せ,かい]")[0].sounds[0]  # label せ(世), reading せ
+    plain = natural_sounds("あい")[0].sounds[0]  # label あ
 
     assert strip._fit_label(rubied, _Metrics(), 50) == "せ(世)"
     assert strip._fit_label(rubied, _Metrics(), 20) == "せ"  # the base in brackets gives way first
@@ -4969,7 +4973,7 @@ def test_a_label_is_dropped_when_it_does_not_fit(window) -> None:
     assert strip._fit_label(plain, _Metrics(), 5) == ""
 
 
-def test_without_alignment_the_sounds_take_the_notes_in_order(own_window, tmp_path) -> None:
+def test_without_alignment_the_mapping_does_not_run(own_window, tmp_path) -> None:
     (tmp_path / "song.krc").write_text("あい\n", encoding="utf-8")
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = None
@@ -4979,8 +4983,8 @@ def test_without_alignment_the_sounds_take_the_notes_in_order(own_window, tmp_pa
     own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 2.0, 1.0, 0)))
     wait_for_lyric_mapping(own_window)
 
-    assert own_window.view.lyric_times == (((0.0, 1.0), (2.0, 3.0)),)
-    assert own_window.view.lyric_red == ((False, False),)
+    assert own_window._lyric_error  # incomplete_alignment: the sounds have no times yet
+    assert own_window.view.lyric_times == (((None, None), (None, None)),)
 
 
 def test_an_alignment_puts_each_sound_on_the_note_its_time_covers(own_window, tmp_path) -> None:
@@ -4995,8 +4999,79 @@ def test_an_alignment_puts_each_sound_on_the_note_its_time_covers(own_window, tm
     own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", lines=(((0.0, 1.0), (1.0, 2.0)),))
     own_window._load_sounds()
 
-    assert own_window.view.lyric_times == (((0.0, 2.0), (0.0, 2.0)),)  # both cover the one note whole
+    assert own_window.view.lyric_times == (((0.0, 1.0), (1.0, 2.0)),)  # the merge tiles the one note
     assert own_window.view.lyric_red == ((False, False),)
+
+
+def test_mapping_the_lyrics_to_the_active_channel(own_window, tmp_path) -> None:
+    own_window.transport.bpm.setValue(60.0)
+    own_window.view.set_channels((Channel(channel=0), Channel(channel=1)))
+    own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 0.0, 1.0, 1), (64, 1.0, 1.0, 1)))
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), lines=(((0.0, 1.0), (1.0, 2.0)),))
+    own_window._watch_lyrics()
+
+    assert own_window._lyric_channel == 0  # the stored mapping names channel 0
+    assert own_window.view.lyric_times == (((0.0, 1.0), (None, None)),)  # channel 0 has one note
+
+    own_window.view.set_active_channel(1)
+    own_window._map_to_channel()
+    wait_for_lyric_mapping(own_window)
+
+    assert own_window._lyric_channel == 1
+    assert own_window.view.lyric_times == (((0.0, 1.0), (1.0, 2.0)),)  # channel 1 has two
+
+
+def _mapped_pair(own_window, tmp_path, raw=((0.0, 1.0), (1.0, 2.0))) -> None:
+    """A one-to-one mapping of あ, い onto two notes, as the context-menu tests start from."""
+    own_window.transport.bpm.setValue(60.0)
+    own_window.view.set_channels((Channel(channel=0),))
+    own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 1.0, 0)))
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), lines=(raw,))
+    own_window._watch_lyrics()
+
+
+def test_dropping_a_sound_marks_it_zero_and_keeps_the_rest(own_window, tmp_path) -> None:
+    _mapped_pair(own_window, tmp_path)
+    own_window.sound_strip.lyric_action_requested.emit("drop", 0, 1)
+
+    assert own_window.view.lyric_zero == ((False, True),)
+    assert any(
+        isinstance(operation, Drop) and operation.confirmed and operation.sound.index == 1
+        for operation in own_window.view.lyric_operations
+    )
+    assert own_window.project_dirty is True
+
+
+def test_a_lyric_edit_is_one_undo_step(own_window, tmp_path) -> None:
+    _mapped_pair(own_window, tmp_path)
+    own_window.sound_strip.lyric_action_requested.emit("drop", 0, 1)
+    assert own_window.view.lyric_zero == ((False, True),)
+
+    own_window.view.undo()
+    wait_for_lyric_mapping(own_window)
+    assert own_window.view.lyric_zero == ((False, False),)
+    assert not any(operation.confirmed for operation in own_window.view.lyric_operations)
+
+
+def test_merging_two_sounds_confirms_the_pair(own_window, tmp_path) -> None:
+    _mapped_pair(own_window, tmp_path, raw=((0.0, 0.5), (0.5, 1.0)))
+    own_window.sound_strip.lyric_action_requested.emit("merge", 0, 1)
+
+    assert any(
+        isinstance(operation, Merge) and operation.confirmed and len(operation.sounds) == 2
+        for operation in own_window.view.lyric_operations
+    )
+    assert own_window.view.lyric_times == (((0.0, 0.5), (0.5, 1.0)),)
+
+
+def test_a_merge_can_be_dissolved_again(own_window, tmp_path) -> None:
+    _mapped_pair(own_window, tmp_path, raw=((0.0, 0.5), (0.5, 1.0)))
+    own_window.sound_strip.lyric_action_requested.emit("merge", 0, 1)
+    own_window.sound_strip.lyric_action_requested.emit("dissolve", 0, 0)
+
+    assert not any(operation.confirmed for operation in own_window.view.lyric_operations)
 
 
 def test_a_grouped_run_is_marked_on_the_strip(own_window, tmp_path) -> None:
@@ -5210,21 +5285,21 @@ def test_the_lyrics_mode_is_kept_in_the_project(own_window, tmp_path) -> None:
     assert project.load(project_path).lyrics.mode == "read"
 
 
-def test_exporting_krc_writes_the_baseline_lyrics(own_window, monkeypatch, tmp_path) -> None:
+def test_exporting_krc_without_a_mapping_writes_nothing(own_window, monkeypatch, tmp_path) -> None:
     own_window.lyrics_text = "あい\n"
     monkeypatch.setattr(
         QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "exported"), "Lyrics file (*.krc)")
     )
 
-    assert own_window._on_export_krc() is True
-    assert (tmp_path / "exported.krc").read_text(encoding="utf-8") == "あい\n"
-    assert own_window.project_path is None  # an export leaves the document where it was
+    assert own_window._on_export_krc() is False
+    assert not (tmp_path / "exported.krc").exists()
+    assert own_window.project_path is None
 
 
 def test_exporting_krc_writes_the_mapping_back(own_window, monkeypatch, tmp_path) -> None:
     own_window.transport.bpm.setValue(60.0)  # a beat is a second, so notes read in seconds
     own_window.view.set_channels((Channel(channel=0),))
-    own_window.view.set_notes(((60, 0.0, 2.0, 0),))  # one note under both sounds
+    own_window.view.set_notes(((60, 0.0, 1.0, 0),))  # one note under both sounds
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(text="あい\n", key=text_key("あい\n"), lines=(((0.0, 0.5), (0.5, 1.0)),))
     own_window._watch_lyrics()
@@ -5268,13 +5343,9 @@ def test_read_mode_draws_a_dot_n_sound_where_it_holds_off(own_window, tmp_path) 
     own_window.sound_strip.setVisible(True)
     QApplication.processEvents()
 
-    strip = own_window.sound_strip
-    # the `.0` sound takes no note, so its `|` is stepped left of the sound it holds off; the sound
-    # before it keeps its boundary, so its label keeps its room
-    held = strip._boundary_x(0, 1)
-    after = strip._boundary_x(0, 2)
-    assert held is not None and after is not None
-    assert after - held == pytest.approx(SOUND_GAP_PX)
+    # the `.0` sound takes no note at all: it is marked zero and carries no block of its own
+    assert own_window.view.lyric_zero == ((False, True, False),)
+    assert own_window.sound_strip._boundary_x(0, 1) is None
 
 
 def test_read_mode_reads_a_ruby_part_by_part(own_window, tmp_path) -> None:
@@ -5540,7 +5611,7 @@ def test_saving_lyrics_lets_align_see_them_at_once(own_window, monkeypatch, tmp_
     assert own_window.view.lyric_lines == ()
 
     own_window._on_lyrics_saved("あん\n")  # the dialog wrote the file and told the window
-    assert [sound.ruby for line in own_window.view.lyric_lines for sound in line.sounds] == ["あ", "ん"]
+    assert [sound.reading for line in own_window.view.lyric_lines for sound in line.sounds] == ["あ", "ん"]
 
     opened: list = []
     monkeypatch.setattr(AlignDialog, "exec", lambda self: opened.append(self) or 0)

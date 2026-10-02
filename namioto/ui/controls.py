@@ -592,6 +592,7 @@ class EditBar(_Group):
     transcribe_requested = pyqtSignal()
     lyrics_requested = pyqtSignal()
     align_requested = pyqtSignal()
+    map_channel_requested = pyqtSignal()
     lyric_mode_changed = pyqtSignal(str)
 
     def __init__(self, snap_choices, parent=None):
@@ -641,6 +642,9 @@ class EditBar(_Group):
         self.align = icon_button("align", tr("Align lyrics: put a time on every sound with the forced aligner"))
         self.align.setEnabled(False)
         self.align.clicked.connect(self.align_requested)
+        self.map_channel = icon_button("map", tr("Map lyrics to the current channel"))
+        self.map_channel.setEnabled(False)
+        self.map_channel.clicked.connect(self.map_channel_requested)
         self.lyric_lock = icon_button("lock", "", checkable=True)
         self.lyric_lock.setEnabled(False)
         self.lyric_lock.toggled.connect(self._on_lyric_lock)
@@ -656,6 +660,7 @@ class EditBar(_Group):
         tools.add(self.transcribe)
         tools.add(self.lyrics)
         tools.add(self.align)
+        tools.add(self.map_channel)
         tools.add(separator())
         tools.add(self.lyric_lock)
 
