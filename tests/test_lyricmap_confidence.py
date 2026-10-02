@@ -45,6 +45,20 @@ def test_a_boundary_far_from_the_raw_evidence_is_low():
     assert readings[0].low
 
 
+def test_a_note_held_past_the_raw_line_end_is_not_low():
+    # the note outlasts the sung line: a held note, not a mismatch
+    _lines, _operations, readings = _readings("あ", [[Raw(0.0, 0.5, 0.9)]], _notes((0.0, 1.0)))
+    assert readings[0].fit_error == 0.0
+    assert not readings[0].low
+
+
+def test_a_note_that_ends_before_the_raw_line_end_is_low():
+    # the note stops while the lyric is still sung: a real mismatch
+    _lines, _operations, readings = _readings("あ", [[Raw(0.0, 1.0, 0.9)]], _notes((0.0, 0.4)))
+    assert readings[0].fit_error > FIT_ERROR_SECONDS
+    assert readings[0].low
+
+
 def test_a_tie_between_two_operations_is_a_low_margin():
     _lines, _operations, readings = _readings("あい", [[Raw(0.0, 0.75, 0.9), Raw(0.75, 1.0, 0.9)]], _notes((0.0, 1.0)))
     assert readings[0].margin < MARGIN_PER_SECOND

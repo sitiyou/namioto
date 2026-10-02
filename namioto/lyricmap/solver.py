@@ -117,11 +117,32 @@ def _line_end(context: _Context, index: int) -> float:
     return context.line_end[context.info[index][0]]
 
 
+def _line_end_overshoot(context: _Context, index: int, predicted_end: float) -> float:
+    """How far a line-end operation's predicted end runs past the raw end.
+
+    A note held longer than its lyric is sung, or a rest before the next line, is not the mapping's
+    trouble; only an end short of the raw line end says the lyrics and the notes disagree.
+    """
+    if not context.is_last[index]:
+        return 0.0
+    return max(0.0, predicted_end - _line_end(context, index))
+
+
+def _drop_point(context: _Context, index: int, note_at: int) -> float:
+    """The cursor boundary a dropped Sound sits on: the nearer of the taken note's end and the next start.
+
+    A drop owns no note, so neither side of the cursor is the next Sound's note in particular.
+    """
+    next_point = _boundary(context, note_at)
+    if note_at == 0:
+        return next_point
+    return min(next_point, context.notes[note_at - 1].end, key=lambda point: abs(context.raw_start[index] - point))
+
+
 def _drop_base(context: _Context, index: int, note_at: int) -> float:
-    point = _boundary(context, note_at)
-    cost = abs(context.raw_start[index] - point)
+    cost = abs(context.raw_start[index] - _drop_point(context, index, note_at))
     if context.is_last[index]:
-        cost += abs(_line_end(context, index) - point)
+        cost += abs(_line_end(context, index) - _boundary(context, note_at))
     return cost
 
 
@@ -357,10 +378,12 @@ def diagnose(
 ) -> list[tuple[float, float]]:
     """Per operation, its own fit error and its margin over the best alternative from the same state.
 
-    The margin keeps the operation's prefix and asks what the cheapest mapping from there without it
-    would cost; the completion is the unanchored backward pass, so with confirmed anchors the margin
-    of the suggested operations around them is approximate. Both numbers are in seconds; normalising
-    and judging them belongs to `confidence`.
+    The fit error is the operation's boundary error against the raw evidence, save that at a line end
+    only an end short of the raw line end counts: a note held past the sung line is normal, not a
+    mismatch. The margin keeps the operation's prefix and asks what the cheapest mapping from there
+    without it would cost; the completion is the unanchored backward pass, so with confirmed anchors
+    the margin of the suggested operations around them is approximate. Both numbers are in seconds;
+    normalising and judging them belongs to `confidence`.
     """
     rows = chain(raw)
     validate(lines, rows)
@@ -375,16 +398,20 @@ def diagnose(
         if isinstance(operation, Match):
             count = len(operation.notes)
             base = _match_base(context, sound_at, note_at, count)
+            end_at, predicted_end = sound_at, context.notes[note_at + count - 1].end
             landing = (sound_at + 1, note_at + count)
         elif isinstance(operation, Merge):
             count = len(operation.sounds)
             base = _merge_base(context, sound_at, count, note_at)
+            end_at, predicted_end = sound_at + count - 1, context.notes[note_at].end
             landing = (sound_at + count, note_at + 1)
         else:
             base = _drop_base(context, sound_at, note_at)
+            end_at, predicted_end = sound_at, _boundary(context, note_at)
             landing = (sound_at + 1, note_at)
         alternative = _alternative(context, grid, sound_at, note_at, operation)
-        found.append((base, alternative - (base + grid[landing[0]][landing[1]])))
+        fit = base - _line_end_overshoot(context, end_at, predicted_end)
+        found.append((fit, alternative - (base + grid[landing[0]][landing[1]])))
         sound_at, note_at = landing
     return found
 

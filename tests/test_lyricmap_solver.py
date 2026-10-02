@@ -47,6 +47,14 @@ def test_match_and_drop_beats_a_merge_when_the_times_disagree():
     assert [type(operation).__name__ for operation in rows[0]] == ["Match", "Drop"]
 
 
+def test_a_drop_takes_the_cursor_boundary_nearest_its_onset():
+    # B sits just past A's note across a rest: its own boundary is that note's end, not C's note start
+    lines, _operations, rows = _solve(
+        "あいか", [[Raw(0.0, 1.0), Raw(1.05, 1.2), Raw(3.0, 4.0)]], _notes((0.0, 1.0), (3.0, 4.0))
+    )
+    assert [type(operation).__name__ for operation in rows[0]] == ["Match", "Drop", "Match"]
+
+
 def test_a_drop_consumes_no_note():
     lines, _operations, rows = _solve("あい", [[Raw(0.0, 1.0), Raw(5.0, 6.0)]], _notes((0.0, 1.0)))
     assert any(isinstance(operation, Drop) for operation in rows[0])

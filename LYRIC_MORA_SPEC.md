@@ -265,8 +265,8 @@ Drop(sound)
 ```
 
 - drop 不消费 NOTE；
-- 预测点是当前尚未消费的下一条 NOTE.start；
-- 全部 NOTE 已消费时，预测点是最后一条 NOTE.end；
+- 预测点是当前 NOTE 游标的最近边界：已消费的最后一条 NOTE.end 与尚未消费的下一条 NOTE.start 中，距 Sound raw onset 绝对距离较小者；
+- 游标在流首（没有已消费 NOTE）时取尚未消费的下一条 NOTE.start，在流末（没有未消费 NOTE）时取最后一条 NOTE.end；
 - KRC 写回 `.0`；
 - drop 是常见、正常的 operation，不天然表示错误；
 - UI 显示沿用 raw onset：有 raw start 时使用它，没有时退化到第一条 NOTE.start；不画 NOTE 块。
@@ -309,7 +309,7 @@ cost = sum(abs(raw_onset - predicted_onset))
 
 - match：Sound raw onset 对第一条 NOTE.start；
 - merge：每个成员 raw onset 对该成员的等分 onset；
-- drop：Sound raw onset 对当前 NOTE 游标边界。
+- drop：Sound raw onset 对当前 NOTE 游标的**最近边界**——已消费的最后一条 NOTE.end 与尚未消费的下一条 NOTE.start 中，绝对距离较小者；游标在流首（没有已消费 NOTE）时取尚未消费的下一条 NOTE.start，在流末（没有未消费 NOTE）时取最后一条 NOTE.end。drop 没有自己的 NOTE，因此 MUST NOT 只以“下一个 Sound 将要占用的 NOTE.start”为参照。
 
 行内 raw end 已由下一个 Sound onset 派生，MUST NOT 重复计价。
 
@@ -317,7 +317,7 @@ cost = sum(abs(raw_onset - predicted_onset))
 
 - 行末 match：最后一条 NOTE.end；
 - 行末 merge：唯一 NOTE.end；
-- 行末 drop：当前 NOTE 游标边界点。
+- 行末 drop：当前 NOTE 游标边界点（尚未消费的下一条 NOTE.start，否则最后一条 NOTE.end）；end 项只与游标边界比较，与 onset 侧选取的最近边界无关。
 
 这样行间休止影响全局映射，但不会成为 NOTE 分区硬边界。
 
@@ -342,7 +342,7 @@ complexity =
 
 ### 7.4 无字符硬编码
 
-所有自然 Sound 都允许参与 `match`、合法 `merge` 和 `drop`。`っ/ッ`、`ー`、`ん` 等不得拥有硬编码禁令。语言特征可进入未来的置信度诊断，但不得产生新 operation 或破坏 KRC 语法规则。
+所有自然 Sound 都允许参与 `match`、合法 `merge` 和 `drop`。`っ/ッ`、`ー`、`ん` 等不得拥有硬编码禁令；§7.2 的 drop 最近边界规则对所有 Sound 一律适用。语言特征可进入未来的置信度诊断，但不得产生新 operation 或破坏 KRC 语法规则。
 
 ---
 
@@ -354,10 +354,12 @@ complexity =
 
 每个 suggested operation 至少检查：
 
-1. **`fit_error`**：当前 operation 的预测边界与 raw 证据的绝对误差；行末包含 end 误差；
+1. **`fit_error`**：当前 operation 的预测边界与 raw 证据的绝对误差；行末额外比较 end，但只计 **under-run**——预测 end 早于 raw line end 才算误差；预测 end 晚于 raw line end（音符延音、行尾休止）不计；
 2. **`mapping_margin`**：禁止当前 operation 后重新求最佳合法映射，计算替代方案与全局最优的代价差，并按 operation 涉及的 NOTE 时长归一化；
 3. **`alignment_quality`**：成员 token score、缺失数据和 aligner 行级 problem；
 4. **内部 rest**：match 内相邻 NOTE 的 gap 相对周围 NOTE 时长是否异常。
+
+`fit_error` 的单向行末规则只属于置信度：§7.2 的 DP 基础代价仍是对称绝对误差，映射本身不因置信度改变。
 
 没有替代方案只表示 `mapping_margin` 通过，不能掩盖很大的 `fit_error`。
 

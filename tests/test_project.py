@@ -183,7 +183,7 @@ def test_the_lyric_times_survive_a_round_trip() -> None:
         "flagged": [True],
         "problems": [],
         "operations": [],
-        "version": 1,
+        "version": project.MAPPING_VERSION,
     }
     assert project.from_dict(written).lyrics == lyrics
 
@@ -364,7 +364,7 @@ def test_a_lyric_file_without_the_new_fields_still_opens() -> None:
     opened = project.from_dict(data).lyrics
     assert opened.channel == 0
     assert opened.operations == ()
-    assert opened.version == 1
+    assert opened.version == project.MAPPING_VERSION
     assert opened.scores == ()
 
 
