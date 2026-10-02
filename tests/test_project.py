@@ -47,6 +47,7 @@ def test_only_the_values_that_belong_to_the_document_are_written() -> None:
         "audio",
         "channels",
         "notes",
+        "note_id",
         "lyrics",
         "analysis",
         "spectrum",
@@ -176,8 +177,13 @@ def test_the_lyric_times_survive_a_round_trip() -> None:
         "key": "abc",
         "model": "mms",
         "mode": "read",
+        "channel": 0,
         "lines": [[[0.0, 1.0], [None, None]]],
+        "scores": [],
         "flagged": [True],
+        "problems": [],
+        "operations": [],
+        "version": 1,
     }
     assert project.from_dict(written).lyrics == lyrics
 
@@ -294,3 +300,88 @@ def test_a_remembered_map_that_is_not_a_map_gives_the_defaults() -> None:
     assert project.default_settings(None) == project.default_settings()
     assert project.default_settings("nonsense") == project.default_settings()
     assert project.default_settings({"spectrum": "loud"}) == project.default_settings()
+
+
+def test_note_ids_and_the_next_free_id_survive_a_round_trip(tmp_path) -> None:
+    path = tmp_path / "song.nto"
+    notes = (project.Note(1.0, 1.0, 60, 0, 4), project.Note(2.0, 1.0, 62, 0, 7))
+    project.save(make(notes=notes, next_id=9), path)
+    opened = project.load(path)
+    assert opened.notes == notes
+    assert opened.next_id == 9
+
+
+def test_a_project_without_ids_leaves_them_for_the_document_to_fill() -> None:
+    data = {
+        "format": "namioto",
+        "notes": [
+            {"start": 1.0, "duration": 1.0, "pitch": 60},
+            {"start": 2.0, "duration": 1.0, "pitch": 62},
+        ],
+    }
+    opened = project.from_dict(data)
+    assert [note.id for note in opened.notes] == [0, 0]
+    assert opened.next_id == 1
+
+
+def test_a_next_id_that_would_reuse_a_taken_one_is_pushed_past_it() -> None:
+    data = {
+        "format": "namioto",
+        "note_id": 2,
+        "notes": [{"start": 1.0, "duration": 1.0, "pitch": 60, "id": 5}],
+    }
+    assert project.from_dict(data).next_id == 6
+
+
+def test_the_mapping_survives_a_round_trip(tmp_path) -> None:
+    from namioto.karaoke.operations import Match, Merge, SoundRef
+
+    lyrics = project.Lyrics(
+        text="胡椒[こ,しょう]\n",
+        key="abc",
+        channel=3,
+        lines=(((0.0, 1.0), (1.0, 2.0), (2.0, 3.0)),),
+        scores=((0.9, None, 0.8),),
+        flagged=(True,),
+        problems=(("a problem",),),
+        operations=(
+            Match(SoundRef(0, 0), (1,), confirmed=True),
+            Merge((SoundRef(0, 1), SoundRef(0, 2)), 2),
+        ),
+        version=2,
+    )
+    path = tmp_path / "song.nto"
+    project.save(make(lyrics=lyrics), path)
+    opened = project.load(path).lyrics
+    assert opened == lyrics
+
+
+def test_a_lyric_file_without_the_new_fields_still_opens() -> None:
+    data = {
+        "format": "namioto",
+        "lyrics": {"text": "あ\n", "key": "k", "lines": [[[0.0, 1.0]]]},
+    }
+    opened = project.from_dict(data).lyrics
+    assert opened.channel == 0
+    assert opened.operations == ()
+    assert opened.version == 1
+    assert opened.scores == ()
+
+
+def test_a_malformed_operation_is_left_out() -> None:
+    from namioto.karaoke.operations import Match, SoundRef
+
+    data = {
+        "format": "namioto",
+        "lyrics": {
+            "text": "あい\n",
+            "key": "k",
+            "lines": [[[0.0, 1.0], [1.0, 2.0]]],
+            "operations": [
+                {"kind": "match", "sound": [0, 0], "notes": [1], "confirmed": True},
+                {"kind": "match", "sound": [0, 1]},
+                "not an operation",
+            ],
+        },
+    }
+    assert project.from_dict(data).lyrics.operations == (Match(SoundRef(0, 0), (1,), confirmed=True),)

@@ -34,19 +34,22 @@ class Note:
     """One note, in beats (the roll's scene unit) and semitone rows.
 
     Identity is the note itself, not its fields: two notes may sound and sit exactly alike, and a
-    roll that looks one up by value would drop the wrong one.
+    roll that looks one up by value would drop the wrong one. `id` is the stable number a saved
+    mapping names it by; a fresh note carries 0 until the document gives it one.
     """
 
     pitch: int
     start: float
     duration: float
     channel: int = 0
+    id: int = 0
 
     def __post_init__(self) -> None:
         self.pitch = min(PITCH_MAX, max(PITCH_MIN, int(self.pitch)))
         self.start = max(0.0, float(self.start))
         self.duration = max(MIN_DURATION, float(self.duration))
         self.channel = min(CHANNEL_COUNT - 1, max(0, int(self.channel)))
+        self.id = max(0, int(self.id))
 
     @property
     def end(self) -> float:
@@ -71,7 +74,25 @@ class Document:
     def __init__(self, channels=None, notes=None):
         self.channels: list[Channel] = arranged(channels or ()) or [Channel()]
         self.notes: list[Note] = list(notes) if notes else []
+        self.next_id = 1
+        self._assign_ids()
         self._fill_channels()
+
+    def _assign_ids(self) -> None:
+        """Give every note a stable id, keeping the ones it already has; the next free id is kept."""
+        used: set[int] = set()
+        top = self.next_id
+        for note in self.notes:
+            if note.id <= 0 or note.id in used:
+                note.id = top
+            used.add(note.id)
+            top = max(top, note.id + 1)
+        self.next_id = top
+
+    def _take_id(self) -> int:
+        taken = self.next_id
+        self.next_id += 1
+        return taken
 
     def _fill_channels(self) -> None:
         """Every channel a note names gets an entry, so nothing draws against a missing one."""
@@ -81,6 +102,11 @@ class Document:
         self.channels.sort(key=lambda channel: channel.channel)
 
     def add_note(self, note: Note) -> Note:
+        # a fresh note takes the next free id; the scan is over the handful a gesture adds at once
+        if note.id <= 0 or any(other.id == note.id for other in self.notes):
+            note.id = self._take_id()
+        else:
+            self.next_id = max(self.next_id, note.id + 1)
         self.notes.append(note)
         self._fill_channels()
         return note
@@ -123,8 +149,10 @@ class Document:
     def clear_notes(self) -> None:
         self.notes.clear()
 
-    def replace_notes(self, notes) -> None:
+    def replace_notes(self, notes, next_id: int = 1) -> None:
         self.notes = list(notes)
+        self.next_id = max(1, int(next_id))
+        self._assign_ids()
         self._fill_channels()
 
     def set_channels(self, channels) -> None:

@@ -32,6 +32,7 @@ from typing import Any, NamedTuple
 from namioto import params
 from namioto.analysis.choices import CHANNEL_MODES
 from namioto.channels import CHANNEL_COUNT, Channel, valid_color
+from namioto.karaoke.operations import MAPPING_VERSION, Drop, Match, Merge, Operation, SoundRef
 from namioto.params import Field, Section
 from namioto.utils import write_json
 
@@ -300,25 +301,28 @@ def to_settings_dict(settings: ProjectSettings) -> dict[str, dict]:
 
 
 class Note(NamedTuple):
-    """A note as the file holds it: when it starts and how long it lasts in seconds, its pitch, and
-    the MIDI channel it plays on."""
+    """A note as the file holds it: when it starts and how long it lasts in seconds, its pitch, the
+    MIDI channel it plays on, and the stable id a saved mapping names it by (0 for an old file)."""
 
     start: float
     duration: float
     pitch: int
     channel: int = 0
+    id: int = 0
 
 
 class Lyrics(NamedTuple):
-    """A `.krc` as the project keeps it: the text itself, and the times made from it.
+    """A `.krc` as the project keeps it: the text itself, the times made from it, and the mapping.
 
     The text is the baseline: the `.krc` beside the project is a copy written for editing and
     export, so a project still opens with the lyrics it was saved with once that file is gone.
     `key` is the hash of the text the times were made from, so a changed text invalidates them;
-    `lines` holds one `(start, end)` in seconds per sound, `None` where none was found; `flagged`
-    holds one bool per line, true where the aligner itself doubted the times it made; `mode` is
-    `edit` while the aligner's times lay the sounds out, or `read` while the `.krc`'s own `.N` and
-    groups do.
+    `lines` holds one `(start, end)` in seconds per sound, `None` where none was found; `scores`
+    holds the aligner's own score per sound beside it; `flagged` holds one bool per line, true where
+    the aligner itself doubted the times it made; `problems` holds the aligner's line-level
+    complaints. `mode` is `edit` while the aligner's times lay the sounds out, or `read` while the
+    `.krc`'s own `.N` and groups do. `channel` is the target MIDI channel; `operations` is the
+    authoritative mapping, and `version` the algorithm that suggested it.
     """
 
     text: str = ""
@@ -327,6 +331,11 @@ class Lyrics(NamedTuple):
     mode: str = "edit"
     lines: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
     flagged: tuple[bool, ...] = ()
+    channel: int = 0
+    scores: tuple[tuple[float | None, ...], ...] = ()
+    problems: tuple[tuple[str, ...], ...] = ()
+    operations: tuple = ()
+    version: int = MAPPING_VERSION
 
 
 @dataclass(frozen=True)
@@ -335,6 +344,7 @@ class Project:
     audio: str = ""
     channels: tuple[Channel, ...] = ()
     notes: tuple[Note, ...] = ()
+    next_id: int = 1
     lyrics: Lyrics | None = None
 
 
@@ -374,9 +384,11 @@ def to_dict(project: Project) -> dict:
                 "duration": round(note.duration, NOTE_DECIMALS),
                 "pitch": note.pitch,
                 "channel": note.channel,
+                **({"id": note.id} if note.id else {}),
             }
             for note in project.notes
         ],
+        "note_id": project.next_id,
         "lyrics": _lyrics_dict(project.lyrics),
     }
 
@@ -389,9 +401,63 @@ def _lyrics_dict(lyrics: Lyrics | None) -> dict | None:
         "key": lyrics.key,
         "model": lyrics.model,
         "mode": lyrics.mode,
+        "channel": lyrics.channel,
         "lines": [[list(span) for span in line] for line in lyrics.lines],
+        "scores": [list(row) for row in lyrics.scores],
         "flagged": list(lyrics.flagged),
+        "problems": [list(row) for row in lyrics.problems],
+        "operations": [_operation_dict(operation) for operation in lyrics.operations],
+        "version": lyrics.version,
     }
+
+
+def _operation_dict(operation: Operation) -> dict:
+    if isinstance(operation, Match):
+        return {
+            "kind": "match",
+            "sound": [operation.sound.line, operation.sound.index],
+            "notes": list(operation.notes),
+            "confirmed": operation.confirmed,
+        }
+    if isinstance(operation, Merge):
+        return {
+            "kind": "merge",
+            "sounds": [[ref.line, ref.index] for ref in operation.sounds],
+            "note": operation.note,
+            "confirmed": operation.confirmed,
+        }
+    return {
+        "kind": "drop",
+        "sound": [operation.sound.line, operation.sound.index],
+        "confirmed": operation.confirmed,
+    }
+
+
+def _operation(value: Any) -> Operation | None:
+    """One stored operation, or None when it is malformed; a confirmed one is never padded over."""
+    if not isinstance(value, dict):
+        return None
+    confirmed = value.get("confirmed") is True
+    try:
+        if value.get("kind") == "match":
+            ref = value["sound"]
+            return Match(SoundRef(int(ref[0]), int(ref[1])), tuple(int(note) for note in value["notes"]), confirmed)
+        if value.get("kind") == "merge":
+            refs = tuple(SoundRef(int(ref[0]), int(ref[1])) for ref in value["sounds"])
+            return Merge(refs, int(value["note"]), confirmed)
+        if value.get("kind") == "drop":
+            ref = value["sound"]
+            return Drop(SoundRef(int(ref[0]), int(ref[1])), confirmed)
+    except (TypeError, ValueError, IndexError, KeyError):
+        return None
+    return None
+
+
+def _operations(value: Any) -> tuple:
+    if not isinstance(value, list):
+        return ()
+    found = [_operation(entry) for entry in value]
+    return tuple(operation for operation in found if operation is not None)
 
 
 def _channel_dict(channel: Channel) -> dict:
@@ -423,8 +489,17 @@ def _note(entry: Any) -> Note | None:
     channel = entry.get("channel", 0)
     if isinstance(channel, bool) or not isinstance(channel, int):
         channel = 0
+    identifier = entry.get("id", 0)
+    if isinstance(identifier, bool) or not isinstance(identifier, int) or identifier < 0:
+        identifier = 0
     # a channel past the sixteen is a broken note, not a broken file: it plays on the last channel
-    return Note(max(0.0, float(start)), float(duration), int(round(pitch)), min(max(channel, 0), CHANNEL_COUNT - 1))
+    return Note(
+        max(0.0, float(start)),
+        float(duration),
+        int(round(pitch)),
+        min(max(channel, 0), CHANNEL_COUNT - 1),
+        identifier,
+    )
 
 
 def _channel(entry: Any) -> Channel:
@@ -513,7 +588,53 @@ def _lyrics(value: Any) -> Lyrics | None:
         mode=mode if mode in LYRIC_MODES else "edit",
         lines=tuple(rows),
         flagged=tuple(bool(flag) for flag in flagged) if isinstance(flagged, list) else (),
+        channel=_channel_number(value.get("channel", 0)),
+        scores=_scores(value.get("scores")),
+        problems=_problems(value.get("problems")),
+        operations=_operations(value.get("operations")),
+        version=_version(value.get("version")),
     )
+
+
+def _channel_number(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        return 0
+    return min(max(value, 0), CHANNEL_COUNT - 1)
+
+
+def _scores(value: Any) -> tuple[tuple[float | None, ...], ...]:
+    if not isinstance(value, list):
+        return ()
+    rows: list[tuple[float | None, ...]] = []
+    for row in value:
+        if not isinstance(row, list):
+            return ()
+        found = []
+        for score in row:
+            bad = score is None or isinstance(score, bool) or not isinstance(score, (int, float))
+            if bad or not math.isfinite(score):
+                found.append(None)
+            else:
+                found.append(float(score))
+        rows.append(tuple(found))
+    return tuple(rows)
+
+
+def _problems(value: Any) -> tuple[tuple[str, ...], ...]:
+    if not isinstance(value, list):
+        return ()
+    rows: list[tuple[str, ...]] = []
+    for row in value:
+        if not isinstance(row, list):
+            return ()
+        rows.append(tuple(str(problem) for problem in row))
+    return tuple(rows)
+
+
+def _version(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+        return MAPPING_VERSION
+    return value
 
 
 def from_dict(data: Any) -> Project:
@@ -532,8 +653,16 @@ def from_dict(data: Any) -> Project:
         audio=_audio(data.get("audio")),
         channels=channels,
         notes=notes,
+        next_id=_next_id(data.get("note_id"), notes),
         lyrics=_lyrics(data.get("lyrics")),
     )
+
+
+def _next_id(value: Any, notes: tuple[Note, ...]) -> int:
+    """The id a new note takes: the file's own next free id, else one past the largest it holds."""
+    if not isinstance(value, bool) and isinstance(value, int) and value > 0:
+        return max(value, max((note.id for note in notes), default=0) + 1)
+    return max((note.id for note in notes), default=0) + 1
 
 
 def load(path: str | Path) -> Project:

@@ -3817,7 +3817,7 @@ def test_saving_a_project_takes_the_notes_and_the_values_with_it(own_window, tmp
     assert own_window.project_dirty is False
     assert own_window._document_name() == "song"
     saved = project.load(path)  # beat 2 at 120 BPM is one second in, and it is seconds that are kept
-    assert saved.notes == (project.Note(1.0, 0.5, 64), project.Note(1.5, 0.25, 67))
+    assert saved.notes == (project.Note(1.0, 0.5, 64, 0, 1), project.Note(1.5, 0.25, 67, 0, 2))
     assert saved.settings.tempo.bpm == 120.0
     assert saved.settings.spectrum.gain == 300.0
     assert saved.settings.editor.snap == own_window.view.snap
@@ -3952,7 +3952,7 @@ def test_auto_save_writes_the_project_once_editing_stops(own_window, tmp_path) -
     own_window._autosave()
 
     assert own_window.project_dirty is False
-    assert project.load(path).notes == (project.Note(0.0, 0.5, 64),)
+    assert project.load(path).notes == (project.Note(0.0, 0.5, 64, 0, 1),)
 
 
 def test_losing_focus_writes_the_project_too(own_window, tmp_path, monkeypatch) -> None:
@@ -3966,7 +3966,7 @@ def test_losing_focus_writes_the_project_too(own_window, tmp_path, monkeypatch) 
     own_window.changeEvent(QEvent(QEvent.Type.ActivationChange))
 
     assert own_window.project_dirty is False
-    assert project.load(path).notes == (project.Note(0.0, 0.5, 60),)
+    assert project.load(path).notes == (project.Note(0.0, 0.5, 60, 0, 1),)
 
 
 def test_auto_save_leaves_a_document_without_a_file_alone(own_window) -> None:
@@ -5052,7 +5052,7 @@ def test_a_sound_that_covers_no_note_is_marked_grey(own_window, tmp_path) -> Non
     assert own_window.view.lyric_zero == ((False, True),)
 
 
-def test_three_sounds_on_one_note_all_share_it(own_window, tmp_path) -> None:
+def test_short_sounds_on_one_note_fall_to_zero(own_window, tmp_path) -> None:
     (tmp_path / "song.krc").write_text("きにく\n", encoding="utf-8")
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(
@@ -5061,35 +5061,30 @@ def test_three_sounds_on_one_note_all_share_it(own_window, tmp_path) -> None:
     own_window._lyric_key = ""
     own_window.transport.bpm.setValue(60.0)
     own_window.view.set_channels((Channel(channel=0),))
-    own_window.view.set_notes(((60, 0.0, 1.0, 0),))  # one note under three sounds: all share it
+    own_window.view.set_notes(((60, 0.0, 1.0, 0),))  # one note under three sounds: the first keeps it
     own_window._watch_lyrics()
 
     assert own_window.view.lyric_raw == (((0.0, 0.9), (0.9, 0.95), (0.95, 1.0)),)
-    assert own_window.view.lyric_zero == ((False, False, False),)
-    assert own_window.view.lyric_group == ((0, 0, 0),)
+    assert own_window.view.lyric_zero == ((False, True, True),)
+    assert own_window.view.lyric_group == ((-1, -1, -1),)
 
 
 def test_a_block_is_the_note_the_sound_maps_to(own_window, tmp_path) -> None:
-    (tmp_path / "song.krc").write_text("タにク\n", encoding="utf-8")
+    (tmp_path / "song.krc").write_text("タに\n", encoding="utf-8")
     own_window.project_path = tmp_path / "song.nto"
-    own_window._stored_lyrics = project.Lyrics(
-        key=text_key("タにク\n"), model="mms", lines=(((0.0, 0.8), (0.8, 1.05), (1.05, 1.4)),)
-    )
+    own_window._stored_lyrics = project.Lyrics(key=text_key("タに\n"), model="mms", lines=(((0.0, 0.8), (0.8, 1.3)),))
     own_window._lyric_key = ""
     own_window.transport.bpm.setValue(60.0)
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 0.4, 0)))
     own_window._watch_lyrics()
 
-    # タ sits on note 0; に and ク both reach note 1, so they share it - a block is the whole note a
-    # sound maps to, not the sound's own raw span
-    assert own_window.view.lyric_zero == ((False, False, False),)
+    # タ sits on note 0 and に on note 1: a block is the whole note a sound maps to, not its raw span
+    assert own_window.view.lyric_zero == ((False, False),)
     assert own_window.view.lyric_times[0][0] == (0.0, 1.0)
-    # に's raw span (0.8, 1.05) crosses the boundary, but its block is note 1 whole
+    # に's raw span (0.8, 1.3) crosses the boundary, but its block is note 1 whole
     assert own_window.view.lyric_times[0][1] == (1.0, 1.4)
-    # ク's raw start is off the beat line, but its block is the note, which starts on it
-    assert own_window.view.lyric_raw[0][2][0] == 1.05
-    assert own_window.view.lyric_times[0][2] == (1.0, 1.4)
+    assert own_window.view.lyric_raw[0][1][0] == 0.8
 
 
 def test_a_lyric_drag_is_kept_in_the_project(own_window, tmp_path) -> None:

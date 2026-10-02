@@ -89,3 +89,32 @@ def test_setting_a_channel_field_reaches_the_right_channel() -> None:
         (0, "A", 0),
         (5, "Lead", 40),
     ]
+
+
+def test_a_fresh_note_takes_the_next_stable_id() -> None:
+    document = Document()
+    first = document.add_note(Note(60, 0.0, 1.0))
+    second = document.add_note(Note(62, 0.0, 1.0))
+    assert (first.id, second.id) == (1, 2)
+    assert document.next_id == 3
+
+
+def test_a_note_keeps_the_id_it_came_with_and_the_next_one_carries_on() -> None:
+    document = Document(notes=[Note(60, 0.0, 1.0, id=7)])
+    assert document.notes[0].id == 7
+    assert document.next_id == 8
+    added = document.add_note(Note(62, 0.0, 1.0))
+    assert added.id == 8
+
+
+def test_a_note_from_a_file_without_ids_gets_them_in_order() -> None:
+    document = Document(notes=[Note(60, 0.0, 1.0), Note(62, 0.0, 1.0), Note(64, 0.0, 1.0)])
+    assert [note.id for note in document.notes] == [1, 2, 3]
+    assert document.next_id == 4
+
+
+def test_replacing_the_notes_keeps_a_free_id_free() -> None:
+    document = Document()
+    document.replace_notes([Note(60, 0.0, 1.0, id=4)], next_id=9)
+    assert document.next_id == 9
+    assert document.add_note(Note(62, 0.0, 1.0)).id == 9

@@ -35,10 +35,10 @@ def test_a_rest_between_sounds_writes_a_gap():
     assert "{\\k30}{\\k20}い" in line
 
 
-def test_a_small_kana_borrows_from_the_sound_before_it():
+def test_a_small_kana_stays_one_sound_with_the_sound_before_it():
+    # 京[きょう] reads きょ and う - one span each, never き + ょ
     line = _dialogues("京[きょう]", [[(0.0, 1.0), (1.0, 2.0)]])[0]
-    assert "\\k50}京|<き" in line
-    assert "\\k50}#|ょ" in line
+    assert "\\k100}京|<きょ" in line
     assert "\\k100}#|う" in line
 
 
@@ -59,11 +59,28 @@ def test_a_first_word_too_soon_gets_no_dots():
     assert len(dialogues) == 1  # the line itself, no LEAD dot row
 
 
-def test_a_unit_with_an_override_keeps_all_of_its_readings():
+def test_an_input_override_does_not_change_the_natural_sounds():
     spans = [(0.0, 0.25), (0.25, 0.5), (0.5, 0.75), (0.75, 1.0), (1.0, 1.5)]
     line = _dialogues("(幾千)[いくせん].1あ", [spans])[0]
-    assert "\\k100}幾千|<いくせん" in line  # one slot, but four readings spanning it
+    assert "\\k25}幾千|<い" in line
+    assert "\\k25}#|く" in line
+    assert "\\k25}#|せ" in line
+    assert "\\k25}#|ん" in line
     assert "\\k50}あ" in line
+
+
+def test_a_ruby_of_even_morae_gets_one_glyph_per_sound():
+    # 胡椒[こ,しょう] is three sounds, not four: the old mora walk split しょ
+    line = _dialogues("胡椒[こ,しょう]", [[(0.0, 0.5), (0.5, 1.0), (1.0, 1.5)]])[0]
+    assert "\\k50}胡|<こ" in line
+    assert "\\k50}椒|しょ" in line
+    assert "\\k50}#|う" in line
+
+
+def test_a_merge_tiles_its_note_across_its_sounds():
+    line = _dialogues("(あい).1", [[(0.0, 0.5), (0.5, 1.0)]])[0]
+    assert "\\k50}あ" in line
+    assert "\\k50}い" in line
 
 
 def test_the_settings_name_the_font_and_the_overlay():

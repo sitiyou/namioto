@@ -1063,10 +1063,11 @@ class MainWindow(QMainWindow):
             self._watch_lyrics(materialize=True)
             missing = self._open_audio(project.resolve_audio(self.project_path, opened.audio))
             self.view.set_channels(opened.channels)
-            self.view.set_notes(
-                (note.pitch, self.view.to_beats(note.start), self.view.to_beats(note.duration), note.channel)
+            loaded = (
+                (note.pitch, self.view.to_beats(note.start), self.view.to_beats(note.duration), note.channel, note.id)
                 for note in opened.notes
             )
+            self.view.set_notes(loaded, opened.next_id)
             self._apply_project_settings()  # the bars, the zoom and the player take the document's values
             self.view.undo_stack.clear()  # another document starts its history over
         finally:
@@ -1090,6 +1091,7 @@ class MainWindow(QMainWindow):
                     self.view.to_seconds(note.duration),
                     note.pitch,
                     note.channel,
+                    note.id,
                 )
                 for note in self.view.notes()
             )
@@ -1111,6 +1113,7 @@ class MainWindow(QMainWindow):
             audio=project.store_audio(target, self.audio_path),
             channels=tuple(self.view.channels),
             notes=notes,
+            next_id=self.view.document.next_id,
             lyrics=lyrics_times,
         )
         try:

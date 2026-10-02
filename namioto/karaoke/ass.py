@@ -20,9 +20,7 @@ import colorsys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 
-from namioto.karaoke.model import Unit
-from namioto.karaoke.parser import parse
-from namioto.karaoke.transforms import flatten_ruby
+from namioto.karaoke.sounds import natural_sounds
 
 FONTSIZE = 96
 TOP_FONTSIZE = 96
@@ -445,8 +443,24 @@ def _header(config: _Config) -> str:
 
 
 @dataclass
-class _WordTiming:
-    word: Unit
+class _Glyph:
+    """One rendered syllable: the base line's text, its furigana, and what the reading is.
+
+    `text` is what the base layer shows - the Sound's own surface, `#` when it continues the same
+    base unit, or `#` plus the surface when a new ruby part shares the word. `reading` is the ruby
+    the template gets.
+    """
+
+    text: str
+    reading: str
+    ruby: str | None = None
+    small: bool = False
+    continuation: bool = False
+
+
+@dataclass
+class _GlyphTiming:
+    glyph: _Glyph
     start_ms: int
     end_ms: int
 
@@ -457,7 +471,7 @@ class _WordTiming:
 
 @dataclass
 class _LineTimings:
-    word_timings: list[_WordTiming]
+    glyph_timings: list[_GlyphTiming]
 
 
 @dataclass
@@ -477,65 +491,73 @@ class _LineInfo:
 
     @property
     def first_word_start(self) -> int:
-        return self.timing.word_timings[0].start_ms
+        return self.timing.glyph_timings[0].start_ms
 
 
 def _ms(seconds: float) -> int:
     return int(round(float(seconds) * 1000))
 
 
-def _ruby_text(word: Unit) -> str:
-    return "".join(inner.text for part in word.ruby.parts for inner in part)
+def _glyph(sound, continuation: bool) -> _Glyph:
+    """What one Sound renders as: its own surface without a ruby, its base and reading with one."""
+    if not sound.rubied:
+        return _Glyph(text=sound.reading, reading=sound.reading, small=sound.reading in SMALL_KANA)
+    if continuation:
+        text = "#"
+    elif sound.first:
+        text = sound.base
+    else:
+        text = "#" + sound.base
+    return _Glyph(
+        text=text,
+        reading=sound.reading,
+        ruby=sound.reading,
+        small=sound.reading in SMALL_KANA,
+        continuation=continuation,
+    )
 
 
-def _transparent(text: str) -> bool:
-    return all(char in " 　" for char in text)
+def _line_timings(line, spans: Sequence[tuple | None]) -> _LineTimings | None:
+    """One glyph per Sound, its own derived span; a dropped Sound has no time of its own.
 
-
-def _line_timings(units: Sequence[Unit], spans: Sequence[tuple]) -> _LineTimings | None:
-    """One timing per unit, its readings consuming that many of the line's mapped spans.
-
-    The spans are one per sound, so a unit consumes its `natural_mora` of them - its readings, not
-    the note slots its `.N` names, which the mapping has already spread them over. A unit with no
-    reading of its own (a small kana, a mark) takes the previous unit's end, as the source mapping
-    does. A line none of whose spans has a time is dropped, since there is nothing to draw it on.
+    The spans are one per Sound, so nothing is counted or divided here - a Sound of two characters
+    is one syllable, and a ruby of two morae is one Sound per mora. A line none of whose spans has a
+    time is dropped, since there is nothing to draw it on.
     """
-    first = next((start for start, end in spans if start is not None and end is not None), 0.0)
-    timings: list[_WordTiming] = []
-    at = 0
-    last = first
+    if len(spans) != len(line.sounds):
+        return None
+    timings: list[_GlyphTiming] = []
     seen = False
-    for unit in units:
-        readings = unit.natural_mora
-        found = None
-        if readings > 0:
-            window = spans[at : at + readings]
-            real = [(start, end) for start, end in window if start is not None and end is not None]
-            if real:
-                found = (real[0][0], real[-1][1])
-            at += readings
-        if found is None:
+    previous: int | None = None
+    last = 0
+    for sound, span in zip(line.sounds, spans, strict=True):
+        continuation = sound.rubied and previous == sound.container
+        if span is None or span[0] is None or span[1] is None:
             start = end = last
         else:
-            start, end = found
+            start, end = _ms(span[0]), _ms(span[1])
             seen = True
         last = end
-        timings.append(_WordTiming(unit, _ms(start), _ms(end)))
+        timings.append(_GlyphTiming(_glyph(sound, continuation), start, end))
+        previous = sound.container
     return _LineTimings(timings) if seen else None
 
 
-def _plan(lyrics, times: Sequence[Sequence[tuple]]) -> list[list[_PlannedLine]]:
-    """The flattened units of every line, with the spans of the mapping consumed in reading order."""
+def _plan(lines: Sequence, times: Sequence[Sequence[tuple | None]]) -> list[list[_PlannedLine]]:
+    """The glyphs of every line, grouped by chapter, with the mapping's spans in reading order."""
     planned: list[list[_PlannedLine]] = []
-    at = 0
-    for chapter in lyrics.chapters:
-        rows: list[_PlannedLine] = []
-        for line in chapter.lines:
-            spans = times[at] if at < len(times) else ()
-            timing = _line_timings(line.units, spans)
-            if timing is not None:
-                rows.append(_PlannedLine(line.track, timing))
-            at += 1
+    rows: list[_PlannedLine] = []
+    chapter = -1
+    for index, line in enumerate(lines):
+        if line.chapter != chapter:
+            if chapter != -1:
+                planned.append(rows)
+            rows = []
+            chapter = line.chapter
+        timing = _line_timings(line, times[index] if index < len(times) else ())
+        if timing is not None:
+            rows.append(_PlannedLine(line.track, timing))
+    if chapter != -1:
         planned.append(rows)
     return planned
 
@@ -553,7 +575,7 @@ def _assign_row_styles(planned: list[list[_PlannedLine]], track_style: Mapping[i
             style = rows[counters.get(style_name, 0) % 2]
             counters[style_name] = counters.get(style_name, 0) + 1
             info = _LineInfo(chapter_idx, line_idx, style, line.timing)
-            info.line_end_ms = line.timing.word_timings[-1].end_ms
+            info.line_end_ms = line.timing.glyph_timings[-1].end_ms
             style_rows.setdefault(style, []).append(info)
     return style_rows
 
@@ -628,25 +650,21 @@ def _render_karaoke_dialogues(style_rows: dict[str, list[_LineInfo]], lead_time_
     return dialogues
 
 
-def _generate_karaoke_text(
-    timing: _LineTimings, lead_time_ms: int, next_start_ms: int | None, line_end_ms: int
-) -> str:
-    """One line's `\\k` stream, the lead and every word's ruby written the way the template reads."""
+def _generate_karaoke_text(timing: _LineTimings, lead_time_ms: int, next_start_ms: int | None, line_end_ms: int) -> str:
+    """One line's `\\k` stream, the lead and every Sound's ruby written the way the template reads."""
     parts = [f"{{\\k{lead_time_ms // 10}}}"]
-    word_timings = timing.word_timings
-    durations = [max(0, word.duration_ms) // 10 for word in word_timings]
+    glyphs = timing.glyph_timings
+    durations = [max(0, item.duration_ms) // 10 for item in glyphs]
 
-    for index, word_timing in enumerate(word_timings):
-        word = word_timing.word
-        if durations[index] == 0 and (
-            word.text in SMALL_KANA or (word.ruby is not None and _ruby_text(word) in SMALL_KANA)
-        ):
+    for index, item in enumerate(glyphs):
+        glyph = item.glyph
+        if durations[index] == 0 and glyph.small:
             for earlier in range(index - 1, -1, -1):
                 if durations[earlier] >= 2 * MIN_WORD_DURATION:
                     durations[index] = durations[earlier] // 2
                     durations[earlier] -= durations[index]
                     break
-        elif durations[index] == 0 and not _transparent(word.text):
+        elif durations[index] == 0:
             borrowed = False
             for earlier in range(index - 1, -1, -1):
                 if durations[earlier] >= 2 * MIN_WORD_DURATION:
@@ -657,8 +675,8 @@ def _generate_karaoke_text(
             if not borrowed:
                 durations[index] = -1
 
-    for index, word_timing in enumerate(word_timings):
-        if durations[index] == -1 and not _transparent(word_timing.word.text):
+    for index in range(len(glyphs)):
+        if durations[index] == -1:
             for later in range(index + 1, len(durations)):
                 if durations[later] > 2 * MIN_WORD_DURATION:
                     durations[later] -= MIN_WORD_DURATION
@@ -667,19 +685,18 @@ def _generate_karaoke_text(
             if durations[index] == -1:
                 durations[index] = 1
 
-    sound_index = 0
-    for index, (word_timing, duration) in enumerate(zip(word_timings, durations, strict=True)):
-        word = word_timing.word
-        if sound_index > 0 and word.natural_mora > 0:
-            gap = word_timing.start_ms - word_timings[index - 1].end_ms
+    for index, (item, duration) in enumerate(zip(glyphs, durations, strict=True)):
+        glyph = item.glyph
+        if index > 0:
+            gap = item.start_ms - glyphs[index - 1].end_ms
             if gap > 0:
                 gap_cs = gap // 10
-                if "|" in parts[-1] and word.text.startswith("#"):
+                if "|" in parts[-1] and glyph.continuation:
                     parts.append(f"{{\\k{gap_cs}}}#|")
                 else:
                     parts.append(f"{{\\k{gap_cs}}}")
-        text = word.text
-        if word.ruby is not None:
+        text = glyph.text
+        if glyph.ruby is not None:
             if text == "#":
                 split = "|"
             elif text.startswith("#"):
@@ -687,15 +704,13 @@ def _generate_karaoke_text(
                 text = text[1:]
             else:
                 split = "|<"
-            text = f"{text}{split}{_ruby_text(word)}"
-        if word.ruby is None and len(text) > 1 and duration >= len(text):
+            text = f"{text}{split}{glyph.ruby}"
+        if glyph.ruby is None and len(text) > 1 and duration >= len(text):
             base, extra = divmod(duration, len(text))
             for position, char in enumerate(text):
                 parts.append(f"{{\\k{base + (1 if position < extra else 0)}}}{char}")
         else:
             parts.append(f"{{\\k{duration}}}{text}")
-        if word.natural_mora > 0:
-            sound_index += word.natural_mora
     if next_start_ms is not None:
         extension = next_start_ms - line_end_ms
         if extension >= lead_time_ms:
@@ -703,17 +718,18 @@ def _generate_karaoke_text(
     return "".join(parts)
 
 
-def generate_ass(lyrics_text: str, times: Sequence[Sequence[tuple]], *, settings: AssSettings | None = None) -> str:
-    """The ASS karaoke subtitle of a `.krc` text, timed by the mapped spans of its sounds.
+def generate_ass(
+    lyrics_text: str, spans: Sequence[Sequence[tuple | None]], *, settings: AssSettings | None = None
+) -> str:
+    """The ASS karaoke subtitle of a canonical `.krc` and the mapping's derived spans.
 
-    `times` holds one `(start, end)` per sound of every line, in the same order and shape as
-    `karaoke.timeline.sound_lines` reads them - the strip's own `lyric_times`. A line with no time
-    anywhere is left out, so a `.krc` longer than its notes still writes.
+    `spans` holds one `(start, end)` per Sound of every line, or `None` where the Sound is dropped -
+    the same shape `sound_spans` derives from the operations. A line with no time anywhere is left
+    out, so a `.krc` longer than its notes still writes.
     """
     settings = settings or AssSettings()
     config = _Config.from_settings(settings)
-    lyrics = flatten_ruby(parse(lyrics_text))
-    planned = _plan(lyrics, times)
+    planned = _plan(natural_sounds(lyrics_text), spans)
     style_rows = _assign_row_styles(planned, settings.track_style)
     for rows in style_rows.values():
         if rows:

@@ -38,8 +38,19 @@ from namioto.utils import kana_tokens
 
 SMALL_KANA = frozenset("ャュョァィゥェォゃゅょぁぃぅぇぉゎヮ")
 OWN_SOUND = frozenset("ーっッ")
+# a sokuon is a closure, never a mora that is sung alongside its neighbour: it may hold a note on its
+# own but never joins a group of two or more (the reference `.krc`s put no `っ` in one)
+SOKUON = frozenset("っッ")
+# what one held note costs: a sound holding a note is read at its start, so charging the holder's own
+# onset distance to it keeps a hold only where the times agree with the note running on
+HOLD_PRICE = 1.0
+# among covers of equal cost, the one where a sound takes a note its own time reaches wins; the margin
+# is a fraction of a frame, so it settles a tie and moves nothing where the costs differ
+REACH_TIE = 1e-6
 # how far a sound's time may sit from the note it should start and end on, one aligner frame of slack
 TOLERANCE = 0.05
+# how many sounds one note may be split between; a note shared by more than this is not modelled
+GROUP_LIMIT = 8
 
 
 @dataclass(frozen=True)
@@ -522,56 +533,142 @@ def _overlaps(start: float | None, end: float | None, note: tuple[float, float])
     return min(end, high) > max(start, low)
 
 
-def _snap_owners(
-    flat: Sequence[tuple[int, int, float | None, float | None]], notes: Sequence[tuple[float, float]]
-) -> list[list[int]]:
-    """Each sound's onset snapped onto a note, the whole assignment the cheapest, as the owners per note.
+def _reaches(start: float | None, end: float | None, note: tuple[float, float]) -> bool:
+    """Whether a sound's own time reaches a note: a span that is only a start is read as a point.
 
-    The snapped notes do not decrease, so the sounds keep their reading order; the first snapped sound
-    owns the notes ahead of the next one's snap and the last owns to the end, which covers every note.
-    A note several sounds snap onto is shared. A sound whose span reaches no note is left out, so it
-    owns none; when no sound reaches a note the aligned ones fall back to the nearest, monotone, since
-    the notes still have to be answered for.
+    `_overlaps` refuses a missing end, but a sound aligned without one still has a place; read on its
+    start alone it reaches the note that start falls in.
+    """
+    if start is None:
+        return False
+    return _overlaps(start, start if end is None else end, note)
+
+
+def _snapped(onset: float, notes: Sequence[tuple[float, float]]) -> float:
+    """Where a sound's onset is read once it is put on a note: its own place inside a note, else the
+    nearest note's start, so a sound sitting in a rest between two notes reads as the nearer one."""
+    for start, end in notes:
+        if start <= onset < end:
+            return onset
+    return min((note[0] for note in notes), key=lambda start: (abs(start - onset), -start))
+
+
+def _snap_owners(
+    flat: Sequence[tuple[int, int, float | None, float | None]],
+    notes: Sequence[tuple[float, float]],
+    no_group: frozenset[int] = frozenset(),
+) -> list[list[int]]:
+    """The whole line's cheapest covering of the notes by the sounds, as the owners per note.
+
+    A note is covered by a group of one or more sounds that sit on it; a group of k splits the note
+    into even shares, so its p-th sound is read at `start + p * (end - start) / k`. A sound may
+    instead be left out (`.0`) by landing its snap on the next sound's own - the earlier of the two
+    then has no length - and one left out after the last group lands on the line's end. The cost is
+    each sound's distance to where it lands, read on the snapped onsets, so a sound in a rest costs
+    nothing to leave out. The groups keep the reading order, and a group of one holds the notes up to
+    the next group's own, so a sound runs across a rest and every note is answered for - a run never
+    hangs off a shared note, which is what R17 asks; each note held that way adds the holder's own
+    onset distance to the note's start, so a hold is not free. A sound of its own prefers a note its
+    own time reaches, so one whose time merely passes near a note leaves it to a hold or a group
+    rather than claiming it. A sound in `no_group` is a group of one wherever it lands, never part of
+    a run. A sound whose span reaches no note is left out, so it owns none; when no sound reaches a
+    note the ones with a start fall back, since the notes still have to be answered for.
+    `GROUP_LIMIT` caps how many sounds one note may be split between.
     """
     total = len(notes)
-    starts = [note[0] for note in notes]
     owner: list[list[int]] = [[] for _note in notes]
-    snapped = [
+    if total == 0:
+        return owner
+    starts = [note[0] for note in notes]
+    lengths = [note[1] - note[0] for note in notes]
+    cand = [
         index
         for index, (_row, _column, start, end) in enumerate(flat)
         if any(_overlaps(start, end, note) for note in notes)
     ]
-    if not snapped:
-        snapped = [index for index, (_row, _column, start, _end) in enumerate(flat) if start is not None]
-    if not snapped:
+    if not cand:
+        cand = [index for index, (_row, _column, start, _end) in enumerate(flat) if start is not None]
+    if not cand:
         return owner
-    onsets = [flat[index][2] for index in snapped]
+    raw = [flat[index][2] for index in cand]
+    spans = [(flat[index][2], flat[index][3]) for index in cand]
+    pos = [_snapped(onset, notes) for onset in raw]
+    count = len(raw)
     inf = math.inf
-    best = [inf] * total
-    best[0] = abs(onsets[0] - starts[0])
-    back: list[list[int]] = []
-    for onset in onsets[1:]:
-        row = [inf] * total
-        step = [0] * total
-        running, running_at = inf, 0
-        for note in range(total):
-            if best[note] < running:
-                running, running_at = best[note], note
-            row[note] = running + abs(onset - starts[note])
-            step[note] = running_at
-        back.append(step)
-        best = row
-    entry = min(range(total), key=lambda note: best[note])
-    entries = [0] * len(snapped)
-    entries[-1] = entry
-    for at in range(len(snapped) - 1, 0, -1):
-        entry = back[at - 1][entry]
-        entries[at - 1] = entry
-    for at, sound in enumerate(snapped):
-        low = entries[at]
-        high = total - 1 if at == len(snapped) - 1 else max(low, entries[at + 1] - 1)
-        for note in range(low, high + 1):
-            owner[note].append(sound)
+    line_end = notes[-1][1]
+    runs = [0] * (count + 1)
+    for index in range(count):
+        runs[index + 1] = runs[index] + (1 if index in no_group else 0)
+
+    def spread(note: int, at: int, size: int) -> float:
+        start, length = starts[note], lengths[note]
+        cost = sum(abs(raw[at + step] - (start + step * length / size)) for step in range(size))
+        if size == 1 and not _reaches(spans[at][0], spans[at][1], notes[note]):
+            cost += REACH_TIE
+        return cost
+
+    # f[at][note][holds] = cheapest with sounds 0..at-1 placed, notes 0..note-1 covered, and `holds`
+    # saying whether the last group was one sound (only then may it hold the notes after it)
+    f: list[list[list[float]]] = [[[inf, inf] for _ in range(total + 1)] for _ in range(count + 1)]
+    back: list[list[list[tuple[int, int, int, int, int] | None]]] = [
+        [[None, None] for _ in range(total + 1)] for _ in range(count + 1)
+    ]
+    f[0][0][0] = 0.0
+    for note in range(total):
+        # a sound left out lands on the next group's first slot, `starts[note]`
+        dot = [0.0] * (count + 1)
+        for at in range(count):
+            dot[at + 1] = dot[at] + abs(pos[at] - starts[note])
+        for holds in (0, 1):
+            if holds:
+                for at in range(1, count + 1):
+                    cost = f[at][note][1] + HOLD_PRICE * abs(pos[at - 1] - starts[note])
+                    if cost < f[at][note + 1][1]:
+                        f[at][note + 1][1] = cost
+                        back[at][note + 1][1] = (at, note, 1, at, 0)
+            best, best_at = inf, 0
+            for at in range(count + 1):
+                here = f[at][note][holds]
+                if here < inf and here - dot[at] < best:
+                    best, best_at = here - dot[at], at
+                if best is inf:
+                    continue
+                for size in range(1, min(count - at, GROUP_LIMIT) + 1):
+                    if size > 1 and runs[at + size] > runs[at]:
+                        continue
+                    cost = best + dot[at] + spread(note, at, size)
+                    keeps = 1 if size == 1 else 0
+                    if cost < f[at + size][note + 1][keeps]:
+                        f[at + size][note + 1][keeps] = cost
+                        back[at + size][note + 1][keeps] = (best_at, note, holds, at, size)
+    tail = [0.0] * (count + 1)
+    for at in range(count - 1, -1, -1):
+        tail[at] = tail[at + 1] + abs(pos[at] - line_end)
+    goal, goal_at, goal_holds = inf, 0, 0
+    for at in range(count + 1):
+        for holds in (0, 1):
+            cost = f[at][total][holds] + tail[at]
+            if cost < goal:
+                goal, goal_at, goal_holds = cost, at, holds
+    if goal is inf:
+        return owner
+    groups: list[tuple[int, int, int]] = []
+    at, note, holds = goal_at, total, goal_holds
+    while at or note:
+        step = back[at][note][holds]
+        if step is None:
+            break
+        before, was, was_holds, start, size = step
+        if size > 0:
+            groups.append((was, start, size))
+        at, note, holds = before, was, was_holds
+    groups.reverse()
+    for order, (note, at, size) in enumerate(groups):
+        owner[note] = [cand[position] for position in range(at, at + size)]
+        last = cand[at + size - 1]
+        after = groups[order + 1][0] if order + 1 < len(groups) else total
+        for held in range(note + 1, after):
+            owner[held] = [last]
     return owner
 
 
@@ -696,19 +793,18 @@ def map_sounds(
     *,
     aligned: bool = True,
 ) -> list[list[Placement]]:
-    """Put every sound on the note the whole line's cheapest snap gives it, and settle the shares.
+    """Put every sound on the whole line's cheapest note cover, and settle the shares.
 
-    With `aligned`, each sound's onset takes a note - the snapped notes non-decreasing - and the sound
-    owns every note from its own up to the next sound's, so a sound whose time crosses a note holds
-    it and a note several sounds snap onto is shared. The snap of the whole line is the cheapest one,
-    not each note judged on its own, so a note a sound barely reaches does not steal it from the sound
-    that owns it. A sound whose time reaches no note covers none. A sound in a group only occupies
-    that note: one that also owns a note of its own keeps that note and gives the share up, and one
-    offered several shares keeps only the first - so a group never holds a sound that occupies
-    another note. A note no sound reaches is given to a neighbouring sound that can hold it, and the
-    owner of a note no sound's time reaches at all is doubted, so every note is answered for. Without
-    `aligned` the sounds and the notes are paired one for one, in reading order, until the shorter
-    side runs out. `flagged` marks the lines the aligner itself doubted, which reddens the whole line.
+    With `aligned`, a note is covered by a group of one or more sounds that sit on it; a group splits
+    its note into even shares, and a group of one may hold the notes up to the next group's, so a
+    sound whose time crosses a rest spans them. A sound may instead be left out (`.0`) by landing on
+    the next sound's own, so the earlier of the two takes no length. The cover of
+    the whole line is the cheapest one, not each note judged on its own, so a note a sound barely
+    reaches does not steal it from the sound that owns it, and a run never hangs off a shared note - a
+    group never holds a sound that occupies another note. The owner of a note no sound's time reaches
+    at all is doubted, so every note is answered for. Without `aligned` the sounds and the notes are
+    paired one for one, in reading order, until the shorter side runs out. `flagged` marks the lines
+    the aligner itself doubted, which reddens the whole line.
     """
     flat: list[tuple[int, int, float | None, float | None]] = []
     for row, line in enumerate(lines):
@@ -722,50 +818,17 @@ def map_sounds(
     if not flat or not notes:
         return [[Placement((None, None)) for _sound in line.sounds] for line in lines]
 
-    owner = _snap_owners(flat, notes)
+    no_group = frozenset(
+        index for index, (row, column, _start, _end) in enumerate(flat) if lines[row].sounds[column].ruby in SOKUON
+    )
+    owner = _snap_owners(flat, notes, no_group)
 
-    # a sound in a group only occupies that note: one that also owns a note of its own keeps that
-    # note and gives the share up, and one offered several shares keeps only the first - so a group
-    # never holds a sound that occupies another note
-    owned: dict[int, list[int]] = {}
+    # the snap keeps every group to its own note, so a note two sounds own is a group
+    grouped: dict[int, int] = {}  # sound -> the note it shares with its neighbours
     for note, owners in enumerate(owner):
-        for sound in owners:
-            owned.setdefault(sound, []).append(note)
-    share: dict[int, int] = {}
-    for sound, notes_of in owned.items():
-        shared = [note for note in notes_of if len(owner[note]) > 1]
-        if len(shared) == len(notes_of):
-            share[sound] = shared[0]
-
-    grouped: dict[int, int] = {}  # sound -> the note its neighbours share it with
-    for note, owners in enumerate(owner):
-        if len(owners) < 2:
-            continue
-        kept = [sound for sound in owners if share.get(sound) == note]
-        owner[note] = kept
-        if len(kept) > 1:
-            for sound in kept:
+        if len(owners) > 1:
+            for sound in owners:
                 grouped[sound] = note
-
-    doubted: set[int] = set()
-
-    for note in range(len(notes)):
-        if owner[note]:
-            continue
-        # a grouped sound may not take another note, so a doubt offers the note to a sound that can
-        # hold it first, and falls back to the neighbour only when both sides are all groups
-        sound = _free_owner(owner, grouped, note)
-        if sound is None:
-            before = next((other for other in range(note - 1, -1, -1) if owner[other]), None)
-            if before is not None:
-                sound = owner[before][-1]
-            else:
-                after = next((other for other in range(note + 1, len(notes)) if owner[other]), None)
-                if after is None:
-                    continue
-                sound = owner[after][0]
-        owner[note] = [sound]
-        doubted.add(sound)
 
     covered: dict[int, list[int]] = {}
     for note, owners in enumerate(owner):
@@ -777,6 +840,7 @@ def map_sounds(
     reached = [
         any(_overlaps(start, end, notes[note]) for _row, _column, start, end in flat) for note in range(len(notes))
     ]
+    doubted: set[int] = set()
     for note, owners in enumerate(owner):
         if not reached[note]:
             doubted.update(owners)
@@ -828,15 +892,3 @@ def _zero_point(start: float | None, notes: Sequence[tuple[float, float]]) -> fl
     if start is not None:
         return start
     return notes[0][0] if notes else None
-
-
-def _free_owner(owner: Sequence[Sequence[int]], grouped: dict[int, int], note: int) -> int | None:
-    """The sound on a neighbouring note that may take one more: the previous note's last, else the
-    next note's first. A grouped sound only occupies its own note, so it is skipped; `None` when
-    neither neighbour holds one."""
-    for other, end in ((note - 1, -1), (note + 1, 0)):
-        if 0 <= other < len(owner):
-            free = [sound for sound in owner[other] if sound not in grouped]
-            if free:
-                return free[end]
-    return None

@@ -456,44 +456,47 @@ def test_two_sounds_that_share_a_note_equally_group_on_it():
     assert [placement.group for placement in found[0]] == [0, 0]
 
 
-def test_every_sound_reaching_a_lone_note_shares_it_however_small_a_part():
-    # one note is all there is, so each sound that reaches it sits on it and shares it whole; the
-    # boundary between two sounds is not a reason to drop one
+def test_two_sounds_landing_on_the_same_onset_leave_the_earlier_with_no_length():
+    # one note (0,1) with onsets 0.0 and 0.24: both landing on note 0's start costs 0.0 + 0.24 = 0.24,
+    # less than splitting it at 0.0 / 0.5 (0.26), so the earlier sound takes no length
     found = map_sounds(sound_lines("あい"), [[(0.0, 0.24), (0.24, 1.0)]], [(0.0, 1.0)], "あい")
-    assert [placement.notes for placement in found[0]] == [(0,), (0,)]
-    assert [placement.group for placement in found[0]] == [0, 0]
-    assert not any(placement.zero for placement in found[0])
+    assert [placement.notes for placement in found[0]] == [(), (0,)]
+    assert [placement.zero for placement in found[0]] == [True, False]
+    assert [placement.group for placement in found[0]] == [-1, -1]
 
 
-def test_three_sounds_on_one_note_all_keep_it():
-    # あ 44%, い 39%, う 9% on one note: the smallest share keeps the note it reaches too
+def test_a_short_share_on_one_note_falls_to_zero():
+    # あ 0.2, い 1.2, う 2.1 on one note (0,2.3): あ and い split it (0.0 / 1.15) for 0.25, while う
+    # as a third share at 1.533 costs more than its 0.9 to the sound before
     times = [[(0.2, 1.2), (1.2, 2.1), (2.1, 2.3)]]
     found = map_sounds(sound_lines("あいう"), times, [(0.0, 2.3)], "あいう")
-    assert [placement.notes for placement in found[0]] == [(0,), (0,), (0,)]
-    assert [placement.zero for placement in found[0]] == [False, False, False]
-    assert [placement.group for placement in found[0]] == [0, 0, 0]
+    assert [placement.notes for placement in found[0]] == [(0,), (0,), ()]
+    assert [placement.zero for placement in found[0]] == [False, False, True]
+    assert [placement.group for placement in found[0]] == [0, 0, -1]
 
 
-def test_a_sound_holding_a_note_and_sharing_another_gives_up_the_share():
-    # あ holds note 0 and reaches into note 1, which い covers too: a group only occupies its own
-    # note, so あ keeps note 0 and い takes note 1 alone
+def test_a_hold_is_priced_so_a_sound_a_rest_away_takes_its_own_note():
+    # あ lands on note 0 for nothing; い's 1.6 costs 0.6 to note 1's start. Holding note 1 with あ
+    # costs its own |0.0 - 1.0| = 1.0 and still leaves い 0.4 off the line end, 1.4 together, so い
+    # takes note 1 itself
     notes = [(0.0, 1.0), (1.0, 2.0)]
     found = map_sounds(sound_lines("あい"), [[(0.0, 1.6), (1.6, 2.0)]], notes, "あい")
     assert [placement.notes for placement in found[0]] == [(0,), (1,)]
-    assert [placement.group for placement in found[0]] == [-1, -1]
+    assert [placement.zero for placement in found[0]] == [False, False]
 
 
-def test_a_sound_that_shares_a_note_and_holds_a_later_one_keeps_the_later_one():
-    # い holds note 1 and shares note 0 with あ: い keeps note 1, あ takes note 0 alone
+def test_two_onsets_on_one_note_do_not_hold_when_the_hold_costs_more():
+    # あ on note 0 and い on note 1 costs 0.0 + |0.4 - 1.0| = 0.6, while leaving あ out to land on
+    # note 0's start and having い hold note 1 costs |0.4 - 0.0| + |0.4 - 1.0| = 1.0
     notes = [(0.0, 1.0), (1.0, 2.0)]
     found = map_sounds(sound_lines("あい"), [[(0.0, 0.4), (0.4, 1.6)]], notes, "あい")
     assert [placement.notes for placement in found[0]] == [(0,), (1,)]
-    assert [placement.group for placement in found[0]] == [-1, -1]
+    assert [placement.zero for placement in found[0]] == [False, False]
 
 
-def test_a_shared_note_and_a_later_one_split_between_the_sounds():
-    # each sound's onset is nearest a note of its own, so every note has one owner - no group has to
-    # be forced and nothing is doubted
+def test_a_share_and_a_hold_give_way_to_one_note_each_when_the_hold_costs_more():
+    # one note each costs |0.6 - 1.0| + |1.6 - 2.0| = 0.8; あ and い splitting note 0 for 0.1 with
+    # う holding note 2 costs 0.1 + |1.6 - 1.0| + |1.6 - 2.0| = 1.1
     notes = [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]
     found = map_sounds(sound_lines("あいう"), [[(0.0, 1.0), (0.6, 1.6), (1.6, 3.0)]], notes, "あいう")
     assert [placement.notes for placement in found[0]] == [(0,), (1,), (2,)]
@@ -509,20 +512,22 @@ def test_four_sounds_each_holding_a_quarter_all_keep_the_note():
     assert [placement.group for placement in found[0]] == [0, 0, 0, 0]
 
 
-def test_four_sounds_on_one_note_share_it_however_uneven():
-    # 40/25/20/15: every sound reaches the note, so every one keeps it
+def test_a_fourth_share_on_one_note_falls_to_zero():
+    # onsets 0.0 / 0.8 / 1.3 / 1.7 on one note (0,2): the first three split it into thirds for 0.166,
+    # while the fourth as a quarter at 1.5 costs more than its 0.4 to the sound before
     times = [[(0.0, 0.8), (0.8, 1.3), (1.3, 1.7), (1.7, 2.0)]]
     found = map_sounds(sound_lines("あいうえ"), times, [(0.0, 2.0)], "あいうえ")
-    assert [placement.zero for placement in found[0]] == [False, False, False, False]
-    assert [placement.group for placement in found[0]] == [0, 0, 0, 0]
+    assert [placement.zero for placement in found[0]] == [False, False, False, True]
+    assert [placement.group for placement in found[0]] == [0, 0, 0, -1]
 
 
-def test_two_sounds_on_one_note_share_it_however_uneven():
+def test_a_last_sound_a_rest_from_the_note_end_falls_to_zero():
+    # い's 1.8 is 0.2 from the line end and 0.8 from a half at 1.0, so い lands on the end and takes no
+    # length while あ keeps the note
     times = [[(0.0, 1.8), (1.8, 2.0)]]
     found = map_sounds(sound_lines("あい"), times, [(0.0, 2.0)], "あい")
-    assert [placement.notes for placement in found[0]] == [(0,), (0,)]
-    assert [placement.group for placement in found[0]] == [0, 0]
-    assert not any(placement.zero for placement in found[0])
+    assert [placement.notes for placement in found[0]] == [(0,), ()]
+    assert [placement.zero for placement in found[0]] == [False, True]
 
 
 def test_a_note_no_sound_reaches_is_given_to_the_one_before_and_doubted():
@@ -564,6 +569,25 @@ def test_a_sound_snaps_to_the_note_its_own_onset_is_nearest():
     assert [placement.notes for placement in found[0]] == [(0,), (1,), (2,), (3,), (4,)]
     assert [placement.group for placement in found[0]] == [-1] * 5
     assert not any(placement.red for placement in found[0])
+
+
+def test_a_sokuon_can_own_a_note_it_is_sung_on():
+    # a `っ` is a closure, but a closure that can be sung: a note only it reaches stays its own
+    notes = [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]
+    times = [[(0.0, 0.9), (0.9, 1.1), (2.1, 2.9)]]
+    found = map_sounds(sound_lines("あっい"), times, notes, "あっい")
+    assert [placement.notes for placement in found[0]] == [(0,), (1,), (2,)]
+    assert not any(placement.zero for placement in found[0])
+
+
+def test_a_sokuon_never_shares_a_note_even_when_sharing_would_be_free():
+    # あ and っ on note 0's halves (0.0 / 0.5) would cost |0.0 - 0.0| + |0.5 - 0.5| = 0, but a `っ`
+    # is a closure and never joins a group: it falls to `.0` 0.5 from note 0's start, leaving あ and
+    # い a note each for nothing
+    notes = [(0.0, 1.0), (1.0, 2.0)]
+    found = map_sounds(sound_lines("あっい"), [[(0.0, 0.5), (0.5, 0.6), (1.0, 2.0)]], notes, "あっい")
+    assert [placement.notes for placement in found[0]] == [(0,), (), (1,)]
+    assert [placement.group for placement in found[0]] == [-1, -1, -1]
 
 
 def test_a_flagged_line_is_doubted_whole():

@@ -15,27 +15,33 @@ SEPARATOR = "\n---\n"
 META = set("#\n[]().-,{}\r\f\xa0")
 
 
-def dumps(lyrics: Lyrics) -> str:
-    """Serialise the model to `.krc` text; a word that cannot be written raises `KrcError`."""
-    return SEPARATOR.join(_chapter_text(chapter) for chapter in lyrics.chapters)
+def dumps(lyrics: Lyrics, *, dotted: bool = False) -> str:
+    """Serialise the model to `.krc` text; a word that cannot be written raises `KrcError`.
+
+    With `dotted`, every unit that carries an override is written with its `.N`, even where the
+    override happens to equal the reading's own mora count - the mapping's canonical writer sets the
+    override it wants written and leaves it off where it wants none. Without it, a `.N` equal to the
+    reading is dropped, which is what an ordinary edit of the file wants.
+    """
+    return SEPARATOR.join(_chapter_text(chapter, dotted) for chapter in lyrics.chapters)
 
 
-def _chapter_text(chapter: Chapter) -> str:
-    return "\n".join(_line_text(line) for line in chapter.lines)
+def _chapter_text(chapter: Chapter, dotted: bool = False) -> str:
+    return "\n".join(_line_text(line, dotted) for line in chapter.lines)
 
 
-def _line_text(line: Line) -> str:
-    body = "".join(_unit_text(unit) for unit in line.units)
+def _line_text(line: Line, dotted: bool = False) -> str:
+    body = "".join(_unit_text(unit, dotted) for unit in line.units)
     return f"{{{line.track}}}{body}" if line.track != 1 else body
 
 
-def _unit_text(unit: Unit) -> str:
+def _unit_text(unit: Unit, dotted: bool = False) -> str:
     _check_text(unit.text)
     text = f"({unit.text})" if _needs_group(unit) else unit.text
     if unit.ruby is not None:
-        ruby = ",".join(_ruby_text(part) for part in unit.ruby.parts)
+        ruby = ",".join(_ruby_text(part, dotted) for part in unit.ruby.parts)
         text += f"[{ruby}]"
-    if unit.override is not None and unit.mora != unit.natural_mora:
+    if unit.override is not None and (dotted or unit.mora != unit.natural_mora):
         text += f".{unit.mora}"
     return text
 
@@ -49,10 +55,10 @@ def _needs_group(unit: Unit) -> bool:
     return not (unit.ruby is not None and unit.is_kanji())
 
 
-def _ruby_text(part: list[Unit]) -> str:
+def _ruby_text(part: list[Unit], dotted: bool = False) -> str:
     if not part:
         raise KrcError("a ruby part may not be empty")
-    return "".join(_unit_text(inner) for inner in part)
+    return "".join(_unit_text(inner, dotted) for inner in part)
 
 
 def _check_text(text: str) -> None:

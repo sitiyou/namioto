@@ -171,6 +171,10 @@ class NoteItem(QGraphicsRectItem):
         return self.note.channel
 
     @property
+    def id(self) -> int:
+        return self.note.id
+
+    @property
     def end(self) -> float:
         return self.note.end
 
@@ -379,15 +383,20 @@ class PianoRollView(QGraphicsView):
             self.notes_changed.emit()
         return item
 
-    def set_notes(self, notes) -> None:
+    def set_notes(self, notes, next_id: int = 1) -> None:
         """Replace every note in one go: a project or an extraction arrives all at once.
 
-        A note may carry a fourth element, the channel it plays on.
+        A note may carry a fourth element, the channel it plays on, and a fifth, the stable id it was
+        saved under; `next_id` is the id the project file says is free next.
         """
         with self._edit("Replace notes"):
             self._drop_items()
             self.document.replace_notes(
-                Note(item[0], item[1], item[2], item[3] if len(item) > 3 else 0) for item in notes
+                (
+                    Note(item[0], item[1], item[2], item[3] if len(item) > 3 else 0, item[4] if len(item) > 4 else 0)
+                    for item in notes
+                ),
+                next_id,
             )
             for note in self.document.notes:
                 self._add_item(note)
