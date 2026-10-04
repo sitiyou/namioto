@@ -56,7 +56,7 @@ def map_lyrics(
 ) -> LyricResult:
     """The mapping for the mode in force: the aligner's times in edit, the `.krc`'s own in read.
 
-    `raw` is one `(start, end)` per Sound, per line; `scores` the aligner's confidence beside it;
+    `raw` is one `(onset, raw_length)` per Sound, per line; `scores` the alignment confidence;
     `notes` the target channel as `(start, end, pitch, id)` tuples. A mapping that cannot be made -
     missing alignment, no notes, a broken anchor - comes back with `.error` set and the raw times as
     the drawn spans, so the strip still shows what it has.
@@ -87,7 +87,7 @@ def _read_result(text, lines, raw, notes) -> LyricResult:
         lines=tuple(lines),
         spans=_pairs(rows),
         red=empty,
-        raw=_pairs(rows),
+        raw=_pairs(raw),
         zero=zero,
         group=groups,
         mapped=tuple(tuple(tuple(chunk) for chunk in row) for row in ids),
@@ -121,7 +121,12 @@ def _failed(lines, raw, message: str) -> LyricResult:
     groups = tuple(tuple(-1 for _sound in line.sounds) for line in lines)
     return LyricResult(
         lines=tuple(lines),
-        spans=_pairs(raw),
+        spans=_pairs(
+            [
+                [(onset, onset + length if onset is not None and length is not None else None) for onset, length in row]
+                for row in raw
+            ]
+        ),
         red=empty,
         raw=_pairs(raw),
         zero=empty,
@@ -138,8 +143,8 @@ def _pairs(rows) -> tuple:
 
 def _raw_row(spans: Sequence[tuple], scores: Sequence[float | None]) -> list[Raw]:
     return [
-        Raw(start, end, scores[index] if index < len(scores) else None)
-        for index, (start, end) in enumerate(spans)
+        Raw(onset, length, scores[index] if index < len(scores) else None)
+        for index, (onset, length) in enumerate(spans)
     ]
 
 

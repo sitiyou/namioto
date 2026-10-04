@@ -116,25 +116,6 @@ def split_tokens(tokens: Sequence, lines: list[SoundLine]) -> list[list[tuple[fl
     return rows
 
 
-def contiguous(
-    times: Sequence[Sequence[tuple[float | None, float | None]]],
-) -> list[list[tuple[float | None, float | None]]]:
-    """Every Sound's end taken from the next Sound's start: the aligner's own end is dropped.
-
-    The strip reads a line as a chain of onsets - each `|` marks where a Sound begins and the Sound
-    ends where the next begins - so only the starts carry the timing and a Sound's own end says
-    nothing. The last Sound of a line keeps the end it came with, since no `|` follows it.
-    """
-    rows = []
-    for row in times:
-        spans = [list(span) for span in row]
-        for index in range(len(spans) - 1):
-            if spans[index][0] is not None and spans[index + 1][0] is not None:
-                spans[index][1] = spans[index + 1][0]
-        rows.append([tuple(span) for span in spans])
-    return rows
-
-
 def _line_sounds(line: Line, line_index: int, chapter_index: int) -> SoundLine:
     text = "".join(unit.text for unit in line.units)
     containers: list[Container] = []

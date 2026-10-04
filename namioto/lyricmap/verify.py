@@ -20,7 +20,7 @@ from namioto.lyricmap import problems as codes
 from namioto.lyricmap.confidence import read
 from namioto.lyricmap.notes import Note
 from namioto.lyricmap.problems import MappingError, Problem
-from namioto.lyricmap.raw import Raw, chain, validate
+from namioto.lyricmap.raw import Raw, validate
 
 
 @dataclass(frozen=True)
@@ -71,8 +71,7 @@ def verify(
         blocked = True
     issues.extend(Problem(codes.FILTERED_NOTE, "a note is kept out by a conflict", (note.id,)) for note in filtered)
     try:
-        rows = chain(raw)
-        validate(lines, rows)
+        validate(lines, raw)
     except MappingError as error:
         issues.append(Problem(error.code, str(error)))
         return Gate(tuple(issues))
@@ -83,7 +82,7 @@ def verify(
         from namioto.lyricmap.solver import _anchors, _context
 
         try:
-            _anchors(confirmed, _context(lines, rows, list(notes)))
+            _anchors(confirmed, _context(lines, raw, list(notes)))
         except MappingError as error:
             issues.append(Problem(codes.INVALID_ANCHOR, str(error)))
             blocked = True

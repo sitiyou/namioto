@@ -5,8 +5,8 @@ The run is a `LoadingThread` of its own (`Aligner`), because the model is an ONN
 audio is read once; the window only starts it, shows the progress, and shows the failures
 `namioto.analysis.align` reports. The whole stream is aligned in one pass, the way FA-Kara does it. Its
 choices are `align.PARAMETERS`, remembered between runs in the file `align.parameter_path()` names.
-Its Quantize choice (Off / 1/4 / 1/8 / ..., GAME's list) snaps the raw alignment onto the beat grid
-off the drawn grid's offset (`karaoke.snap_to_beats`) before the mapping.
+Its Quantize choice (Off / 1/4 / 1/8 / ..., GAME's list) snaps onsets onto the drawn beat grid
+before mapping, preserving the reference durations captured from the alignment.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ from PyQt6.QtWidgets import (
 from namioto.analysis import align, devices
 from namioto.i18n import tr
 from namioto.karaoke.sounds import natural_sounds, natural_tokens, split_tokens
-from namioto.lyricmap import snap_to_beats
+from namioto.lyricmap import from_spans, snap_to_beats
 from namioto.params import Field
 from namioto.ui.form import add_row, field_editor
 from namioto.ui.loading import LoadingThread
@@ -218,7 +218,8 @@ class AlignDialog(QDialog):
         self.progress.setValue(done)
 
     def _done(self, result) -> None:
-        times, model, problems, flagged = result
+        spans, model, problems, flagged = result
+        times = from_spans(spans)
         cells = self.parameters()["quantize"]  # read now, so a change made while the run went counts
         if cells:
             times = snap_to_beats(times, self.tempo, 1.0 / cells, self.offset)

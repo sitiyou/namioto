@@ -317,7 +317,7 @@ class Lyrics(NamedTuple):
     The text is the baseline: the `.krc` beside the project is a copy written for editing and
     export, so a project still opens with the lyrics it was saved with once that file is gone.
     `key` is the hash of the text the times were made from, so a changed text invalidates them;
-    `lines` holds one `(start, end)` in seconds per sound, `None` where none was found; `scores`
+    `raw` holds one `(onset, raw_length)` in seconds per Sound, `None` where none was found; `scores`
     holds the aligner's own score per sound beside it; `flagged` holds one bool per line, true where
     the aligner itself doubted the times it made; `problems` holds the aligner's line-level
     complaints. `mode` is `edit` while the aligner's times lay the sounds out, or `read` while the
@@ -329,7 +329,7 @@ class Lyrics(NamedTuple):
     key: str = ""
     model: str = ""
     mode: str = "edit"
-    lines: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
+    raw: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
     flagged: tuple[bool, ...] = ()
     channel: int = 0
     scores: tuple[tuple[float | None, ...], ...] = ()
@@ -402,7 +402,7 @@ def _lyrics_dict(lyrics: Lyrics | None) -> dict | None:
         "model": lyrics.model,
         "mode": lyrics.mode,
         "channel": lyrics.channel,
-        "lines": [[list(span) for span in line] for line in lyrics.lines],
+        "raw": [[list(sound) for sound in line] for line in lyrics.raw],
         "scores": [list(row) for row in lyrics.scores],
         "flagged": list(lyrics.flagged),
         "problems": [list(row) for row in lyrics.problems],
@@ -557,13 +557,13 @@ def _notes(value: Any) -> tuple[Note, ...]:
 def _lyrics(value: Any) -> Lyrics | None:
     if not isinstance(value, dict):
         return None
-    key, lines = value.get("key"), value.get("lines")
+    key, raw = value.get("key"), value.get("raw")
     model, text, mode = value.get("model"), value.get("text"), value.get("mode")
     flagged = value.get("flagged")
-    if not isinstance(key, str) or not isinstance(lines, list):
+    if not isinstance(key, str) or not isinstance(raw, list):
         return None
     rows: list[tuple[tuple[float | None, float | None], ...]] = []
-    for line in lines:
+    for line in raw:
         if not isinstance(line, list):
             return None
         row = []
@@ -586,7 +586,7 @@ def _lyrics(value: Any) -> Lyrics | None:
         key=key,
         model=model if isinstance(model, str) else "",
         mode=mode if mode in LYRIC_MODES else "edit",
-        lines=tuple(rows),
+        raw=tuple(rows),
         flagged=tuple(bool(flag) for flag in flagged) if isinstance(flagged, list) else (),
         channel=_channel_number(value.get("channel", 0)),
         scores=_scores(value.get("scores")),

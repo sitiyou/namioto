@@ -17,7 +17,7 @@ from dataclasses import dataclass
 from namioto.karaoke.operations import Match, Merge, Operation
 from namioto.karaoke.sounds import SoundLine
 from namioto.lyricmap.notes import Note
-from namioto.lyricmap.raw import Raw, chain
+from namioto.lyricmap.raw import Raw
 from namioto.lyricmap.solver import diagnose
 
 # a raw boundary more than a fifth of a second off is the operation's own trouble
@@ -52,7 +52,6 @@ def read(
     flagged: Sequence[bool] = (),
 ) -> list[Reading]:
     """One reading per operation, in order, judged against the named thresholds."""
-    rows = chain(raw)
     found = diagnose(lines, raw, notes, operations)
     note_list = list(notes)
     at = {note.id: index for index, note in enumerate(note_list)}
@@ -61,7 +60,7 @@ def read(
     for operation, (fit_error, margin) in zip(operations, found, strict=True):
         span = _span(operation, note_list, note_at, at)
         normalized = margin / span if span > 1e-9 else margin
-        quality = _quality(operation, rows, flagged)
+        quality = _quality(operation, raw, flagged)
         rest = _rest(operation, note_list, at)
         low = fit_error > FIT_ERROR_SECONDS or normalized < MARGIN_PER_SECOND or quality < QUALITY or rest > REST_RATIO
         readings.append(

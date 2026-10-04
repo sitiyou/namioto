@@ -58,7 +58,7 @@ from namioto.channels import set_field as channel_set_field
 from namioto.karaoke import AssSettings, KrcError, generate_ass
 from namioto.karaoke.operations import Drop, Match, Merge, SoundRef
 from namioto.karaoke.sounds import natural_sounds
-from namioto.lyricmap import Raw, snap_to_beats, sound_spans, verify
+from namioto.lyricmap import Raw, from_spans, snap_to_beats, sound_spans, verify
 from namioto.lyricmap.notes import TimedNote, resolve
 from namioto.lyrics import text_key
 from namioto.playback import note_frequency
@@ -1144,7 +1144,7 @@ class MainWindow(QMainWindow):
                 key=self._lyric_key,
                 model=self._lyric_model,
                 mode=self._lyric_mode,
-                lines=self.view.lyric_raw,
+                raw=self.view.lyric_raw,
                 flagged=self._lyric_flags,
                 channel=self._lyric_channel,
                 scores=tuple(tuple(row) for row in (self._lyric_scores or ())),
@@ -1388,10 +1388,10 @@ class MainWindow(QMainWindow):
         else:
             self._lyric_error = ""
         stored = self._stored_lyrics
-        if lines and stored is not None and stored.key == key and len(stored.lines) == len(lines):
+        if lines and stored is not None and stored.key == key and len(stored.raw) == len(lines):
             self._lyric_model = stored.model
             self._lyric_channel = stored.channel
-            raw = [list(row) for row in stored.lines]
+            raw = [list(row) for row in stored.raw]
             self._lyric_flags = stored.flagged if len(stored.flagged) == len(lines) else ()
             self._lyric_scores = [list(row) for row in stored.scores] if len(stored.scores) == len(lines) else None
             problems = stored.problems if len(stored.problems) == len(lines) else ()
@@ -1484,7 +1484,8 @@ class MainWindow(QMainWindow):
             editable=self._lyric_mode != "read",
             operations=result.operations if not result.error else None,
         )
-        self.sound_strip.setVisible(any(span[0] is not None for row in result.raw for span in row))
+        shown = result.spans if self._lyric_mode == "read" else result.raw
+        self.sound_strip.setVisible(any(span[0] is not None for row in shown for span in row))
         self.view.set_filtered_notes(note.id for note in result.filtered)
 
     def _target_notes(self) -> list[tuple[float, float, int, int]]:
@@ -1580,7 +1581,8 @@ class MainWindow(QMainWindow):
         if text_key(self.lyrics_text) != self._auto_align_key:
             self._auto_align()  # the text moved on while the pass ran, so catch up with the new one
             return
-        rows, model, _problems, flagged = result
+        times, model, _problems, flagged = result
+        rows = from_spans(times)
         cells = align.load_parameters()["quantize"]
         if cells:
             rows = snap_to_beats(rows, self.view.bpm, 1.0 / cells, self.view.offset)
@@ -1621,9 +1623,9 @@ class MainWindow(QMainWindow):
         dialog.aligned.connect(self._adopt_alignment)
         dialog.exec()
 
-    def _adopt_alignment(self, times, model: str, flagged=()) -> None:
+    def _adopt_alignment(self, raw, model: str, flagged=()) -> None:
         lines = self.view.lyric_lines
-        if not lines or len(times) != len(lines):
+        if not lines or len(raw) != len(lines):
             return
         if not self._lyric_channel_chosen:
             self._lyric_channel = self.view.active_channel
@@ -1631,8 +1633,7 @@ class MainWindow(QMainWindow):
         self._lyric_key = text_key(self.lyrics_text)
         self._lyric_model = model
         self._lyric_flags = tuple(flagged) if len(flagged) == len(lines) else ()
-        raw = [list(row) for row in times]
-        self.view.load_lyrics(lines, raw, raw=raw)
+        self.view.load_lyrics(lines, (), raw=raw)
         self._remap_lyrics(lines)
         self._mark_dirty()
         self.statusBar().showMessage(i18n.tr("Aligned {lines} lines", lines=len(lines)))

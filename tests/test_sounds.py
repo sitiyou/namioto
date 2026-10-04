@@ -167,12 +167,6 @@ def test_the_tokens_are_the_folded_readings(text):
     assert "".join(natural_tokens(lines)) == "".join(kana_tokens(kana))
 
 
-def test_contiguous_chains_a_line_of_onsets():
-    from namioto.karaoke.sounds import contiguous
-
-    assert contiguous([[(0.0, 9.0), (1.0, 9.0), (2.0, 9.0)]]) == [[(0.0, 1.0), (1.0, 2.0), (2.0, 9.0)]]
-
-
 def test_split_tokens_cuts_the_aligner_stream_into_lines():
     from namioto.karaoke.sounds import split_tokens
 

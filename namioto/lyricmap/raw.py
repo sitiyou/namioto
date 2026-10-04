@@ -1,10 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""The aligner's raw evidence for each Sound: a span, and the score it was aligned with.
+"""The evidence for each Sound: an editable onset, a reference duration and an optional score.
 
-`Raw` is one `(start, end, score?)`; `chain` turns a line into the onset chain the mapping reads -
-each Sound ending where the next begins, the aligner's own end kept only for the line's last Sound.
-`validate` refuses anything the edit mapping cannot work from, so the solver never sees a gap or a
-backwards step. Qt-free.
+The aligner's duration is captured before quantization and never changes when an onset moves.
+Only a line's last Sound supplies an end reference, computed as onset plus duration; it is a soft
+mapping comparison, never an editing boundary. Qt-free.
 """
 
 from __future__ import annotations
@@ -18,65 +17,59 @@ from namioto.lyricmap.problems import MappingError
 
 
 class Raw(NamedTuple):
-    """One Sound's raw evidence: where the aligner put it, and how sure it was."""
+    """One Sound's editable onset, reference duration and alignment score."""
 
-    start: float
-    end: float
+    onset: float
+    raw_length: float
     score: float | None = None
 
+    @property
+    def reference_end(self) -> float:
+        return self.onset + self.raw_length
 
-def chain(raw: Sequence[Sequence[Raw]]) -> list[list[Raw]]:
-    """Each line as an onset chain: a Sound ends where the next begins, the last end kept."""
-    rows: list[list[Raw]] = []
-    for line in raw:
-        spans = [Raw(span.start, span.end, span.score) for span in line]
-        for index in range(len(spans) - 1):
-            if spans[index].end is not None and spans[index + 1].start is not None:
-                spans[index] = Raw(spans[index].start, spans[index + 1].start, spans[index].score)
-        rows.append(spans)
-    return rows
+
+def from_spans(
+    times: Sequence[Sequence[tuple[float | None, float | None]]],
+) -> list[list[tuple[float | None, float | None]]]:
+    """Capture onset and duration from the alignment's spans before quantization."""
+    return [
+        [(start, end - start if start is not None and end is not None else None) for start, end in row] for row in times
+    ]
 
 
 def snap_to_beats(
-    times: Sequence[Sequence[tuple[float | None, float | None]]], bpm: float, division: float = 1.0, offset: float = 0.0
+    raw: Sequence[Sequence[tuple[float | None, float | None]]], bpm: float, division: float = 1.0, offset: float = 0.0
 ) -> list[list[tuple[float | None, float | None]]]:
-    """Every Sound's start and end rounded to the grid of `division` beats at `bpm` off `offset`.
+    """Quantize onsets onto the drawn grid, preserving every reference duration.
 
-    The grid is the one that is drawn: `offset` is the editor's slid grid, 0 the absolute beats. A
-    Sound rounds on its own, so one whose two ends land in the same cell comes back with no length -
-    a Sound nothing is sung on - rather than pushing the rest of its line one cell per collision off
-    the beat. A line with an unaligned Sound is left alone, since its boundaries say nothing yet.
+    A line with missing evidence is left alone. Coincident onsets are allowed; quantization never
+    pushes another Sound away to make room.
     """
     step = 60.0 / max(bpm, 1.0) * division
     rows = []
-    for row in times:
-        if any(start is None or end is None for start, end in row):
-            rows.append([tuple(span) for span in row])
+    for row in raw:
+        if any(onset is None or length is None for onset, length in row):
+            rows.append([tuple(sound) for sound in row])
             continue
-        snapped = []
-        for start, end in row:
-            start = offset + round((start - offset) / step) * step
-            end = offset + round((end - offset) / step) * step
-            snapped.append((start, max(start, end)))
-        rows.append(snapped)
+        rows.append([(max(0.0, offset + round((onset - offset) / step) * step), length) for onset, length in row])
     return rows
 
 
 def validate(lines: Sequence[SoundLine], raw: Sequence[Sequence[Raw]]) -> None:
-    """Refuse a mapping whose evidence is missing, reversed or out of order.
-
-    Every Sound must have a finite start and end, no Sound may end before it starts, and the starts
-    must not step backwards across the whole song. A failure is `incomplete_alignment`.
-    """
+    """Require finite, nonnegative evidence and globally nondecreasing onsets."""
+    if len(lines) != len(raw):
+        raise MappingError("incomplete_alignment", "the lyrics and raw evidence have different line counts")
     previous = float("-inf")
-    for line, spans in zip(lines, raw, strict=True):
-        if len(spans) != len(line.sounds):
+    for line, sounds in zip(lines, raw, strict=True):
+        if len(sounds) != len(line.sounds):
             raise MappingError(
-                "incomplete_alignment", f"'{line.text}' has {len(line.sounds)} sounds but {len(spans)} times"
+                "incomplete_alignment", f"'{line.text}' has {len(line.sounds)} sounds but {len(sounds)} times"
             )
-        for span in spans:
-            if span.start is None or span.end is None or not math.isfinite(span.start) or not math.isfinite(span.end):
-                raise MappingError("incomplete_alignment", "a sound has no raw time")
-            if span.end < span.start or span.start < previous - 1e-9:
-                raise MappingError("incomplete_alignment", "the raw times are not in order")
-            previous = span.start
+        for sound in sounds:
+            if any(value is None or not math.isfinite(value) for value in (sound.onset, sound.raw_length)):
+                raise MappingError("incomplete_alignment", "a sound has no raw evidence")
+            if sound.onset < 0 or sound.raw_length < 0 or not math.isfinite(sound.reference_end):
+                raise MappingError("incomplete_alignment", "the raw evidence is invalid")
+            if sound.onset < previous - 1e-9:
+                raise MappingError("incomplete_alignment", "the raw onsets are not in order")
+            previous = sound.onset

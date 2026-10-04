@@ -241,6 +241,7 @@ CATALOGS: dict[str, dict[str, str]] = {
         "Aligning over {seconds:.1f}s of audio in one pass…": "正在整首一次对齐 {seconds:.1f} 秒音频…",
         "Fitting the sounds to the voice…": "正在把音贴合到人声…",
         "Alignment took {seconds:.1f}s": "对齐用时 {seconds:.1f} 秒",
+        "Reference duration: {seconds:.3f} s": "参考时长：{seconds:.3f} 秒",
         "Aligned {lines} lines": "已对齐 {lines} 行",
         "saved alignment reused": "已复用保存的对齐结果",
         "Alignment failed": "对齐失败",

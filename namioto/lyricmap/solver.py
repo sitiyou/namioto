@@ -3,7 +3,8 @@
 
 Every Sound is exactly one `match`, `merge` or `drop`, and every note is consumed exactly once, so
 the cost - each operation's raw onset against where it predicts the onset lands, plus the line's last
-Sound against the line's raw end - is settled over the whole song rather than line by line. A line
+Sound against its onset plus reference duration - is settled over the whole song rather than line
+by line. A line
 boundary does not cut the note stream, so a line's last Sound may run over the rest between lines;
 only a `merge` may not cross lines. Confirmed operations are hard anchors: the DP solves the stretches
 between them and never moves them.
@@ -25,7 +26,7 @@ from namioto.karaoke.operations import Drop, Match, Merge, Operation, SoundRef
 from namioto.karaoke.sounds import SoundLine
 from namioto.lyricmap.notes import Note
 from namioto.lyricmap.problems import MappingError
-from namioto.lyricmap.raw import Raw, chain, validate
+from namioto.lyricmap.raw import Raw, validate
 
 # match, merge, drop in the order a tie prefers them
 _RANK = {"match": 0, "merge": 1, "drop": 2}
@@ -52,14 +53,13 @@ def solve(
 ) -> list[Operation]:
     """The mapping for the whole song: a partition of its Sounds and the note stream.
 
-    `raw` is one span per Sound, per line, already the aligner's evidence (an onset chain is applied
-    here). `notes` is the target channel's single voice, in stream order. `anchors` are the confirmed
-    operations the DP must keep. Raises `MappingError` when the input cannot yield a mapping.
+    `raw` is one onset and reference duration per Sound, per line. `notes` is the target channel's
+    single voice, in stream order. `anchors` are the confirmed operations the DP must keep.
+    Raises `MappingError` when the input cannot yield a mapping.
     """
-    rows = chain(raw)
-    validate(lines, rows)
+    validate(lines, raw)
     note_list = list(notes)
-    context = _context(lines, rows, note_list)
+    context = _context(lines, raw, note_list)
     if context.total == 0:
         raise MappingError("no_lyric_sounds", "the lyrics have no sounds")
     if not note_list:
@@ -93,10 +93,10 @@ def _context(lines: Sequence[SoundLine], rows: Sequence[Sequence[Raw]], notes: l
     for line_index, line in enumerate(lines):
         line_start.append(len(info))
         line_count.append(len(line.sounds))
-        line_end.append(rows[line_index][-1].end if line.sounds else 0.0)
+        line_end.append(rows[line_index][-1].reference_end if line.sounds else 0.0)
         for index, sound in enumerate(line.sounds):
             info.append((line_index, index, (line_index, sound.container)))
-            raw_start.append(rows[line_index][index].start)
+            raw_start.append(rows[line_index][index].onset)
     total = len(info)
     is_last = [index == line_start[info[index][0]] + line_count[info[index][0]] - 1 for index in range(total)]
     maxm = [1] * total
@@ -118,10 +118,10 @@ def _line_end(context: _Context, index: int) -> float:
 
 
 def _line_end_overshoot(context: _Context, index: int, predicted_end: float) -> float:
-    """How far a line-end operation's predicted end runs past the raw end.
+    """How far a line-end operation's predicted end runs past the end reference.
 
     A note held longer than its lyric is sung, or a rest before the next line, is not the mapping's
-    trouble; only an end short of the raw line end says the lyrics and the notes disagree.
+    trouble; only an end short of the end reference says the lyrics and the notes disagree.
     """
     if not context.is_last[index]:
         return 0.0
@@ -336,7 +336,7 @@ def backward(context: _Context) -> list[list[float]]:
     """`grid[i][j]`: the cheapest base cost from state (i, j) - i Sounds and j notes taken - to the end.
 
     A match's cost does not depend on how many notes it takes when the Sound is not its line's last,
-    so its best length is a suffix minimum over the row; a line-last Sound folds its raw end into the
+    so its best length is a suffix minimum over the row; a line-last Sound folds its end reference into the
     same suffix. That is what keeps the backward pass at the same `O(sounds * notes)` as the forward.
     """
     total = context.total
@@ -379,18 +379,17 @@ def diagnose(
     """Per operation, its own fit error and its margin over the best alternative from the same state.
 
     The fit error is the operation's boundary error against the raw evidence, save that at a line end
-    only an end short of the raw line end counts: a note held past the sung line is normal, not a
+    only an end short of the end reference counts: a note held past the sung line is normal, not a
     mismatch. The margin keeps the operation's prefix and asks what the cheapest mapping from there
     without it would cost; the completion is the unanchored backward pass, so with confirmed anchors
     the margin of the suggested operations around them is approximate. Both numbers are in seconds;
     normalising and judging them belongs to `confidence`.
     """
-    rows = chain(raw)
-    validate(lines, rows)
+    validate(lines, raw)
     note_list = list(notes)
     if not note_list:
         return []
-    context = _context(lines, rows, note_list)
+    context = _context(lines, raw, note_list)
     grid = backward(context)
     found: list[tuple[float, float]] = []
     sound_at, note_at = 0, 0

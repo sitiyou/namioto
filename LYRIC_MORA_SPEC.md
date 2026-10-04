@@ -38,7 +38,7 @@
 | `natural_mora` | 一个 Unit 在忽略 `.N` 后，由文字或 ruby 自然产生的 Sound 数量。 |
 | `.N` | Unit 的 NOTE 槽数 override；不表示 Sound 数。 |
 | `Sound` | edit 模式的稳定、最小自然读音原子。 |
-| raw time | aligner 为 Sound 提供的 `(start, end, score?)`；是匹配证据，不是最终 NOTE 边界。score 可缺失，缺失时降低置信度。 |
+| raw evidence | 每个 Sound 的可编辑 `onset`、参考时长 `raw_length` 与可选 `score`；是匹配证据，不是最终 NOTE 边界。`raw_length` 在现有对齐流程输出后、Quantize 前取 `end - start`，不随编辑或 Quantize 改变。score 可缺失，缺失时降低置信度。 |
 | target channel | 当前歌词映射使用的唯一 MIDI channel。 |
 | target NOTE stream（歌词 NOTE，lyrics note） | target channel 的 NOTE 经过冲突预处理后得到的单声部、有序预览流；就是 timeline 上显示的歌词 NOTE，每个元素对应条带上的一块 NOTE block。 |
 | operation | 最终映射的一个 `match`、`merge` 或 `drop`。 |
@@ -192,15 +192,15 @@ b.start < a.end - OVERLAP_SLACK
 
 - 至少有一个自然 Sound；
 - target channel 至少有一个 NOTE；
-- 每个 Sound 都有有限的 raw `start` 和 `end`；
-- 每个 span 满足 `start <= end`；
-- raw start 按歌词顺序单调不减；
-- 每行先经过 onset-chain 归一化：行内 `raw[i].end = raw[i+1].start`；
-- 行与行之间不强制首尾相接。
+- 每个 Sound 都有有限、非负的可编辑 `onset` 和 `raw_length`；
+- `onset + raw_length` 有限；
+- onset 按全曲歌词顺序单调不减，允许相等；
+- 不存储或维护独立的 onset-chain end；
+- 行与行之间不强制首尾相接，参考时长和派生 span 可以重叠。
 
 任一 Sound 缺失或逆序时，整次映射不运行，产生 `incomplete_alignment`，提示重新对齐；不得只映射剩余部分。
 
-用户选择 Quantize 时，Quantize 后的 raw time 是映射证据和工程持久化值。程序不同时维护另一套隐藏的原始时间。
+用户选择 Quantize 时，只量化 onset，结果不得小于 `0`；`raw_length` 保持不变。量化后的 onset 是映射输入和工程持久化值，程序不同时维护另一套隐藏的原始起点时间轴。
 
 目标 channel 没有 NOTE 时产生 `no_target_notes`；edit 模式 KRC 和 ASS 都不得导出。
 
@@ -311,15 +311,15 @@ cost = sum(abs(raw_onset - predicted_onset))
 - merge：每个成员 raw onset 对该成员的等分 onset；
 - drop：Sound raw onset 对当前 NOTE 游标的**最近边界**——已消费的最后一条 NOTE.end 与尚未消费的下一条 NOTE.start 中，绝对距离较小者；游标在流首（没有已消费 NOTE）时取尚未消费的下一条 NOTE.start，在流末（没有未消费 NOTE）时取最后一条 NOTE.end。drop 没有自己的 NOTE，因此 MUST NOT 只以“下一个 Sound 将要占用的 NOTE.start”为参照。
 
-行内 raw end 已由下一个 Sound onset 派生，MUST NOT 重复计价。
+行内下一个 Sound onset 已参与边界代价，MUST NOT 再计行内 end 或 `raw_length` 代价。
 
-每一行最后一个 Sound 额外比较一次 raw line end 与 operation predicted end：
+每一行最后一个 Sound 额外比较一次结束参考点 `onset + raw_length` 与 operation predicted end：
 
 - 行末 match：最后一条 NOTE.end；
 - 行末 merge：唯一 NOTE.end；
 - 行末 drop：当前 NOTE 游标边界点（尚未消费的下一条 NOTE.start，否则最后一条 NOTE.end）；end 项只与游标边界比较，与 onset 侧选取的最近边界无关。
 
-这样行间休止影响全局映射，但不会成为 NOTE 分区硬边界。
+这样行间休止影响全局映射，但结束参考点既不成为 NOTE 分区硬边界，也不成为 onset 拖动的硬上限。
 
 基础代价不得添加隐式 `drop`、match 大小或 merge 大小惩罚。不得保留 `HOLD_PRICE`、`REACH_TIE`、share 阈值或字符类别特价。
 
@@ -354,7 +354,7 @@ complexity =
 
 每个 suggested operation 至少检查：
 
-1. **`fit_error`**：当前 operation 的预测边界与 raw 证据的绝对误差；行末额外比较 end，但只计 **under-run**——预测 end 早于 raw line end 才算误差；预测 end 晚于 raw line end（音符延音、行尾休止）不计；
+1. **`fit_error`**：当前 operation 的预测边界与 raw 证据的绝对误差；行末额外比较结束参考点 `onset + raw_length`，但只计 **under-run**——预测 end 早于结束参考点才算误差；预测 end 晚于结束参考点（音符延音、行尾休止）不计；
 2. **`mapping_margin`**：禁止当前 operation 后重新求最佳合法映射，计算替代方案与全局最优的代价差，并按 operation 涉及的 NOTE 时长归一化；
 3. **`alignment_quality`**：成员 token score、缺失数据和 aligner 行级 problem；
 4. **内部 rest**：match 内相邻 NOTE 的 gap 相对周围 NOTE 时长是否异常。
@@ -428,7 +428,7 @@ UI 至少支持：
 5. 确认低置信度 operation；
 6. 在冲突 NOTE 中选择预览分支；
 7. 重新自动映射未确认区间，同时锁住 confirmed operation；
-8. 拖动 raw Sound 边界以修改匹配证据。
+8. 拖动 Sound onset 以修改匹配证据。
 
 选择冲突预览分支不会解除 filtered NOTE 错误；只有修改 MIDI 消除冲突才允许导出。
 
@@ -444,22 +444,24 @@ UI 至少支持：
 
 移动两个 match 之间的 NOTE 边界是一个原子操作，两侧新 match 都成为 confirmed，并只产生一个 undo step。
 
-### 9.3 raw 边界拖动
+### 9.3 onset 拖动
 
-raw `|` 拖动继续采用行内 onset chain：
+raw `|` 只编辑对应 Sound 的 onset：
 
-- 边界是前一个 Sound.end 与后一个 Sound.start 的共享边；
-- 不能越过本行相邻 raw 边界或造成逆序；
-- 行首/行末可自由移动但不得小于 `0`；
+- 不改变该 Sound 或相邻 Sound 的 `raw_length`；
+- 不维护、编辑或命中独立的行末 end；
+- 不能越过全曲歌词顺序中相邻 Sound 的 onset，允许相等；无 Sound 的行不切断这个约束；
+- onset 不得小于 `0`；全曲最后一个 Sound 没有右侧硬上限；
+- `raw_length`、结束参考点和 NOTE 边界 MUST NOT 限制 onset 拖动；
 - 默认平滑，不量化；
 - 只在指针进入当前绘制节拍线的磁吸范围时吸附；
 - NOTE 边界可作为建议和磁吸目标，但不强制；
-- 行与行之间允许 raw 时间重叠；
+- 参考时长和映射派生时间允许跨行重叠，但 onset 必须保持全曲顺序；
 - 一次拖动是一个 undo step。
 
 拖动涉及 confirmed operation 的 Sound 时：
 
-1. 取消所有包含该 Sound 的 confirmed operation；
+1. onset 实际改变时，取消所有包含该 Sound 的 confirmed operation；相邻 Sound 的 onset 未变，不因此解除确认；
 2. 保留其他锚点；
 3. 只重算受影响区间；
 4. 新结果仍按正常置信度处理，不因用户拖过就自动 confirmed。
@@ -567,7 +569,9 @@ canonical writer 可以重排格式并丢弃注释、空白和原始排版，但
 - merge 成员块：按 §6.2 等分唯一 NOTE，连续且不重叠；
 - drop：不画 NOTE 块，只在 raw onset 显示灰色 `|` 与标签；
 - filtered NOTE：在卷帘上单独标红；
-- raw `|`/标签表示 aligner evidence，块表示最终 operation 派生时间；两者不得混用。
+- edit 模式的 raw `|`/标签表示可编辑 onset，块表示最终 operation 派生时间；两者不得混用；
+- 不绘制或命中独立的行末 end 拖动柄；最后一个 Sound 的标签空间由后续 onset 和映射派生时间决定，不由 `raw_length` 决定；
+- tooltip 显示参考时长；read-only 模式的 `|` 使用 faithful 派生位置，但不得改写 edit 模式的 onset 或参考时长。
 
 merge 的等分 onset 参与映射代价，但等分 span 只用于显示和 ASS，不作为持久化事实。
 
@@ -640,7 +644,7 @@ read-only 模式允许把输入 KRC 原样复制到用户选择的路径，即�
 
 - NOTE 的稳定整数 ID 与下一个可用 ID；
 - lyrics target channel；
-- 每个 Sound 的 raw `(start, end, score?)`；
+- 每个 Sound 的 `(onset, raw_length, score?)`；
 - aligner 行级 flagged/problem；
 - `Match / Merge / Drop` operation；
 - operation 的 `confirmed` 状态；
@@ -654,6 +658,8 @@ read-only 模式允许把输入 KRC 原样复制到用户选择的路径，即�
 ```
 
 operation 按 Sound 顺序组成完整 partition。
+
+工程的 `lyrics.raw` 按行保存每个 Sound 的 `[onset, raw_length]`，score 保存在同结构的 `scores` 中。不读取或迁移旧的 span-based 对齐数据，不用相邻 onset 间距推算参考时长；旧对齐数据需要重新对齐。
 
 以下是派生数据，MUST NOT 作为权威事实保存：
 
@@ -675,7 +681,7 @@ mapping version 变化时：
 
 ### 14.3 dirty 与 undo
 
-- raw 边界拖动：dirty，一次手势一个 undo；
+- onset 拖动：dirty，一次手势一个 undo；
 - 直接编辑 match/merge/drop：dirty，一次操作一个 undo；
 - 确认低置信度 operation：dirty，可 undo；
 - 选择 target channel：dirty，可 undo；
@@ -743,4 +749,8 @@ read-only KRC 原文复制不依赖 edit mapping 门禁。read-only ASS 使用 �
 19. merge 的 ASS span 等分 NOTE，且不重复累计整个 NOTE 时长；
 20. 未完成工程可保存，但不能绕过统一导出门禁；
 21. 只有用户手动选择源 KRC 路径时才覆盖源文件；
-22. read-only faithful 模式不向 edit 模式泄漏 group、`.N` 或确认状态。
+22. read-only faithful 模式不向 edit 模式泄漏 group、`.N` 或确认状态，不改写 edit evidence；
+23. 拖动和 Quantize 只改变 onset，不改变 `raw_length`；
+24. 零参考时长的 Sound 仍能向右移动，全曲最后一个 Sound 不受结束参考点限制；
+25. onset 拖动受全曲相邻 onset 约束，允许相等，空行不切断顺序；
+26. 不存在独立的行末 end 拖动柄或命中区域。

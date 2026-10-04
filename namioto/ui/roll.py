@@ -46,7 +46,8 @@ from namioto.channels import Channel, free_channel
 from namioto.document import MIN_DURATION, PITCH_COUNT, PITCH_MAX, PITCH_MIN, Document, Note
 from namioto.i18n import tr
 from namioto.interaction import Interaction, Tool
-from namioto.karaoke.sounds import SoundLine, contiguous
+from namioto.karaoke.sounds import SoundLine
+from namioto.lyricmap.raw import from_spans
 from namioto.ui import theme
 from namioto.ui.blocks import CLICK_SLOP_PX, Press, block_part
 from namioto.ui.spectrogram import SpectrumImage
@@ -476,7 +477,7 @@ class PianoRollView(QGraphicsView):
 
     @property
     def lyric_raw(self) -> tuple[tuple[tuple[float | None, float | None], ...], ...]:
-        """The aligned times the mapping was made from, which is what a project keeps."""
+        """The editable onsets and reference durations the project keeps."""
         return self._lyric_raw
 
     @property
@@ -509,11 +510,11 @@ class PianoRollView(QGraphicsView):
     ) -> None:
         """The lyrics a `.krc` or a project brings in, with no undo step of their own.
 
-        `times` are the spans the mapping draws, `raw` the aligned times it was made from and the
-        strip edits, `red` the sounds the mapping doubts, `zero` the sounds that cover no note,
+        `times` are the spans the mapping draws, `raw` the `(onset, raw_length)` evidence whose
+        onsets the strip edits, `red` the sounds the mapping doubts, `zero` those that cover no note,
         `group` the note each sound shares, `mapped` the stable ids of the notes each sound maps to
         and `editable` whether the strip may move `raw` at all. Without `red`/`zero` every sound is
-        taken as sound, without `raw` the aligned times are the drawn spans, and without `mapped` no
+        taken as sound, without `raw` evidence is captured from `times`, and without `mapped` no
         note is taken as a lyric NOTE.
         """
         self._lines = tuple(lines)
@@ -521,7 +522,7 @@ class PianoRollView(QGraphicsView):
         if operations is not None:
             self._lyric_operations = tuple(operations)
         self._lyric_times = tuple(tuple(span) for span in times)
-        self._lyric_raw = tuple(tuple(span) for span in contiguous(times if raw is None else raw))
+        self._lyric_raw = tuple(tuple(sound) for sound in (from_spans(times) if raw is None else raw))
         self._lyric_red = (
             tuple(tuple(bool(flag) for flag in row) for row in red)
             if red is not None
@@ -581,43 +582,34 @@ class PianoRollView(QGraphicsView):
         self._highlight_sounds = sounds
         self.lyric_highlight_changed.emit()
 
-    def set_sound_boundary(self, row: int, boundary: int, seconds: float, base=None) -> bool:
-        """Move one boundary of a line's raw sound times, keeping the sounds in order.
+    def set_sound_onset(self, row: int, column: int, seconds: float, base=None) -> bool:
+        """Move one onset between its global neighbours without changing reference durations.
 
-        Boundary `i` is the start of sound `i` and the end of sound `i - 1`, and the line's last
-        boundary is the end of its last sound alone. A boundary is shared, so the sound before it
-        gives up its end as the sound after it takes the start - a line the aligner read as
-        contiguous stays contiguous. `base` is the line as a drag found it, so every move of that
-        drag is measured from there and dragging home leaves the line exactly as it was. The raw
-        times are all that move: the notes and the mapping over them stay where they are.
+        `base` is the row at the start of the gesture, so dragging home restores its evidence.
+        Only confirmed operations containing the edited Sound lose their confirmation.
         """
-        if not 0 <= row < len(self._lyric_raw):
+        if not 0 <= row < len(self._lyric_raw) or not math.isfinite(seconds):
             return False
-        spans = list(self._lyric_raw[row] if base is None else base)
-        if not 0 <= boundary <= len(spans) or not spans:
+        sounds = list(self._lyric_raw[row] if base is None else base)
+        if not 0 <= column < len(sounds):
             return False
-        low = spans[boundary - 1][0] if boundary > 0 else 0.0
-        high = spans[boundary][1] if boundary < len(spans) else math.inf
-        value = max(0.0, float(seconds))
-        if low is not None:
-            value = max(value, low)
-        if high is not None:
-            value = min(value, high)
-        if boundary > 0:
-            spans[boundary - 1] = (spans[boundary - 1][0], value)
-        if boundary < len(spans):
-            spans[boundary] = (value, spans[boundary][1])
-        self._lyric_raw = self._lyric_raw[:row] + (tuple(contiguous([spans])[0]),) + self._lyric_raw[row + 1 :]
-        touched = {boundary - 1, boundary} & set(range(len(spans)))
-        if touched and any(operation.confirmed for operation in self._lyric_operations):
-            # a confirmed operation over a Sound whose raw time just moved no longer holds
-            self._lyric_operations = tuple(
-                operation
-                for operation in self._lyric_operations
-                if not (
-                    operation.confirmed and any(ref.line == row and ref.index in touched for ref in operation.sounds)
-                )
-            )
+        preceding = (*self._lyric_raw[:row], sounds[:column])
+        following = (sounds[column + 1 :], *self._lyric_raw[row + 1 :])
+        low = next(
+            (onset for line in reversed(preceding) for onset, _length in reversed(line) if onset is not None),
+            0.0,
+        )
+        high = next((onset for line in following for onset, _length in line if onset is not None), math.inf)
+        value = min(max(0.0, float(seconds), low), high)
+        sounds[column] = (value, sounds[column][1])
+        if tuple(sounds) == self._lyric_raw[row]:
+            return False
+        self._lyric_raw = self._lyric_raw[:row] + (tuple(sounds),) + self._lyric_raw[row + 1 :]
+        self._lyric_operations = tuple(
+            operation
+            for operation in self._lyric_operations
+            if not (operation.confirmed and any(ref.line == row and ref.index == column for ref in operation.sounds))
+        )
         self.lyrics_changed.emit()
         return True
 

@@ -6,7 +6,7 @@ from namioto.lyricmap.faithful import consumes
 from namioto.lyricmap.faithful import read as read_faithful
 from namioto.lyricmap.notes import Branch, Resolved, components, ordered, overlaps, resolve
 from namioto.lyricmap.problems import MappingError, Problem
-from namioto.lyricmap.raw import Raw, chain, snap_to_beats, validate
+from namioto.lyricmap.raw import Raw, from_spans, snap_to_beats, validate
 from namioto.lyricmap.solver import diagnose, solve
 from namioto.lyricmap.spans import sound_spans
 from namioto.lyricmap.verify import Gate, faithful_gate, verify
@@ -19,11 +19,11 @@ __all__ = [
     "Raw",
     "Reading",
     "Resolved",
-    "chain",
     "components",
     "consumes",
     "diagnose",
     "faithful_gate",
+    "from_spans",
     "ordered",
     "overlaps",
     "read",

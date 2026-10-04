@@ -6,13 +6,11 @@ label just after it - green while it sits on its notes, red while the mapping do
 it covers none. Hovering a sound in a group lights up the whole run the note shares; while the
 playhead rests inside a NOTE, that NOTE's block is tinted in the highlight blue and the `|` and
 label of every sound mapped to it take the group's own colour, so the text is marked without blue.
-The `|` is the
-editor: dragging it slides that boundary of the raw aligned times, the notes and the mapping over
-them following on release. The block is the note span the mapping derives (`lyric_times`), so it
-lines up with the roll and covers the whole note; the `|` and the label are the raw start
-(`lyric_raw`) the aligner gave. A zero-length sound's own `|` is stepped left of the note it butts
-against, so the two can be told apart and dragged separately. A label is dropped, or loses its
-brackets, when its room is too narrow, rather than elided.
+The `|` edits a Sound's onset; its reference duration never limits or follows the drag. Mapping
+is recomputed on release. The block is the note span derived from the mapping (`lyric_times`),
+while the `|` and label show the editable onset (`lyric_raw`). Coincident onsets are stepped apart
+so each can be grabbed separately. There is no independent line-end handle. A label is dropped,
+or loses its brackets, when its room is too narrow, rather than elided.
 
 The `|` drag is smooth - several sounds may sit inside one note cell - and is pulled onto a drawn
 beat division whenever the pointer comes within `SOUND_MAGNET_PX` of one; one gesture is one undo
@@ -27,6 +25,7 @@ from PyQt6.QtCore import QPointF, QRect, QRectF, Qt, pyqtSignal
 from PyQt6.QtGui import QAction, QColor, QFont, QPainter, QPen
 from PyQt6.QtWidgets import QMenu
 
+from namioto.i18n import tr
 from namioto.ui import theme
 from namioto.ui.viewport import ViewportStrip
 
@@ -51,8 +50,8 @@ class SoundStrip(ViewportStrip):
 
     Each sound starts with a `|` and its label, green while it sits on its notes, red while the
     mapping doubts it and grey while it covers none; the run of sounds one note is shared by lights
-    up while the pointer is on it. The `|` is the pointer's target: a drag slides that boundary of
-    the raw aligned times, unless the view is read-only. A label is drawn only when it fits - a
+    up while the pointer is on it. The `|` is the pointer's target: a drag moves the onset unless
+    the view is read-only. A label is drawn only when it fits - a
     rubied one drops the base in its brackets first - so it never runs under the next `|`.
     """
 
@@ -92,19 +91,19 @@ class SoundStrip(ViewportStrip):
         for row, line in enumerate(self.view.lyric_lines):
             if row >= len(self.view.lyric_raw):
                 continue
-            spans = self.view.lyric_raw[row]
-            mapped = self.view.lyric_times[row] if row < len(self.view.lyric_times) else spans
+            spans = self._evidence(row)
+            mapped = self.view.lyric_times[row] if row < len(self.view.lyric_times) else ()
             flags = self.view.lyric_red[row] if row < len(self.view.lyric_red) else ()
             zeros = self.view.lyric_zero[row] if row < len(self.view.lyric_zero) else ()
             xs = self._layout(row, left)
             for column, sound in enumerate(line.sounds):
                 if column >= len(spans):
                     break
-                start, _end = spans[column]
+                start, _length = spans[column]
                 if start is None:
                     continue
                 x0 = self._here(xs[column], self._x(start, left))
-                x1 = self._here(xs[column + 1] if column + 1 < len(xs) else None, x0)
+                x1 = self._sound_right(row, column, xs, x0)
                 room = max(int(x1 - x0) - 2 * SOUND_PAD, 0)
                 good = not (column < len(flags) and flags[column])
                 zero = column < len(zeros) and zeros[column]
@@ -190,7 +189,7 @@ class SoundStrip(ViewportStrip):
             self._press_x - origin
         )
         value = self._magnet_seconds(self._press_seconds + travelled, x)
-        self.view.set_sound_boundary(row, boundary, value, base=self._base)
+        self.view.set_sound_onset(row, boundary, value, base=self._base)
 
     def mouseReleaseEvent(self, event) -> None:
         if self._drag is None:
@@ -243,19 +242,13 @@ class SoundStrip(ViewportStrip):
         return fallback if drawn is None else drawn
 
     def _layout(self, row: int, origin: float | None = None) -> list[float | None]:
-        """The drawn x of every boundary: a zero-length sound's own `|` steps left, the rest stay true.
-
-        Two starts may share a time - a zero-length sound has the same start twice, and the sound
-        after it begins there too. The note the sound butts against keeps its place, so the `.0`
-        sound's own `|` steps one `SOUND_GAP_PX` to the left instead; each then has its own grab spot.
-        The one in hand is drawn at its true time, so a drag follows the data and not the step.
-        """
+        """The drawn onsets, coincident ones stepped left except the one currently being dragged."""
         cached = self._layouts.get(row)
         if cached is not None:
             return cached
-        spans = self.view.lyric_raw[row]
+        spans = self._evidence(row)
         true: list[float | None] = []
-        for index in range(len(spans) + 1):
+        for index in range(len(spans)):
             seconds = self._boundary_seconds(spans, index)
             true.append(self._x(seconds, origin) if seconds is not None else None)
         drawn = list(true)
@@ -295,10 +288,23 @@ class SoundStrip(ViewportStrip):
             return sound.reading
         return ""
 
+    def _evidence(self, row: int):
+        return self.view.lyric_raw[row] if self.view.lyric_editable else self.view.lyric_times[row]
+
+    def _sound_right(self, row: int, column: int, layout, x0: float) -> float:
+        if column + 1 < len(layout) and layout[column + 1] is not None:
+            return layout[column + 1]
+        mapped = self.view.lyric_times[row] if row < len(self.view.lyric_times) else ()
+        end = mapped[column][1] if column < len(mapped) else None
+        right = max(x0 + SOUND_GAP_PX, self._x(end) if end is not None else x0)
+        for following in range(row + 1, len(self.view.lyric_raw)):
+            next_x = next((x for x in self._layout(following) if x is not None), None)
+            if next_x is not None:
+                return min(right, next_x)
+        return right
+
     def _boundary_seconds(self, spans, index: int) -> float | None:
-        if index < len(spans):
-            return spans[index][0]
-        return spans[-1][1] if spans else None
+        return spans[index][0] if 0 <= index < len(spans) else None
 
     def _boundary_x(self, row: int, index: int) -> float | None:
         layout = self._layout(row)
@@ -309,7 +315,7 @@ class SoundStrip(ViewportStrip):
         best: tuple[int, int] | None = None
         nearest = SOUND_GRAB_PX
         for row in range(len(self.view.lyric_raw)):
-            for index in range(len(self.view.lyric_raw[row]) + 1):
+            for index in range(len(self._evidence(row))):
                 found = self._boundary_x(row, index)
                 if found is None:
                     continue
@@ -320,13 +326,14 @@ class SoundStrip(ViewportStrip):
 
     def _sound_at(self, x: float) -> tuple[int, int] | None:
         """The sound whose drawn span holds `x`, for the tooltip and the group highlight."""
-        for row, spans in enumerate(self.view.lyric_raw):
+        for row in range(len(self.view.lyric_raw)):
+            spans = self._evidence(row)
             layout = self._layout(row)
-            for column, (start, _end) in enumerate(spans):
+            for column, (start, _length) in enumerate(spans):
                 if start is None:
                     continue
                 x0 = self._here(layout[column], self._x(start))
-                x1 = self._here(layout[column + 1] if column + 1 < len(layout) else None, x0)
+                x1 = self._sound_right(row, column, layout, x0)
                 if x0 - SOUND_GRAB_PX <= x <= max(x1, x0 + SOUND_GRAB_PX):
                     return (row, column)
         return None
@@ -355,7 +362,9 @@ class SoundStrip(ViewportStrip):
         if run is None:
             return
         row, first, last = run
-        mapped = self.view.lyric_times[row] if row < len(self.view.lyric_times) else self.view.lyric_raw[row]
+        mapped = self.view.lyric_times[row] if row < len(self.view.lyric_times) else ()
+        if last >= len(mapped):
+            return
         start = mapped[first][0]
         end = mapped[last][1] if mapped[last][1] is not None else self._boundary_seconds(mapped, last + 1)
         if start is None or end is None:
@@ -402,6 +411,10 @@ class SoundStrip(ViewportStrip):
 
     def _update_hover(self, found: tuple[int, int] | None) -> None:
         label = self.view.lyric_lines[found[0]].sounds[found[1]].label if found is not None else ""
+        if found is not None and self.view.lyric_editable:
+            length = self.view.lyric_raw[found[0]][found[1]][1]
+            if length is not None:
+                label += "\n" + tr("Reference duration: {seconds:.3f} s", seconds=length)
         self.setToolTip(label)
         if found != self._hover:
             self._hover = found

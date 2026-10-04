@@ -169,7 +169,7 @@ def test_notes_that_are_not_a_list_leave_an_empty_project() -> None:
 
 def test_the_lyric_times_survive_a_round_trip() -> None:
     lyrics = project.Lyrics(
-        text="あん\n", key="abc", model="mms", mode="read", lines=(((0.0, 1.0), (None, None)),), flagged=(True,)
+        text="あん\n", key="abc", model="mms", mode="read", raw=(((0.0, 1.0), (None, None)),), flagged=(True,)
     )
     written = project.to_dict(make(lyrics=lyrics))
     assert written["lyrics"] == {
@@ -178,7 +178,7 @@ def test_the_lyric_times_survive_a_round_trip() -> None:
         "model": "mms",
         "mode": "read",
         "channel": 0,
-        "lines": [[[0.0, 1.0], [None, None]]],
+        "raw": [[[0.0, 1.0], [None, None]]],
         "scores": [],
         "flagged": [True],
         "problems": [],
@@ -189,19 +189,19 @@ def test_the_lyric_times_survive_a_round_trip() -> None:
 
 
 def test_a_lyrics_block_without_a_text_still_reads() -> None:
-    old = {"format": "namioto", "lyrics": {"key": "abc", "model": "mms", "lines": [[[0.0, 1.0]]]}}
-    assert project.from_dict(old).lyrics == project.Lyrics(key="abc", model="mms", lines=(((0.0, 1.0),),))
+    data = {"format": "namioto", "lyrics": {"key": "abc", "model": "mms", "raw": [[[0.0, 1.0]]]}}
+    assert project.from_dict(data).lyrics == project.Lyrics(key="abc", model="mms", raw=(((0.0, 1.0),),))
 
 
 def test_an_unknown_lyric_mode_falls_back_to_edit() -> None:
-    data = {"format": "namioto", "lyrics": {"key": "a", "lines": [], "mode": "sideways"}}
+    data = {"format": "namioto", "lyrics": {"key": "a", "raw": [], "mode": "sideways"}}
     assert project.from_dict(data).lyrics.mode == "edit"
 
 
 def test_a_broken_lyric_block_is_dropped() -> None:
     assert project.from_dict({"format": "namioto", "lyrics": "lots"}).lyrics is None
     assert project.from_dict({"format": "namioto", "lyrics": {"key": "a"}}).lyrics is None
-    assert project.from_dict({"format": "namioto", "lyrics": {"key": "a", "lines": [[1.0]]}}).lyrics is None
+    assert project.from_dict({"format": "namioto", "lyrics": {"key": "a", "raw": [[1.0]]}}).lyrics is None
 
 
 def test_the_audio_is_stored_beside_the_project_when_it_can_be(tmp_path) -> None:
@@ -340,7 +340,7 @@ def test_the_mapping_survives_a_round_trip(tmp_path) -> None:
         text="胡椒[こ,しょう]\n",
         key="abc",
         channel=3,
-        lines=(((0.0, 1.0), (1.0, 2.0), (2.0, 3.0)),),
+        raw=(((0.0, 0.9), (1.0, 0.4), (2.0, 0.0)),),
         scores=((0.9, None, 0.8),),
         flagged=(True,),
         problems=(("a problem",),),
@@ -356,16 +356,12 @@ def test_the_mapping_survives_a_round_trip(tmp_path) -> None:
     assert opened == lyrics
 
 
-def test_a_lyric_file_without_the_new_fields_still_opens() -> None:
+def test_span_based_lyric_evidence_is_not_read_as_reference_durations() -> None:
     data = {
         "format": "namioto",
         "lyrics": {"text": "あ\n", "key": "k", "lines": [[[0.0, 1.0]]]},
     }
-    opened = project.from_dict(data).lyrics
-    assert opened.channel == 0
-    assert opened.operations == ()
-    assert opened.version == project.MAPPING_VERSION
-    assert opened.scores == ()
+    assert project.from_dict(data).lyrics is None
 
 
 def test_a_malformed_operation_is_left_out() -> None:
@@ -376,7 +372,7 @@ def test_a_malformed_operation_is_left_out() -> None:
         "lyrics": {
             "text": "あい\n",
             "key": "k",
-            "lines": [[[0.0, 1.0], [1.0, 2.0]]],
+            "raw": [[[0.0, 1.0], [1.0, 1.0]]],
             "operations": [
                 {"kind": "match", "sound": [0, 0], "notes": [1], "confirmed": True},
                 {"kind": "match", "sound": [0, 1]},

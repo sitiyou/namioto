@@ -40,7 +40,7 @@ def test_a_flagged_line_lowers_confidence():
 
 
 def test_a_boundary_far_from_the_raw_evidence_is_low():
-    _lines, _operations, readings = _readings("あ", [[Raw(0.5, 1.5, 0.9)]], _notes((0.0, 1.0)))
+    _lines, _operations, readings = _readings("あ", [[Raw(0.5, 1.0, 0.9)]], _notes((0.0, 1.0)))
     assert readings[0].fit_error > FIT_ERROR_SECONDS
     assert readings[0].low
 
@@ -60,7 +60,7 @@ def test_a_note_that_ends_before_the_raw_line_end_is_low():
 
 
 def test_a_tie_between_two_operations_is_a_low_margin():
-    _lines, _operations, readings = _readings("あい", [[Raw(0.0, 0.75, 0.9), Raw(0.75, 1.0, 0.9)]], _notes((0.0, 1.0)))
+    _lines, _operations, readings = _readings("あい", [[Raw(0.0, 0.75, 0.9), Raw(0.75, 0.25, 0.9)]], _notes((0.0, 1.0)))
     assert readings[0].margin < MARGIN_PER_SECOND
     assert readings[0].low
 

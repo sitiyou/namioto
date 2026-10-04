@@ -55,7 +55,7 @@ def test_a_low_confidence_operation_closes_the_gate_until_confirmed():
 def test_a_merge_the_format_cannot_write_closes_the_gate():
     text = "胡椒[こ,(しょう)]"
     lines = natural_sounds(text)
-    raw = [[Raw(0.0, 0.5, 0.9), Raw(0.5, 1.0, 0.9), Raw(1.0, 2.0, 0.9)]]
+    raw = [[Raw(0.0, 0.5, 0.9), Raw(0.5, 0.5, 0.9), Raw(1.0, 1.0, 0.9)]]
     notes = _notes((0.0, 1.0), (1.0, 2.0))
     operations = [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1), Match(SoundRef(0, 2), (2,))]
     assert verify(text, lines, raw, notes, operations).counts() == {"unwritable_merge": 1}
@@ -65,7 +65,7 @@ def test_a_mapping_that_would_move_a_sound_closes_the_gate():
     # `あ.21` would read back as one sound with a twenty-one-note override
     text = "あ1"
     lines = natural_sounds(text)
-    raw = [[Raw(0.0, 1.0, 0.9), Raw(1.0, 1.1, 0.9)]]
+    raw = [[Raw(0.0, 1.0, 0.9), Raw(1.0, 0.1, 0.9)]]
     notes = _notes((0.0, 1.0), (1.0, 2.0), (2.0, 3.0))
     operations = [
         Match(SoundRef(0, 0), (1, 2), confirmed=True),

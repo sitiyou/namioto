@@ -52,8 +52,9 @@ from namioto.analysis.bpm import BpmEstimate
 from namioto.analysis.spectrum import MIDI_OFFSET, NOTE_COUNT, NoteSpectrum
 from namioto.channels import Channel
 from namioto.interaction import Interaction, Tool
-from namioto.karaoke.operations import Drop, Merge
+from namioto.karaoke.operations import Drop, Match, Merge, SoundRef
 from namioto.karaoke.sounds import natural_sounds
+from namioto.lyricmap.raw import from_spans
 from namioto.lyrics import text_key
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner
@@ -4788,7 +4789,7 @@ def test_the_export_button_writes_an_ass_subtitle(own_window, monkeypatch, tmp_p
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 1.0, 0)))
     own_window.project_path = tmp_path / "song.nto"
-    own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), lines=(((0.0, 1.0), (1.0, 2.0)),))
+    own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), raw=(((0.0, 1.0), (1.0, 1.0)),))
     own_window._watch_lyrics()
     monkeypatch.setattr(
         QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "exported"), "ASS subtitle (*.ass)")
@@ -4816,7 +4817,7 @@ def test_a_narrow_sound_still_names_itself(window) -> None:
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
     window.sound_strip._update_hover((0, 1))
-    assert window.sound_strip.toolTip() == "い"
+    assert window.sound_strip.toolTip() == "い\nReference duration: 1.000 s"
     window.view.load_lyrics((), ())
     window.sound_strip.setVisible(False)
 
@@ -4842,9 +4843,9 @@ def test_the_sound_strip_renders_the_current_line(window) -> None:
     window.sound_strip.setVisible(False)
 
 
-def test_dragging_a_sound_boundary_moves_the_shared_edge(window) -> None:
-    raw = [[(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]]
-    window.view.load_lyrics(natural_sounds("あいう"), raw, raw=raw)
+def test_dragging_a_sound_onset_preserves_all_reference_durations(window) -> None:
+    times = [[(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]]
+    window.view.load_lyrics(natural_sounds("あいう"), times)
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
     before = window.view.undo_stack.count()
@@ -4853,19 +4854,17 @@ def test_dragging_a_sound_boundary_moves_the_shared_edge(window) -> None:
     sound_mouse(window, QEvent.Type.MouseMove, window.sound_strip._x(1.5))
     sound_mouse(window, QEvent.Type.MouseButtonRelease, window.sound_strip._x(1.5))
 
-    # the boundary is shared: the sound before gives up its end as the sound after takes the start
-    assert window.view.lyric_raw[0] == ((0.0, 1.5), (1.5, 2.0), (2.0, 3.0))
+    assert window.view.lyric_raw[0] == ((0.0, 1.0), (1.5, 1.0), (2.0, 1.0))
     assert window.view.undo_stack.count() == before + 1
     wait_for_lyric_mapping(window)
 
     window.view.undo()
     wait_for_lyric_mapping(window)
-    assert window.view.lyric_raw[0] == ((0.0, 1.0), (1.0, 2.0), (2.0, 3.0))
+    assert window.view.lyric_raw[0] == ((0.0, 1.0), (1.0, 1.0), (2.0, 1.0))
 
 
-def test_a_boundary_drag_stops_at_its_own_sound_end(window) -> None:
-    raw = [[(0.0, 1.0), (1.0, 2.0)]]
-    window.view.load_lyrics(natural_sounds("あい"), raw, raw=raw)
+def test_the_last_sound_onset_has_no_reference_end_limit(window) -> None:
+    window.view.load_lyrics(natural_sounds("あい"), [[(0.0, 1.0), (1.0, 2.0)]])
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
 
@@ -4873,7 +4872,85 @@ def test_a_boundary_drag_stops_at_its_own_sound_end(window) -> None:
     sound_mouse(window, QEvent.Type.MouseMove, window.sound_strip._x(5.0))
     sound_mouse(window, QEvent.Type.MouseButtonRelease, window.sound_strip._x(5.0))
 
-    assert window.view.lyric_raw[0] == ((0.0, 2.0), (2.0, 2.0))
+    assert window.view.lyric_raw[0] == ((0.0, 1.0), (5.0, 1.0))
+
+
+def test_a_zero_duration_final_sound_can_be_dragged_right_and_undone(own_window) -> None:
+    own_window.transport.bpm.setValue(60.0)
+    view = own_window.view
+    view.load_lyrics(natural_sounds("ーす"), [[(0.0, 1.0), (1.0, 2.0)]], raw=[[(0.0, 1.0), (1.0, 0.0)]])
+    own_window.sound_strip.setVisible(True)
+    QApplication.processEvents()
+    strip = own_window.sound_strip
+    before = view.undo_stack.count()
+
+    assert strip._boundary_x(0, 1) == pytest.approx(strip._x(1.0))
+    sound_mouse(own_window, QEvent.Type.MouseButtonPress, strip._x(1.0))
+    sound_mouse(own_window, QEvent.Type.MouseMove, strip._x(1.5))
+    sound_mouse(own_window, QEvent.Type.MouseButtonRelease, strip._x(1.5))
+    wait_for_lyric_mapping(own_window)
+
+    assert view.lyric_raw == (((0.0, 1.0), (1.5, 0.0)),)
+    assert view.undo_stack.count() == before + 1
+    view.undo()
+    wait_for_lyric_mapping(own_window)
+    assert view.lyric_raw == (((0.0, 1.0), (1.0, 0.0)),)
+    view.redo()
+    wait_for_lyric_mapping(own_window)
+    assert view.lyric_raw == (((0.0, 1.0), (1.5, 0.0)),)
+
+
+def test_sound_onsets_stop_at_global_neighbours_across_empty_lines(own_window) -> None:
+    view = own_window.view
+    raw = [[(1.0, 0.2)], [], [(2.0, 0.0)], [(3.0, 0.1)]]
+    view.load_lyrics(natural_sounds("あ\n！？\nい\nう"), (), raw=raw)
+
+    assert view.set_sound_onset(2, 0, 5.0)
+    assert view.lyric_raw[2] == ((3.0, 0.0),)
+    assert view.set_sound_onset(2, 0, 0.0)
+    assert view.lyric_raw[2] == ((1.0, 0.0),)
+    assert view.set_sound_onset(0, 0, -1.0)
+    assert view.lyric_raw[0] == ((0.0, 0.2),)
+    assert view.set_sound_onset(3, 0, 10.0)
+    assert view.lyric_raw[3] == ((10.0, 0.1),)
+
+
+def test_an_onset_drag_cannot_cross_the_next_onset_in_its_line(own_window) -> None:
+    view = own_window.view
+    view.load_lyrics(natural_sounds("あいう"), (), raw=[[(0.0, 9.0), (1.0, 0.1), (2.0, 0.2)]])
+    assert view.set_sound_onset(0, 1, 5.0)
+    assert view.lyric_raw == (((0.0, 9.0), (2.0, 0.1), (2.0, 0.2)),)
+    assert view.set_sound_onset(0, 1, -5.0)
+    assert view.lyric_raw == (((0.0, 9.0), (0.0, 0.1), (2.0, 0.2)),)
+
+
+def test_only_the_operation_of_the_moved_onset_loses_confirmation(own_window) -> None:
+    view = own_window.view
+    previous = Match(SoundRef(0, 0), (1,), confirmed=True)
+    moved = Match(SoundRef(0, 1), (2,), confirmed=True)
+    following = Drop(SoundRef(0, 2), confirmed=True)
+    view.load_lyrics(
+        natural_sounds("あいう"),
+        (),
+        raw=[[(0.0, 1.0), (1.0, 1.0), (2.0, 1.0)]],
+        operations=[previous, moved, following],
+    )
+    assert not view.set_sound_onset(0, 1, 1.0)
+    assert view.lyric_operations == (previous, moved, following)
+    assert view.set_sound_onset(0, 1, 1.5)
+    assert view.lyric_operations == (previous, following)
+    assert view.lyric_raw == (((0.0, 1.0), (1.5, 1.0), (2.0, 1.0)),)
+
+
+def test_the_sound_strip_has_no_line_end_handle(own_window) -> None:
+    own_window.transport.bpm.setValue(60.0)
+    view = own_window.view
+    view.load_lyrics(natural_sounds("あ"), [[(0.0, 2.0)]], raw=[[(0.0, 1.0)]])
+    strip = own_window.sound_strip
+    assert len(strip._layout(0)) == 1
+    assert strip._boundary_at(strip._x(1.0)) is None
+    assert strip._boundary_at(strip._x(2.0)) is None
+    assert not view.set_sound_onset(0, 1, 3.0)
 
 
 def test_a_lyric_drag_is_smooth_but_magnets_to_the_drawn_grid(window) -> None:
@@ -4893,7 +4970,7 @@ def test_a_lyric_drag_is_smooth_but_magnets_to_the_drawn_grid(window) -> None:
 
 def test_hovering_a_shared_note_lights_the_whole_group(window) -> None:
     times = [[(0.0, 1.0), (1.0, 2.0)]]
-    window.view.load_lyrics(natural_sounds("あい"), times, raw=times, group=[[0, 0]])
+    window.view.load_lyrics(natural_sounds("あい"), times, group=[[0, 0]])
     assert window.sound_strip._group_run((0, 0)) == (0, 0, 1)
     assert window.sound_strip._group_run((0, 1)) == (0, 0, 1)
     assert window.sound_strip._group_run(None) is None
@@ -4923,7 +5000,7 @@ def test_a_merge_lights_the_whole_run(own_window) -> None:
     view = own_window.view
     view.set_notes(((60, 0.0, 1.0, 0),))
     view.load_lyrics(
-        natural_sounds("あい"), [[(0.0, 0.5), (0.5, 1.0)]], raw=[[(0.0, 0.5), (0.5, 1.0)]], mapped=[[(1,), (1,)]]
+        natural_sounds("あい"), [[(0.0, 0.5), (0.5, 1.0)]], raw=[[(0.0, 0.5), (0.5, 0.5)]], mapped=[[(1,), (1,)]]
     )
 
     view.set_playhead(0.25)
@@ -4979,8 +5056,7 @@ def test_the_sound_strip_lays_a_row_out_once_per_refresh(window) -> None:
 
 
 def test_two_bars_never_land_on_each_other(window) -> None:
-    raw = [[(0.0, 1.0), (1.0, 1.0), (1.0, 2.0)]]  # the middle sound has no length at all
-    window.view.load_lyrics(natural_sounds("あいう"), raw, raw=raw)
+    window.view.load_lyrics(natural_sounds("あいう"), [[(0.0, 1.0), (1.0, 1.0), (1.0, 2.0)]])
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
 
@@ -4992,8 +5068,7 @@ def test_two_bars_never_land_on_each_other(window) -> None:
 
 
 def test_a_grabbed_bar_drops_back_to_its_true_time(window) -> None:
-    raw = [[(0.0, 1.0), (1.0, 1.0), (1.0, 2.0)]]  # the middle sound has no length
-    window.view.load_lyrics(natural_sounds("あいう"), raw, raw=raw)
+    window.view.load_lyrics(natural_sounds("あいう"), [[(0.0, 1.0), (1.0, 1.0), (1.0, 2.0)]])
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
     strip = window.sound_strip
@@ -5051,7 +5126,7 @@ def test_an_alignment_puts_each_sound_on_the_note_its_time_covers(own_window, tm
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 2.0, 0),))  # one note under both sounds
     own_window._lyric_key = ""
-    own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", lines=(((0.0, 1.0), (1.0, 2.0)),))
+    own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", raw=(((0.0, 1.0), (1.0, 1.0)),))
     own_window._load_sounds()
 
     assert own_window.view.lyric_times == (((0.0, 1.0), (1.0, 2.0)),)  # the merge tiles the one note
@@ -5063,7 +5138,7 @@ def test_mapping_the_lyrics_to_the_active_channel(own_window, tmp_path) -> None:
     own_window.view.set_channels((Channel(channel=0), Channel(channel=1)))
     own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 0.0, 1.0, 1), (64, 1.0, 1.0, 1)))
     own_window.project_path = tmp_path / "song.nto"
-    own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), lines=(((0.0, 1.0), (1.0, 2.0)),))
+    own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), raw=(((0.0, 1.0), (1.0, 1.0)),))
     own_window._watch_lyrics()
 
     assert own_window._lyric_channel == 0  # the stored mapping names channel 0
@@ -5077,13 +5152,13 @@ def test_mapping_the_lyrics_to_the_active_channel(own_window, tmp_path) -> None:
     assert own_window.view.lyric_times == (((0.0, 1.0), (1.0, 2.0)),)  # channel 1 has two
 
 
-def _mapped_pair(own_window, tmp_path, raw=((0.0, 1.0), (1.0, 2.0))) -> None:
+def _mapped_pair(own_window, tmp_path, raw=((0.0, 1.0), (1.0, 1.0))) -> None:
     """A one-to-one mapping of あ, い onto two notes, as the context-menu tests start from."""
     own_window.transport.bpm.setValue(60.0)
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 1.0, 0)))
     own_window.project_path = tmp_path / "song.nto"
-    own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), lines=(raw,))
+    own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), raw=(raw,))
     own_window._watch_lyrics()
 
 
@@ -5111,7 +5186,7 @@ def test_a_lyric_edit_is_one_undo_step(own_window, tmp_path) -> None:
 
 
 def test_merging_two_sounds_confirms_the_pair(own_window, tmp_path) -> None:
-    _mapped_pair(own_window, tmp_path, raw=((0.0, 0.5), (0.5, 1.0)))
+    _mapped_pair(own_window, tmp_path, raw=((0.0, 0.5), (0.5, 0.5)))
     own_window.sound_strip.lyric_action_requested.emit("merge", 0, 1)
 
     assert any(
@@ -5122,7 +5197,7 @@ def test_merging_two_sounds_confirms_the_pair(own_window, tmp_path) -> None:
 
 
 def test_a_merge_can_be_dissolved_again(own_window, tmp_path) -> None:
-    _mapped_pair(own_window, tmp_path, raw=((0.0, 0.5), (0.5, 1.0)))
+    _mapped_pair(own_window, tmp_path, raw=((0.0, 0.5), (0.5, 0.5)))
     own_window.sound_strip.lyric_action_requested.emit("merge", 0, 1)
     own_window.sound_strip.lyric_action_requested.emit("dissolve", 0, 0)
 
@@ -5132,7 +5207,7 @@ def test_a_merge_can_be_dissolved_again(own_window, tmp_path) -> None:
 def test_a_grouped_run_is_marked_on_the_strip(own_window, tmp_path) -> None:
     (tmp_path / "song.krc").write_text("あい\n", encoding="utf-8")
     own_window.project_path = tmp_path / "song.nto"
-    own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", lines=(((0.0, 1.0), (1.0, 2.0)),))
+    own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", raw=(((0.0, 1.0), (1.0, 1.0)),))
     own_window._lyric_key = ""
     own_window.transport.bpm.setValue(60.0)
     own_window.view.set_channels((Channel(channel=0),))
@@ -5149,7 +5224,7 @@ def test_the_overlapping_blocks_of_a_shared_note_draw_no_edge_between_them(windo
     window.view.load_lyrics(
         natural_sounds(text),
         [[(0.0, 2.0), (1.0, 2.0)]],
-        raw=[[(0.0, 1.5), (1.5, 2.0)]],
+        raw=[[(0.0, 1.5), (1.5, 0.5)]],
         zero=[[False, False]],
         group=[[1, 1]],
     )
@@ -5172,7 +5247,7 @@ def test_the_overlapping_blocks_of_a_shared_note_draw_no_edge_between_them(windo
 def test_a_sound_that_covers_no_note_is_marked_grey(own_window, tmp_path) -> None:
     (tmp_path / "song.krc").write_text("あい\n", encoding="utf-8")
     own_window.project_path = tmp_path / "song.nto"
-    own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", lines=(((0.0, 1.0), (3.0, 3.5)),))
+    own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", raw=(((0.0, 1.0), (3.0, 0.5)),))
     own_window._lyric_key = ""
     own_window.transport.bpm.setValue(60.0)
     own_window.view.set_channels((Channel(channel=0),))
@@ -5186,7 +5261,7 @@ def test_short_sounds_on_one_note_fall_to_zero(own_window, tmp_path) -> None:
     (tmp_path / "song.krc").write_text("きにく\n", encoding="utf-8")
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(
-        key=text_key("きにく\n"), model="mms", lines=(((0.0, 0.9), (0.9, 0.95), (0.95, 1.0)),)
+        key=text_key("きにく\n"), model="mms", raw=(((0.0, 0.9), (0.9, 0.05), (0.95, 0.05)),)
     )
     own_window._lyric_key = ""
     own_window.transport.bpm.setValue(60.0)
@@ -5194,7 +5269,7 @@ def test_short_sounds_on_one_note_fall_to_zero(own_window, tmp_path) -> None:
     own_window.view.set_notes(((60, 0.0, 1.0, 0),))  # one note under three sounds: the first keeps it
     own_window._watch_lyrics()
 
-    assert own_window.view.lyric_raw == (((0.0, 0.9), (0.9, 0.95), (0.95, 1.0)),)
+    assert own_window.view.lyric_raw == (((0.0, 0.9), (0.9, 0.05), (0.95, 0.05)),)
     assert own_window.view.lyric_zero == ((False, True, True),)
     assert own_window.view.lyric_group == ((-1, -1, -1),)
 
@@ -5202,7 +5277,7 @@ def test_short_sounds_on_one_note_fall_to_zero(own_window, tmp_path) -> None:
 def test_a_block_is_the_note_the_sound_maps_to(own_window, tmp_path) -> None:
     (tmp_path / "song.krc").write_text("タに\n", encoding="utf-8")
     own_window.project_path = tmp_path / "song.nto"
-    own_window._stored_lyrics = project.Lyrics(key=text_key("タに\n"), model="mms", lines=(((0.0, 0.8), (0.8, 1.3)),))
+    own_window._stored_lyrics = project.Lyrics(key=text_key("タに\n"), model="mms", raw=(((0.0, 0.8), (0.8, 0.5)),))
     own_window._lyric_key = ""
     own_window.transport.bpm.setValue(60.0)
     own_window.view.set_channels((Channel(channel=0),))
@@ -5221,7 +5296,7 @@ def test_a_lyric_drag_is_kept_in_the_project(own_window, tmp_path) -> None:
     (tmp_path / "song.krc").write_text("あい\n", encoding="utf-8")
     project_path = tmp_path / "song.nto"
     own_window.project_path = project_path
-    own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", lines=(((0.0, 1.0), (1.0, 2.0)),))
+    own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", raw=(((0.0, 1.0), (1.0, 1.0)),))
     own_window._lyric_key = ""
     own_window.transport.bpm.setValue(60.0)  # a beat is a second, so notes read in seconds
     own_window.view.set_channels((Channel(channel=0),))
@@ -5237,7 +5312,7 @@ def test_a_lyric_drag_is_kept_in_the_project(own_window, tmp_path) -> None:
 
     assert own_window.project_dirty is True
     assert own_window.save_project(project_path) is True
-    assert project.load(project_path).lyrics.lines == (((0.0, 1.5), (1.5, 2.0)),)
+    assert project.load(project_path).lyrics.raw == (((0.0, 1.0), (1.5, 1.0)),)
 
 
 def test_notes_on_another_channel_are_not_mapped(own_window, tmp_path) -> None:
@@ -5296,7 +5371,7 @@ def test_the_strip_hides_until_the_times_arrive(own_window, tmp_path) -> None:
     assert own_window.view.lyric_times == (((None, None), (None, None)),)
     assert own_window.sound_strip.isHidden()
 
-    own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", lines=(((0.0, 1.0), (1.0, 2.0)),))
+    own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", raw=(((0.0, 1.0), (1.0, 1.0)),))
     own_window._lyric_key = ""
     own_window._load_sounds()
     assert own_window.view.lyric_times == (((0.0, 1.0), (1.0, 2.0)),)
@@ -5356,7 +5431,7 @@ def test_exporting_krc_writes_the_mapping_back(own_window, monkeypatch, tmp_path
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0),))  # one note under both sounds
     own_window.project_path = tmp_path / "song.nto"
-    own_window._stored_lyrics = project.Lyrics(text="あい\n", key=text_key("あい\n"), lines=(((0.0, 0.5), (0.5, 1.0)),))
+    own_window._stored_lyrics = project.Lyrics(text="あい\n", key=text_key("あい\n"), raw=(((0.0, 0.5), (0.5, 0.5)),))
     own_window._watch_lyrics()
     monkeypatch.setattr(
         QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "exported"), "Lyrics file (*.krc)")
@@ -5495,6 +5570,20 @@ def test_a_read_only_strip_does_not_drag(own_window, tmp_path) -> None:
     assert own_window.view.lyric_raw == before
 
 
+def test_read_mode_preserves_edit_evidence_and_uses_faithful_positions(own_window, tmp_path) -> None:
+    _mapped_pair(own_window, tmp_path, raw=((0.1, 0.2), (0.8, 0.4)))
+    before = own_window.view.lyric_raw
+    own_window._set_lyric_mode("read")
+    wait_for_lyric_mapping(own_window)
+    strip = own_window.sound_strip
+    assert own_window.view.lyric_raw == before
+    assert strip._boundary_x(0, 1) == pytest.approx(strip._x(1.0))
+    own_window._set_lyric_mode("edit")
+    wait_for_lyric_mapping(own_window)
+    assert own_window.view.lyric_raw == before
+    assert strip._boundary_x(0, 1) == pytest.approx(strip._x(0.8))
+
+
 def test_the_aligned_times_are_kept_in_the_project(own_window, tmp_path) -> None:
     (tmp_path / "song.krc").write_text("あい\n", encoding="utf-8")
     own_window.project_path = tmp_path / "song.nto"
@@ -5507,7 +5596,7 @@ def test_the_aligned_times_are_kept_in_the_project(own_window, tmp_path) -> None
     assert own_window.save_project(tmp_path / "song.nto") is True
     saved = project.load(tmp_path / "song.nto")
     assert saved.lyrics == project.Lyrics(
-        text="あい\n", key=text_key("あい\n"), model="mms", lines=(((0.0, 1.0), (1.0, 2.0)),)
+        text="あい\n", key=text_key("あい\n"), model="mms", raw=(((0.0, 1.0), (1.0, 1.0)),)
     )
     assert own_window.project_dirty is False
 
@@ -5517,7 +5606,7 @@ def test_the_align_dialog_hands_the_times_over(own_window) -> None:
     got: list = []
     dialog.aligned.connect(lambda times, model, flagged: got.append((times, model)))
     dialog._done(([[(0.0, 1.0), (1.0, 2.0)]], "mms", [], []))
-    assert got == [([[(0.0, 1.0), (1.0, 2.0)]], "mms")]
+    assert got == [([[(0.0, 1.0), (1.0, 1.0)]], "mms")]
     assert dialog.run.isEnabled()
 
 
@@ -5538,7 +5627,7 @@ def test_the_align_dialog_snaps_to_the_beat_grid_when_asked(own_window) -> None:
     got: list = []
     dialog.aligned.connect(lambda times, model, flagged: got.append(times))
     dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
-    assert got == [[[(0.0, 0.5), (0.5, 1.0)]]]
+    assert got == [[[(0.0, 0.5), (0.5, pytest.approx(0.5))]]]
 
 
 def test_the_align_dialog_can_quantize_to_eighth_notes(own_window) -> None:
@@ -5547,7 +5636,7 @@ def test_the_align_dialog_can_quantize_to_eighth_notes(own_window) -> None:
     got: list = []
     dialog.aligned.connect(lambda times, model, flagged: got.append(times))
     dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
-    assert got == [[[(0.0, 0.5), (0.5, 1.0)]]]
+    assert got == [[[(0.0, 0.5), (0.5, pytest.approx(0.5))]]]
 
 
 def test_the_align_dialog_quantizes_onto_the_offset_grid(own_window) -> None:
@@ -5556,7 +5645,7 @@ def test_the_align_dialog_quantizes_onto_the_offset_grid(own_window) -> None:
     got: list = []
     dialog.aligned.connect(lambda times, model, flagged: got.append(times))
     dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
-    assert got == [[[(0.25, 0.75), (0.75, 1.25)]]]
+    assert got == [[[(0.25, 0.5), (0.75, pytest.approx(0.5))]]]
 
 
 def test_a_cached_alignment_is_reused_and_resnapped(own_window, monkeypatch) -> None:
@@ -5570,7 +5659,7 @@ def test_a_cached_alignment_is_reused_and_resnapped(own_window, monkeypatch) -> 
     dialog._start()
 
     assert dialog._thread is None  # the model never ran
-    assert got == [[[(0.25, 0.75), (0.75, 1.25)]]]  # the stored lines, snapped to the offset grid
+    assert got == [[[(0.25, 0.5), (0.75, pytest.approx(0.5))]]]
     assert "saved alignment reused" in dialog.log.toPlainText()
 
 
@@ -5585,7 +5674,7 @@ def test_a_cached_whole_song_alignment_is_reused_when_chunking_is_off(own_window
     dialog._start()
 
     assert dialog._thread is None
-    assert got == [[[(0.1, 0.6), (0.6, 1.1)]]]
+    assert got == [[[(0.1, 0.5), (0.6, pytest.approx(0.5))]]]
     assert "saved alignment reused" in dialog.log.toPlainText()
 
 
@@ -5610,7 +5699,7 @@ def test_the_align_dialog_leaves_the_times_alone_by_default(own_window) -> None:
     got: list = []
     dialog.aligned.connect(lambda times, model, flagged: got.append(times))
     dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
-    assert got == [[[(0.1, 0.6), (0.6, 1.1)]]]
+    assert got == [[[(0.1, 0.5), (0.6, pytest.approx(0.5))]]]
 
 
 def test_the_align_dialog_shows_a_failure(own_window) -> None:
@@ -5717,9 +5806,23 @@ def test_auto_align_reuses_the_cached_pass(lyrics_window, monkeypatch, tmp_path)
     lyrics_window._auto_align()
 
     assert _FakeAligner.calls == [(str(tmp_path / "vocal.wav"), "あい\n", "mms", "cpu", align.DEFAULT_MODE)]
-    assert lyrics_window.view.lyric_raw == (((0.0, 1.0), (1.0, 2.0)),)
+    assert lyrics_window.view.lyric_raw == (((0.0, 1.0), (1.0, 1.0)),)
     assert lyrics_window._lyric_flags == (True,)  # the aligner's doubt is kept with the times
     assert lyrics_window._auto_align_thread is None
+
+
+def test_auto_align_quantizes_onsets_without_changing_reference_durations(lyrics_window, monkeypatch) -> None:
+    lyrics_window.lyrics_text = "あい"
+    lyrics_window._load_sounds()
+    lyrics_window.transport.bpm.setValue(60.0)
+    monkeypatch.setattr(align, "load_parameters", lambda: {"quantize": 1})
+    lyrics_window._auto_align_key = text_key("あい")
+    spans = [[(0.1, 0.3), (0.6, 0.9)]]
+    lyrics_window._on_auto_aligned((spans, "mms", [], []))
+    assert lyrics_window.view.lyric_raw == (((0.0, pytest.approx(0.2)), (1.0, pytest.approx(0.3))),)
+    assert [length for _onset, length in lyrics_window.view.lyric_raw[0]] == [
+        length for _onset, length in from_spans(spans)[0]
+    ]
 
 
 def test_auto_align_waits_when_the_pass_is_not_cached(lyrics_window, monkeypatch, tmp_path) -> None:
