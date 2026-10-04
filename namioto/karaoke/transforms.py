@@ -26,7 +26,7 @@ def merge_words(lyrics: Lyrics) -> Lyrics:
 def _merge_ruby(unit: Unit) -> Unit:
     if unit.ruby is None:
         return unit
-    return Unit(unit.base, Ruby([_fold(part) for part in unit.ruby.parts]), unit.override)
+    return Unit(unit.base, Ruby([_fold(part) for part in unit.ruby.parts]), unit.override, unit.join_previous)
 
 
 def _fold(units: list[Unit]) -> list[Unit]:
@@ -39,10 +39,13 @@ def _fold(units: list[Unit]) -> list[Unit]:
             and unit.is_latin()
             and merged[-1].is_latin()
             and merged[-1].ruby is None
+            and not merged[-1].join_previous
         ):
             previous = merged.pop()
             override = unit.override if unit.override is not None else previous.override
-            unit = Unit(Group([*_base_words(previous.base), *_base_words(unit.base)]), unit.ruby, override)
+            unit = Unit(
+                Group([*_base_words(previous.base), *_base_words(unit.base)]), unit.ruby, override, unit.join_previous
+            )
         merged.append(unit)
     return merged
 
@@ -64,7 +67,7 @@ def _fold_kanji(units: list[Unit]) -> list[Unit]:
                 words = _base_words(pending.pop().base) + words
                 grew = True
             if grew:
-                unit = Unit(Group(words, explicit=explicit), unit.ruby, unit.override)
+                unit = Unit(Group(words, explicit=explicit), unit.ruby, unit.override, unit.join_previous)
         folded.insert(0, unit)
     return folded
 

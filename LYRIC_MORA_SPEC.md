@@ -33,10 +33,11 @@
 
 | 术语 | 定义 |
 | --- | --- |
-| `Unit` | KRC 中可附着 ruby 和 `.N` 的语法单元。 |
+| `Unit` | KRC 中可附着 ruby，以及 `.N` 或 `.+` 后缀的语法单元。 |
 | KRC group | KRC 的括号 `(...)`。`group` 一词只表示这种语法结构。 |
-| `natural_mora` | 一个 Unit 在忽略 `.N` 后，由文字或 ruby 自然产生的 Sound 数量。 |
+| `natural_mora` | 一个 Unit 在忽略 `.N` 和 `.+` 后，由文字或 ruby 自然产生的 Sound 数量。 |
 | `.N` | Unit 的 NOTE 槽数 override；不表示 Sound 数。 |
+| `.+` | 当前完整 Unit/group 接续前一个 Sound 所属的单 NOTE 共享组，不额外消费 NOTE；不是 drop。 |
 | `Sound` | edit 模式的稳定、最小自然读音原子。 |
 | raw evidence | 每个 Sound 的可编辑 `onset`、参考时长 `raw_length` 与可选 `score`；是匹配证据，不是最终 NOTE 边界。`raw_length` 在现有对齐流程输出后、Quantize 前取 `end - start`，不随编辑或 Quantize 改变。score 可缺失，缺失时降低置信度。 |
 | target channel | 当前歌词映射使用的唯一 MIDI channel。 |
@@ -57,9 +58,38 @@ KRC group 就是括号，但括号不一定来自 `merge`：
 
 因此：
 
-- `merge` MUST 生成 KRC group；
+- 同 container 的 `merge` MUST 生成 KRC group；跨 container 的 `merge` MUST 用 `.+` 接续本地片段；
 - KRC group MUST NOT 被当作 `merge` 的同义词；
 - UI、数据模型和代码 MUST NOT 再用 `group` 表示“多个 Sound 共享 NOTE”的映射关系。
+
+---
+
+### 2.2 `.+` 接续语法
+
+`.+` 与 `.N` 一样绑定紧邻的完整 Unit/group，保留原有文字和 ruby 结构，不产生交叉括号。
+
+- 当前 Unit 的全部自然 Sound 接续前一个 Sound 所属的共享组，不额外消费 NOTE；`Unit.mora` 的新增槽数为零，但这些 Sound 仍共享前项的 NOTE，与 `.0` 不同。
+- 前项按同一行的自然读音顺序寻找，忽略无 Sound 的标点和空白；不得跨行或 chapter，不得跳过 `.0`。
+- 前一个 Sound 所属的映射必须只占一个 NOTE；无前项、前项 `.0` 或该 Sound 占多个 NOTE 时 MUST 报错。
+- 当前 Unit 必须覆盖一个或多个完整 Sound，不得在小假名等 Sound 内部截断范围。
+- 接续允许跨 ruby、ruby part 和顶层文本边界；不以整个前一个顶层 Unit 为目标。
+- 连续 `.+` 扩展同一个共享组，所有成员按现有 merge 规则等分一个 NOTE。
+- 同一个 Unit 只能有一个 `.N` 或 `.+` 后缀。
+- 外层 `.+` 内部不得再含 `.N` 或 `.+`；内部 `.+` 不得被外层 `.N` 或 `.+` 覆盖，重叠标注 MUST 报错。
+- edit 模式忽略输入 `.+` 的历史映射含义；read-only 模式忠实读取。
+- 不含 `.+` 的已有 KRC 保持现行规则。
+
+示例：
+
+| 输入 | NOTE 共享关系 |
+| --- | --- |
+| `泣[な]い.+` | `な`、`い` 共享一个 NOTE。 |
+| `字[いう]え.+` | `い` 独立；`う`、`え` 共享一个 NOTE。 |
+| `あいう.+` | `あ` 独立；`い`、`う` 共享一个 NOTE。 |
+| `あ(いう).+` | `あ`、`い`、`う` 共享一个 NOTE。 |
+| `あ字[いう].+` | 外层 Unit 的全部读音 `い`、`う` 接续 `あ`，三者共享一个 NOTE。 |
+| `あい.+う.+` | 三个 Sound 扩展为同一个共享组。 |
+| `(あい).1う.+` | `う` 接续已有单 NOTE 共享组，三个 Sound 等分该 NOTE。 |
 
 ---
 
@@ -73,7 +103,7 @@ Sound 数量只由自然 flatten 决定：
 Sound count = sum(Unit.natural_mora)
 ```
 
-输入 `.N` 和输入 KRC group 的旧 NOTE 映射含义 MUST 被忽略；它们不得改变 Sound 数、自动映射代价、置信度或候选优先级。
+输入 `.N`、`.+` 和输入 KRC group 的旧 NOTE 映射含义 MUST 被忽略；它们不得改变 Sound 数、自动映射代价、置信度或候选优先级。
 
 自然 flatten 规则：
 
@@ -102,7 +132,7 @@ Sound count = sum(Unit.natural_mora)
 1. 一行的顶层 Unit 序列；或
 2. 某一个 ruby part 的内部 Unit 序列。
 
-ruby part、`]`、顶层与 ruby、歌词行和 chapter 都是硬边界。映射不得通过重写 ruby/base 结构绕过这些边界。
+ruby part、`]`、顶层与 ruby 是文字结构边界，不再限制同一行内的 merge；跨 container 的共享关系通过 `.+` 表达。歌词行和 chapter 仍是 merge 的硬边界。映射不得重写 ruby/base 结构。
 
 ### 3.3 规范化失败
 
@@ -233,9 +263,9 @@ Merge(consecutive_sounds[2..N], note_id), N >= 2
 merge 只有满足以下全部条件时才是候选：
 
 1. Sound 连续；
-2. 完全位于同一个顶层序列或同一个 ruby part；
-3. 不跨 `]`、ruby part、顶层/ruby、行或 chapter；
-4. 生成括号后重新 parse + flatten，Sound 序列不变；
+2. 完全位于同一歌词行；
+3. 允许跨 `]`、ruby part 和顶层/ruby，但不跨行或 chapter；
+4. 生成本地括号及跨 container 的 `.+` 后重新 parse + flatten，Sound 序列不变；
 5. aligner token 序列不变；
 6. 不生成嵌套括号；输入括号先按自然结构展开，再生成结果括号。
 
@@ -317,9 +347,9 @@ cost = sum(abs(raw_onset - predicted_onset))
 
 - 行末 match：最后一条 NOTE.end；
 - 行末 merge：唯一 NOTE.end；
-- 行末 drop：当前 NOTE 游标边界点（尚未消费的下一条 NOTE.start，否则最后一条 NOTE.end）；end 项只与游标边界比较，与 onset 侧选取的最近边界无关。
+- 行末 drop：按 raw onset 选取的同一个最近 NOTE 边界；onset 与 end 项 MUST 使用同一个比较点，MUST NOT 为 end 项另取下一条 NOTE.start。
 
-这样行间休止影响全局映射，但结束参考点既不成为 NOTE 分区硬边界，也不成为 onset 拖动的硬上限。
+延长后续休止时，只要 onset 选取的最近边界仍是前一条 NOTE.end，该 drop 的基础代价 MUST 不变。onset 与边界的实际偏差仍计入代价，结束参考点既不成为 NOTE 分区硬边界，也不成为 onset 拖动的硬上限。
 
 基础代价不得添加隐式 `drop`、match 大小或 merge 大小惩罚。不得保留 `HOLD_PRICE`、`REACH_TIE`、share 阈值或字符类别特价。
 
@@ -359,7 +389,7 @@ complexity =
 3. **`alignment_quality`**：成员 token score、缺失数据和 aligner 行级 problem；
 4. **内部 rest**：match 内相邻 NOTE 的 gap 相对周围 NOTE 时长是否异常。
 
-`fit_error` 的单向行末规则只属于置信度：§7.2 的 DP 基础代价仍是对称绝对误差，映射本身不因置信度改变。
+`fit_error` 的单向行末规则只属于置信度：§7.2 的 DP 基础代价仍是对称绝对误差，映射本身不因置信度改变。行末 drop 的置信度 MUST 使用 §7.2 中按 raw onset 选取的同一个最近 NOTE 边界作为预测 end，不得另取下一条 NOTE.start。
 
 没有替代方案只表示 `mapping_margin` 通过，不能掩盖很大的 `fit_error`。
 
@@ -489,11 +519,11 @@ raw `|` 只编辑对应 Sound 的 onset：
 
 ### 10.1 原则
 
-edit 模式的导出不是在输入括号和 `.N` 上打补丁，而是从自然结构与最终 operation 机械重建：
+edit 模式的导出不是在输入括号、`.N` 或 `.+` 上打补丁，而是从自然结构与最终 operation 机械重建：
 
 1. parse 输入 KRC；
 2. 保留 chapter、line track、歌词字符、ruby container 和无 Sound 标点；
-3. 忽略所有输入 group 的旧映射含义和所有输入 `.N`；
+3. 忽略所有输入 group 的旧映射含义和所有输入 `.N`、`.+`，包括外层 Unit 的映射标注；
 4. 按 Sound 顺序应用最终 operation；
 5. 使用 canonical writer 序列化；
 6. 重新 parse + flatten；
@@ -524,18 +554,24 @@ edit 模式的导出不是在输入括号和 `.N` 上打补丁，而是从自然
 
 `merge(S₁...Sₙ, NOTE)`：
 
-- 把这些 Sound 的完整字符范围生成一个合法 KRC group；
-- 写 `.1`；
-- 只允许 §6.2 的合法 container 和 round-trip 区间。
+- 同 container 内，把这些 Sound 的完整字符范围生成一个合法 KRC group，写 `.1`；
+- 跨 container 时按原有 container 切分为本地片段，不移动文字或改变 ruby 归属；
+- 首片段含多个 Sound 时写本地 `(...).1`，只含一个 Sound 时省略 `.1`；
+- 每个后续片段写 `.+`；多字符片段必要时形成本地括号，以使后缀覆盖完整 Sound 范围；
+- 连续接续 MUST 表达同一个 merge，而不是重叠的多个 merge；
+- 只允许 §6.2 的合法行内及 round-trip 区间。
 
 示例：
 
 ```text
 あ, い merge → (あい).1
 胡椒[こ,しょう] 中 しょ, う merge → 胡椒[こ,(しょう).1]
+泣[な]い 中 な, い merge → 泣[な]い.+
+字[いう]え 中 う, え merge → 字[いう]え.+
+世界[せ,かい] 中 せ, か, い merge → 世界[せ,(かい).+]
 ```
 
-`A[BC]D` 中 `C` 与 `D` 跨越 ruby/top-level 边界，不能 merge。
+`A[BC]D` 中若 B、C、D 表示独立 Sound，C 与 D 的 merge 写为 `A[BC]D.+`，不生成 `A[B(C]D).1` 这样的交叉括号。
 
 ### 10.4 drop 写回
 
@@ -618,12 +654,13 @@ MUST NOT 使用“原始 KRC + 临时 UI span”生成 ASS。
 
 read-only 模式与 edit mapping 完全分离：
 
-- 尊重输入 KRC 的 group 和 `.N`；
+- 尊重输入 KRC 的 group、`.N` 和 `.+`；
 - 不运行三操作 DP；
 - 按 KRC 自身 NOTE 槽顺序读取 target NOTE；
 - 一个 Unit 的 NOTE 槽多于自然 Sound 时，将 NOTE 按顺序分给 Sound；
 - 自然 Sound 多于 NOTE 槽时，在 Unit 内等分对应 NOTE；
-- ruby 按 part 和内部 Unit 下钻，除非外层 Unit 自己带 override；
+- ruby 按 part 和内部 Unit 下钻，除非外层 Unit 自己带 `.N` 或 `.+`；
+- `.+` 把当前完整 Unit 的 Sound 接续前一个 Sound 所属的单 NOTE 共享组，不额外消费 NOTE，并重新等分整个共享组；
 - NOTE 用尽时剩余 Sound 没有可渲染时间；
 - 该模式不产生 edit 模式 confirmed 锚点或先验。
 
@@ -706,7 +743,7 @@ mapping version 变化时：
 - 每个 Sound 被且仅被一个 match、merge 或 drop 消费；
 - 所有 operation 都是高置信度或 confirmed；
 - 所有 confirmed 锚点有效且组合可解；
-- 每个 merge 满足 KRC container 与 round-trip 规则；
+- 每个 merge 满足 KRC 行内范围、`.+` 接续与 round-trip 规则；
 - canonical KRC round-trip 后 Sound/token 序列不变。
 
 ### 15.2 edit 模式 ASS
@@ -728,14 +765,14 @@ read-only KRC 原文复制不依赖 edit mapping 门禁。read-only ASS 使用 �
 
 实现和测试至少覆盖以下不变量：
 
-1. 输入 `.N` 和旧映射括号不改变 edit 模式自然 Sound 序列；
+1. 输入 `.N`、`.+` 和旧映射括号不改变 edit 模式自然 Sound 序列；
 2. `(しょ)` flatten 为一个 Sound，`(しょう)` flatten 为两个；
 3. 自动映射只有 match、merge、drop 三类 operation；
 4. 无冲突时每个 target NOTE 恰好被消费一次；
 5. 每个 Sound 恰好属于一个 operation；
 6. match、merge、drop 的预测 onset 使用同一边界误差模型；
 7. merge 等分 onset 参与代价；`A=0.0, B=0.9, NOTE=(0,1)` 时，`match(A)+drop(B)` 比 merge 更便宜；
-8. merge 不得跨 ruby part、`]`、顶层/ruby 或行；
+8. merge 可跨 ruby part、`]` 和顶层/ruby，但不得跨行或 chapter；
 9. merge candidate 必须通过 parse/flatten token round-trip；
 10. `っ/ッ` 等字符没有硬编码 operation 禁令；
 11. target channel 内任意 pitch 的时间重叠都进入冲突预处理；
@@ -743,14 +780,17 @@ read-only KRC 原文复制不依赖 edit mapping 门禁。read-only ASS 使用 �
 13. 高置信度 drop 不要求逐个确认；
 14. confirmed operation 在自动重算中保持，非法时报告而不静默删除；
 15. `しょ match 2 NOTE` 写成 `(しょ).2`，不得写成 `し.2ょ`；
-16. merge 写成合法 `(...).1`，drop 写成完整 Sound 范围的 `.0`；
+16. 同 container 的 merge 写成合法 `(...).1`，跨 container 使用 `.+` 接续，drop 写成完整 Sound 范围的 `.0`；
 17. canonical KRC round-trip 保持自然 Sound/token 序列；
 18. ASS 使用 canonical KRC 和 operation 派生 span；
 19. merge 的 ASS span 等分 NOTE，且不重复累计整个 NOTE 时长；
 20. 未完成工程可保存，但不能绕过统一导出门禁；
 21. 只有用户手动选择源 KRC 路径时才覆盖源文件；
-22. read-only faithful 模式不向 edit 模式泄漏 group、`.N` 或确认状态，不改写 edit evidence；
+22. read-only faithful 模式不向 edit 模式泄漏 group、`.N`、`.+` 或确认状态，不改写 edit evidence；
 23. 拖动和 Quantize 只改变 onset，不改变 `raw_length`；
 24. 零参考时长的 Sound 仍能向右移动，全曲最后一个 Sound 不受结束参考点限制；
 25. onset 拖动受全曲相邻 onset 约束，允许相等，空行不切断顺序；
-26. 不存在独立的行末 end 拖动柄或命中区域。
+26. 不存在独立的行末 end 拖动柄或命中区域；
+27. `.+` 不跨行、不跳过 `.0`，不接续占多个 NOTE 的 Sound；
+28. 连续 `.+` 与已有单 NOTE group 形成一个共享组，NOTE 时间和槽数不得重复累计；
+29. `.+` 与重叠 `.N`/`.+` 标注报错，不设置隐式覆盖优先级。

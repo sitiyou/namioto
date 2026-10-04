@@ -4,15 +4,14 @@
 Every Sound is exactly one `match`, `merge` or `drop`, and every note is consumed exactly once, so
 the cost - each operation's raw onset against where it predicts the onset lands, plus the line's last
 Sound against its onset plus reference duration - is settled over the whole song rather than line
-by line. A line
-boundary does not cut the note stream, so a line's last Sound may run over the rest between lines;
-only a `merge` may not cross lines. Confirmed operations are hard anchors: the DP solves the stretches
-between them and never moves them.
+by line. A line boundary does not cut the note stream, so a line's last Sound may run over the rest
+between lines; a `merge` stays within one line but may cross ruby containers. Confirmed operations
+are hard anchors: the DP solves the stretches between them and never moves them.
 
 Exact ties are broken the way the spec orders them: less structural complexity first, then the
 solution that keeps the earlier Sound's `match`, then `match` over `merge` over `drop`. The tie is
 encoded as a base-3 number over the sounds, one digit per Sound, so a whole song's worth of ties still
-compares as an integer; that makes the DP `O(sounds * notes)` states and `O(container length^2)` for
+compares as an integer; that makes the DP `O(sounds * notes)` states and `O(line length^2)` for
 one note's merge candidates, which is the deliberate ceiling here and is worth a per-segment split or
 an incremental merge cost only if a real song outgrows it. Qt-free.
 """
@@ -34,7 +33,7 @@ _RANK = {"match": 0, "merge": 1, "drop": 2}
 
 @dataclass(frozen=True)
 class _Context:
-    info: list[tuple[int, int, tuple]]  # per sound: line, index in line, container key
+    info: list[tuple[int, int]]
     line_start: list[int]
     line_count: list[int]
     raw_start: list[float]
@@ -94,14 +93,14 @@ def _context(lines: Sequence[SoundLine], rows: Sequence[Sequence[Raw]], notes: l
         line_start.append(len(info))
         line_count.append(len(line.sounds))
         line_end.append(rows[line_index][-1].reference_end if line.sounds else 0.0)
-        for index, sound in enumerate(line.sounds):
-            info.append((line_index, index, (line_index, sound.container)))
+        for index in range(len(line.sounds)):
+            info.append((line_index, index))
             raw_start.append(rows[line_index][index].onset)
     total = len(info)
     is_last = [index == line_start[info[index][0]] + line_count[info[index][0]] - 1 for index in range(total)]
     maxm = [1] * total
     for index in range(total - 2, -1, -1):
-        if info[index][2] == info[index + 1][2]:
+        if info[index][0] == info[index + 1][0]:
             maxm[index] = maxm[index + 1] + 1
     return _Context(info, line_start, line_count, raw_start, line_end, is_last, maxm, notes, total)
 
@@ -140,9 +139,10 @@ def _drop_point(context: _Context, index: int, note_at: int) -> float:
 
 
 def _drop_base(context: _Context, index: int, note_at: int) -> float:
-    cost = abs(context.raw_start[index] - _drop_point(context, index, note_at))
+    point = _drop_point(context, index, note_at)
+    cost = abs(context.raw_start[index] - point)
     if context.is_last[index]:
-        cost += abs(_line_end(context, index) - _boundary(context, note_at))
+        cost += abs(_line_end(context, index) - point)
     return cost
 
 
@@ -185,8 +185,8 @@ def _anchors(anchors: Sequence[Operation], context: _Context) -> tuple[list[tupl
         if not isinstance(operation, Drop):
             if sounds != list(range(min(sounds), min(sounds) + len(sounds))):
                 raise MappingError("invalid_anchor", "a confirmed operation's sounds do not run on")
-            if isinstance(operation, Merge) and len({context.info[g][2] for g in sounds}) != 1:
-                raise MappingError("invalid_anchor", "a confirmed merge crosses a container")
+            if isinstance(operation, Merge) and len({context.info[g][0] for g in sounds}) != 1:
+                raise MappingError("invalid_anchor", "a confirmed merge crosses a line")
         if isinstance(operation, Match):
             notes = _note_indices(operation.notes, context)
             pinned.append((sounds[0], sounds[0] + 1, notes[0], notes[-1] + 1, operation))
@@ -312,7 +312,7 @@ def _rebuild(context: _Context, back, sa: int, na: int, size: int, count: int) -
         if pointer is None:
             raise MappingError("invalid_anchor", "the mapping has no complete partition")
         index = sa + step - 1
-        line, position, _container = context.info[index]
+        line, position = context.info[index]
         if pointer[0] == "d":
             operations.append(Drop(SoundRef(line, position)))
             step -= 1
@@ -406,7 +406,7 @@ def diagnose(
             landing = (sound_at + count, note_at + 1)
         else:
             base = _drop_base(context, sound_at, note_at)
-            end_at, predicted_end = sound_at, _boundary(context, note_at)
+            end_at, predicted_end = sound_at, _drop_point(context, sound_at, note_at)
             landing = (sound_at + 1, note_at)
         alternative = _alternative(context, grid, sound_at, note_at, operation)
         fit = base - _line_end_overshoot(context, end_at, predicted_end)

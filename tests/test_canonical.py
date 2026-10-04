@@ -77,11 +77,29 @@ def test_the_rebuilt_text_reads_back_the_same_sounds():
     assert natural_tokens(natural_sounds(rebuilt)) == natural_tokens(natural_sounds(text))
 
 
-def test_a_merge_across_containers_is_refused():
-    with pytest.raises(KrcError):
-        rebuild("胡椒[こ,(しょう)]", [_merge(0, 0, 1), _match(0, 2, [1])])
-    with pytest.raises(KrcError):
-        rebuild("胡椒[こ,しょう]は", [_match(0, 0, [1]), _match(0, 1, [2]), _merge(0, 2, 3)])
+@pytest.mark.parametrize(
+    ("text", "operations", "expected"),
+    [
+        ("泣[な]い", [_merge(0, 0, 1)], "泣[な]い.+"),
+        ("あ字[いう]", [_merge(0, 0, 1, 2)], "あ字[(いう).+]"),
+        ("胡椒[こ,(しょう)]", [_merge(0, 0, 1), _match(0, 2, [2])], "胡椒[こ,(しょ).+う]"),
+        ("胡椒[こ,しょう]は", [_match(0, 0, [1]), _match(0, 1, [2]), _merge(0, 2, 3)], "胡椒[こ,しょう]は.+"),
+        ("世界[せ,かい]", [_merge(0, 0, 1, 2)], "世界[せ,(かい).+]"),
+        ("あ字[いう]え", [_merge(0, 0, 1, 2, 3)], "あ字[(いう).+]え.+"),
+        ("字[いう]え", [_match(0, 0, [1]), _merge(0, 1, 2)], "字[いう]え.+"),
+        ("字[いう]、え", [_match(0, 0, [1]), _merge(0, 1, 2)], "字[いう]、え.+"),
+    ],
+)
+def test_cross_container_merges_write_continuations(text, operations, expected):
+    assert rebuild(text, operations) == expected
+    assert natural_sounds(expected) == natural_sounds(text)
+    assert rebuild(expected, operations) == expected
+
+
+def test_input_continuations_are_discarded_when_rebuilding():
+    assert rebuild("泣[な]い.+", [_match(0, 0, [1]), _match(0, 1, [2])]) == "泣[な]い"
+    assert rebuild("あ字[いう].+", [_match(0, 0, [1]), _match(0, 1, [2]), _match(0, 2, [3])]) == "あ字[いう]"
+    assert rebuild("字[いう].1", [_match(0, 0, [1]), _match(0, 1, [2])]) == "字[いう]"
 
 
 def test_a_mapping_that_leaves_a_sound_out_is_refused():

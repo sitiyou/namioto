@@ -5,6 +5,7 @@ A Sound is what the lyrics are actually sung as: one kana, or a kana with the sm
 a long vowel or sokuon of its own, one run of Latin letters, one digit. Punctuation and whitespace
 carry no Sound. The input `.N` and the input `(...)` are ignored here - they say how the file was
 mapped to notes, not how it reads - so a `(しょう)` reads `しょ`, `う` and a `(しょ)` reads `しょ`.
+`.+` also leaves the natural stream unchanged; `note_groups` reads the literal mapping separately.
 
 Each Sound keeps the minimal writable container it came from - a run of the line's top-level units,
 or one part of a ruby - and the range of source characters it covers there, so a later pass can write
@@ -114,6 +115,96 @@ def split_tokens(tokens: Sequence, lines: list[SoundLine]) -> list[list[tuple[fl
         rows.append([(token.start, token.end) for token in row])
         at += len(row)
     return rows
+
+
+def note_groups(line: Line, sound_line: SoundLine) -> list[tuple[int, list[int]]]:
+    """NOTE slots and their Sound indices, with continuations extending the preceding one-NOTE group."""
+    groups: list[tuple[int, list[int]]] = []
+    for unit, indices in _leaves(line, sound_line):
+        if unit.join_previous:
+            if not groups or groups[-1][0] != 1:
+                raise KrcError(".+ requires a preceding Sound mapped to exactly one NOTE in the same line")
+            groups[-1][1].extend(indices)
+            continue
+        slots = unit.override if unit.override is not None else len(indices)
+        count = len(indices)
+        if slots == 0:
+            groups.append((0, indices))
+        elif slots >= count:
+            for position, index in enumerate(indices):
+                size = (position + 1) * slots // count - position * slots // count
+                groups.append((size, [index]))
+        else:
+            for slot in range(slots):
+                groups.append((1, indices[slot * count // slots : (slot + 1) * count // slots]))
+    return groups
+
+
+def _leaves(line: Line, sound_line: SoundLine) -> list[tuple[Unit, list[int]]]:
+    index_of = {container.key: index for index, container in enumerate(sound_line.containers)}
+    by_container: dict[int, list[Sound]] = {}
+    for sound in sound_line.sounds:
+        by_container.setdefault(sound.container, []).append(sound)
+    leaves: list[tuple[Unit, list[int]]] = []
+    runs = 0
+    run_units: list[tuple[int, int, Unit]] = []
+    offset = 0
+
+    def append(unit: Unit, sounds: Sequence[Sound], low: int, high: int) -> None:
+        owned = [sound for sound in sounds if low <= sound.last_atom <= high]
+        if unit.join_previous and (
+            not owned
+            or any(
+                sound.first_atom < low or sound.last_atom > high
+                for sound in sounds
+                if sound.first_atom <= high and sound.last_atom >= low
+            )
+        ):
+            raise KrcError(".+ must cover one or more complete Sounds")
+        if owned:
+            leaves.append((unit, [sound.index for sound in owned]))
+
+    def flush() -> None:
+        nonlocal runs, run_units, offset
+        if not run_units:
+            return
+        container = index_of.get(("top", runs))
+        if container is not None:
+            for low, high, unit in run_units:
+                append(unit, by_container.get(container, ()), low, high)
+        runs += 1
+        run_units = []
+        offset = 0
+
+    for top, unit in enumerate(line.units):
+        if unit.ruby is None:
+            chars = _chars(unit)
+            run_units.append((offset, offset + len(chars) - 1, unit))
+            offset += len(chars)
+            continue
+        flush()
+        if unit.override is not None or unit.join_previous:
+            owned = []
+            for part in range(len(unit.ruby.parts)):
+                container = index_of.get(("part", top, part))
+                if container is not None:
+                    owned.extend(sound.index for sound in by_container.get(container, ()))
+            if unit.join_previous and not owned:
+                raise KrcError(".+ must cover one or more complete Sounds")
+            if owned:
+                leaves.append((unit, owned))
+            continue
+        for part_index, part in enumerate(unit.ruby.parts):
+            container = index_of.get(("part", top, part_index))
+            if container is None:
+                continue
+            part_offset = 0
+            for inner in part:
+                chars = _chars(inner)
+                append(inner, by_container.get(container, ()), part_offset, part_offset + len(chars) - 1)
+                part_offset += len(chars)
+    flush()
+    return leaves
 
 
 def _line_sounds(line: Line, line_index: int, chapter_index: int) -> SoundLine:

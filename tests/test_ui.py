@@ -5185,6 +5185,43 @@ def test_a_lyric_edit_is_one_undo_step(own_window, tmp_path) -> None:
     assert not any(operation.confirmed for operation in own_window.view.lyric_operations)
 
 
+def test_a_cross_container_merge_is_green_and_exports_a_continuation(own_window, tmp_path) -> None:
+    from namioto import project
+
+    own_window.transport.bpm.setValue(60.0)
+    own_window.view.set_channels((Channel(channel=0),))
+    own_window.view.set_notes(((60, 0.0, 1.0, 0),))
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._stored_lyrics = project.Lyrics(
+        text="泣[な]い", key=text_key("泣[な]い"), raw=(((0.0, 0.5), (0.5, 0.5)),)
+    )
+    own_window._watch_lyrics()
+    assert own_window.view.lyric_operations == (Merge((SoundRef(0, 0), SoundRef(0, 1)), 1),)
+    assert own_window.view.lyric_red == ((False, False),)
+    assert own_window.export_krc(tmp_path / "exported.krc")
+    assert (tmp_path / "exported.krc").read_text(encoding="utf-8") == "泣[な]い.+"
+
+
+def test_read_mode_uses_continuations_without_changing_edit_evidence(own_window, tmp_path) -> None:
+    from namioto import project
+
+    own_window.transport.bpm.setValue(60.0)
+    own_window.view.set_channels((Channel(channel=0),))
+    own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 1.0, 0)))
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._stored_lyrics = project.Lyrics(
+        text="泣[な]い.+", key=text_key("泣[な]い.+"), raw=(((0.0, 1.0), (1.0, 1.0)),)
+    )
+    own_window._watch_lyrics()
+    assert own_window.view.lyric_mapped == (((1,), (2,)),)
+    raw = own_window.view.lyric_raw
+    own_window._set_lyric_mode("read")
+    wait_for_lyric_mapping(own_window)
+    assert own_window.view.lyric_times == (((0.0, 0.5), (0.5, 1.0)),)
+    assert own_window.view.lyric_mapped == (((1,), (1,)),)
+    assert own_window.view.lyric_raw == raw
+
+
 def test_merging_two_sounds_confirms_the_pair(own_window, tmp_path) -> None:
     _mapped_pair(own_window, tmp_path, raw=((0.0, 0.5), (0.5, 0.5)))
     own_window.sound_strip.lyric_action_requested.emit("merge", 0, 1)

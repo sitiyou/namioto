@@ -52,13 +52,15 @@ def test_a_low_confidence_operation_closes_the_gate_until_confirmed():
     assert verify("あ", lines, raw, notes, confirmed).open()
 
 
-def test_a_merge_the_format_cannot_write_closes_the_gate():
+def test_a_cross_container_merge_opens_the_gate():
     text = "胡椒[こ,(しょう)]"
     lines = natural_sounds(text)
     raw = [[Raw(0.0, 0.5, 0.9), Raw(0.5, 0.5, 0.9), Raw(1.0, 1.0, 0.9)]]
     notes = _notes((0.0, 1.0), (1.0, 2.0))
     operations = [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1), Match(SoundRef(0, 2), (2,))]
-    assert verify(text, lines, raw, notes, operations).counts() == {"unwritable_merge": 1}
+    gate = verify(text, lines, raw, notes, operations)
+    assert gate.open()
+    assert gate.canonical == "胡椒[こ,(しょ).+う]"
 
 
 def test_a_mapping_that_would_move_a_sound_closes_the_gate():

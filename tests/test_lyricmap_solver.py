@@ -11,7 +11,7 @@ from namioto.karaoke.operations import Drop, Match, Merge, SoundRef, partition
 from namioto.karaoke.sounds import natural_sounds
 from namioto.lyricmap.problems import MappingError
 from namioto.lyricmap.raw import Raw
-from namioto.lyricmap.solver import solve
+from namioto.lyricmap.solver import _context, backward, solve
 
 
 def _notes(*spans):
@@ -56,6 +56,17 @@ def test_a_drop_takes_the_cursor_boundary_nearest_its_onset():
     assert [type(operation).__name__ for operation in rows[0]] == ["Match", "Drop", "Match"]
 
 
+@pytest.mark.parametrize("rest", [0.0, 0.1, 8.0435, 40.0])
+def test_a_line_end_drop_does_not_pay_for_the_following_rest(rest):
+    next_start = 65.3254 + rest
+    raw = [[Raw(64.62, 0.14), Raw(65.22, 0.135)], [Raw(next_start, 0.2174)]]
+    notes = _notes((64.6732, 65.3254), (next_start, next_start + 0.2174))
+    lines, operations, rows = _solve("ぱい\nあ", raw, notes)
+    assert rows == [[Match(SoundRef(0, 0), (1,)), Drop(SoundRef(0, 1))], [Match(SoundRef(1, 0), (2,))]]
+    assert rebuild("ぱい\nあ", operations) == "ぱい.0\nあ"
+    assert backward(_context(lines, raw, notes))[0][0] == pytest.approx(0.1882)
+
+
 def test_a_drop_consumes_no_note():
     lines, _operations, rows = _solve("あい", [[Raw(0.0, 1.0), Raw(5.0, 1.0)]], _notes((0.0, 1.0)))
     assert any(isinstance(operation, Drop) for operation in rows[0])
@@ -72,21 +83,37 @@ def test_every_sound_and_note_is_consumed_once():
     assert sorted(ref.index for operation in rows[0] for ref in operation.sounds) == [0, 1, 2, 3]
 
 
-def test_a_merge_never_crosses_a_container_or_a_line():
-    cases = [
-        ("胡椒[こ,(しょう)]", [[Raw(0.0, 1 / 3), Raw(1 / 3, 1 / 3), Raw(2 / 3, 1 / 3)]], _notes((0.0, 1.0))),
-        ("世界[せ,かい]", [[Raw(0.0, 0.5), Raw(0.5, 0.25), Raw(0.75, 0.25)]], _notes((0.0, 1.0))),
-        ("あ\nい", [[Raw(0.0, 0.5)], [Raw(0.5, 0.5)]], _notes((0.0, 1.0))),
-    ]
-    for text, raw, notes in cases:
-        lines, _operations, rows = _solve(text, raw, notes)
-        for operation in rows:
-            if not isinstance(operation, Merge):
-                continue
-            keys = {
-                lines[ref.line].containers[lines[ref.line].sounds[ref.index].container].key for ref in operation.sounds
-            }
-            assert len(keys) == 1
+@pytest.mark.parametrize("text", ["胡椒[こ,(しょう)]", "世界[せ,かい]", "泣[な]いちゃ"])
+def test_a_merge_can_cross_ruby_containers(text):
+    lines, operations, _rows = _solve(
+        text, [[Raw(0.0, 1 / 3), Raw(1 / 3, 1 / 3), Raw(2 / 3, 1 / 3)]], _notes((0.0, 1.0))
+    )
+    assert operations == [Merge(tuple(SoundRef(0, index) for index in range(3)), 1)]
+    assert natural_sounds(rebuild(text, operations)) == lines
+
+
+def test_a_merge_never_crosses_a_line():
+    _lines, operations, _rows = _solve("あ\nい", [[Raw(0.0, 0.5)], [Raw(0.5, 0.5)]], _notes((0.0, 1.0)))
+    assert not any(isinstance(operation, Merge) for operation in operations)
+    with pytest.raises(MappingError, match="crosses a line"):
+        _solve(
+            "あ\nい",
+            [[Raw(0.0, 0.5)], [Raw(0.5, 0.5)]],
+            _notes((0.0, 1.0)),
+            [Merge((SoundRef(0, 0), SoundRef(1, 0)), 1, confirmed=True)],
+        )
+
+
+def test_a_confirmed_merge_can_cross_containers():
+    anchor = Merge((SoundRef(0, 0), SoundRef(0, 1)), 1, confirmed=True)
+    _lines, operations, _rows = _solve("泣[な]い", [[Raw(0.0, 0.5), Raw(0.5, 0.5)]], _notes((0.0, 1.0)), [anchor])
+    assert operations == [anchor]
+
+
+def test_edit_mapping_ignores_input_continuations():
+    _lines, operations, _rows = _solve("泣[な]い.+", [[Raw(0.0, 1.0), Raw(1.0, 1.0)]], _notes((0.0, 1.0), (1.0, 2.0)))
+    assert operations == [Match(SoundRef(0, 0), (1,)), Match(SoundRef(0, 1), (2,))]
+    assert rebuild("泣[な]い.+", operations) == "泣[な]い"
 
 
 def test_no_character_is_banned_from_a_merge():

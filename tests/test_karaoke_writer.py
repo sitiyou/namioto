@@ -81,6 +81,21 @@ def test_a_ruby_added_by_hand_shows_up():
     assert dumps(lyrics) == "星[ほし]"
 
 
+@pytest.mark.parametrize(
+    "text", ["泣[な]い.+", "あい.+う.+", "あ(いう).+", "あ字[いう].+", "文字[い,う.+]", "あhello.+"]
+)
+def test_continuations_survive_writing_and_reparsing(text):
+    assert dumps(parse(text)) == text
+    assert dumps(parse(dumps(parse(text))), dotted=True) == text
+
+
+def test_writing_refuses_overlapping_continuation_and_numeric_annotations():
+    lyrics = parse("あい.+")
+    lyrics.chapters[0].lines[0].units[-1].override = 2
+    with pytest.raises(ValueError, match=r"both \.N and \.\+"):
+        dumps(lyrics)
+
+
 def test_a_word_that_cannot_be_written_is_refused():
     lyrics = parse("あ")
     lyrics.chapters[0].lines[0].words[0].base = Word("a#b")

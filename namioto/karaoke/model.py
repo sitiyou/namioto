@@ -2,8 +2,8 @@
 """The `.krc` model: words, groups, units, rubies, lines, chapters and the mora they add up to.
 
 A `Word` is a single character, a `Group` is a run of them - the `(...)` the syntax writes, or the
-run a normalization pass folds together. A `Unit` is what a ruby and a `.N` attach to: a base (a
-`Word` or a `Group`) with an optional reading and an optional mora override. Lines hold units,
+run a normalization pass folds together. A `Unit` carries a ruby and a `.N` or `.+`: a base (a
+`Word` or a `Group`) with an optional reading, mora override or `.+` continuation. Lines hold units,
 chapters hold lines, and `Lyrics` holds chapters.
 
 Mora is never stored - `Unit.mora`, `Unit.base_mora` and `Ruby.total_mora` are derived - so a change
@@ -81,11 +81,12 @@ class Group:
 
 @dataclass
 class Unit:
-    """A base with what annotates it: its reading (`Ruby`) and its `.N` (`override`)."""
+    """A base with its reading, `.N` override or `.+` continuation onto the preceding NOTE."""
 
     base: Word | Group
     ruby: Ruby | None = None
     override: int | None = None
+    join_previous: bool = False
 
     @property
     def text(self) -> str:
@@ -101,18 +102,22 @@ class Unit:
 
     @property
     def natural_mora(self) -> int:
-        """The mora the text or the ruby gives, before a written `.N`, a Latin run counting one."""
+        """The mora before mapping annotations, with a Latin run counting one."""
         if self.ruby is not None:
-            return self.ruby.total_mora()
+            return sum(unit.natural_mora for part in self.ruby.parts for unit in part)
         return 1 if self.base.is_latin() else calc_mora(self.text)
 
     @property
     def mora(self) -> int:
-        return self.override if self.override is not None else self.natural_mora
+        if self.join_previous:
+            return 0
+        if self.override is not None:
+            return self.override
+        return self.ruby.total_mora() if self.ruby is not None else self.natural_mora
 
     @property
     def is_ruby_mora(self) -> bool:
-        return self.ruby is not None and self.override is None
+        return self.ruby is not None and self.override is None and not self.join_previous
 
     def is_kanji(self) -> bool:
         return self.base.is_kanji()
@@ -136,7 +141,9 @@ class Unit:
         text = self.text
         if self.ruby is not None:
             text += f"[{self.ruby}]"
-        if self.mora > 2:
+        if self.join_previous:
+            text += ".+"
+        elif self.mora > 2:
             text += f".{self.mora}"
         return text
 
@@ -201,7 +208,32 @@ def validate(lyrics: Lyrics) -> None:
     for chapter in lyrics.chapters:
         for line in chapter.lines:
             for unit in line.units:
+                _validate_unit(unit)
                 if unit.ruby is not None and len(unit.ruby.parts) > 1 and len(unit.ruby.parts) != len(unit.text):
                     raise KrcError(
                         f"the ruby of '{unit.text}' has {len(unit.ruby.parts)} parts for {len(unit.text)} characters"
                     )
+            if any(_has_join(unit) for unit in line.units):
+                from namioto.karaoke.sounds import _line_sounds, note_groups
+
+                note_groups(line, _line_sounds(line, 0, 0))
+
+
+def _has_join(unit: Unit) -> bool:
+    return unit.join_previous or (
+        unit.ruby is not None and any(_has_join(inner) for part in unit.ruby.parts for inner in part)
+    )
+
+
+def _validate_unit(unit: Unit) -> None:
+    if unit.join_previous and unit.override is not None:
+        raise KrcError("a unit cannot carry both .N and .+")
+    if unit.ruby is None:
+        return
+    for part in unit.ruby.parts:
+        for inner in part:
+            _validate_unit(inner)
+            if unit.join_previous and (inner.override is not None or _has_join(inner)):
+                raise KrcError("an outer .+ cannot overlap an inner mapping annotation")
+            if unit.override is not None and _has_join(inner):
+                raise KrcError("an outer .N cannot overlap an inner .+")

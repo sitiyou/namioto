@@ -72,6 +72,22 @@ def test_an_input_dot_changes_nothing():
     assert _tokens("(あい).1") == _tokens("あい")
 
 
+@pytest.mark.parametrize(
+    ("plain", "linked"),
+    [
+        ("泣[な]い", "泣[な]い.+"),
+        ("あいう", "あい.+う.+"),
+        ("あいう", "あ(いう).+"),
+        ("あ字[いう]", "あ字[いう].+"),
+        ("文字[い,う]", "文字[い,う.+]"),
+        ("あhello", "あhello.+"),
+    ],
+)
+def test_input_continuations_do_not_change_sounds_or_tokens(plain, linked):
+    assert natural_sounds(linked) == natural_sounds(plain)
+    assert _tokens(linked) == _tokens(plain)
+
+
 def test_an_input_group_changes_nothing_but_its_readings():
     # `(しょう)` is one Sound, `しょう` is two: the parentheses only carry a reading or a mapping
     assert _tokens("(しょ)") == ["sho"]

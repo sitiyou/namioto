@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from namioto.document import Note
 from namioto.lyricmap.faithful import consumes, lay_out, read
 from namioto.lyricmap.verify import faithful_gate
@@ -54,6 +56,52 @@ def test_consumes_counts_the_slots_the_reading_asks_for():
     assert consumes("(あい).1", _notes((0.0, 1.0))) == 1
     assert consumes("あい", _notes((0.0, 1.0), (1.0, 2.0))) == 2
     assert consumes("", []) == 0
+
+
+@pytest.mark.parametrize(
+    ("text", "count"),
+    [
+        ("泣[な]い.+", 2),
+        ("あい.+う.+", 3),
+        ("あ(いう).+", 3),
+        ("あ字[いう].+", 3),
+        ("文字[い,う.+]", 2),
+        ("泣[な]、い.+", 2),
+        ("(あい).1う.+", 3),
+    ],
+)
+def test_continuations_share_one_note_and_redivide_the_whole_group(text, count):
+    spans, ids = lay_out(text, _notes((0.0, 1.0)))
+    assert ids == [[(1,)] * count]
+    assert len(spans[0]) == count
+    for index, span in enumerate(spans[0]):
+        assert span == pytest.approx((index / count, (index + 1) / count))
+    assert consumes(text, []) == 1
+    assert read(text, []) == [[None] * count]
+
+
+def test_a_continuation_targets_the_last_sound_not_the_whole_ruby():
+    spans, ids = lay_out("字[いう]え.+", _notes((0.0, 1.0), (1.0, 2.0)))
+    assert spans == [[(0.0, 1.0), (1.0, 1.5), (1.5, 2.0)]]
+    assert ids == [[(1,), (2,), (2,)]]
+    assert consumes("字[いう]え.+", []) == 2
+
+
+def test_a_continuation_can_follow_a_single_note_sound_inside_a_multi_note_ruby():
+    spans, ids = lay_out("字[い.2う]え.+", _notes((0.0, 1.0), (1.0, 2.0), (2.0, 3.0)))
+    assert spans == [[(0.0, 2.0), (2.0, 2.5), (2.5, 3.0)]]
+    assert ids == [[(1, 2), (3,), (3,)]]
+    assert consumes("字[い.2う]え.+", []) == 3
+
+
+def test_ruby_and_top_level_runs_keep_independent_character_offsets():
+    assert read("青[あお]いう", _notes((0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 4.0))) == [
+        [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0), (3.0, 4.0)]
+    ]
+
+
+def test_notes_running_out_inside_a_shared_unit_leave_the_rest_untimed():
+    assert read("(あいう).2", _notes((0.0, 1.0))) == [[(0.0, 1.0), None, None]]
 
 
 def test_the_read_only_subtitle_gate():

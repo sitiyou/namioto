@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import pytest
+
 from namioto.document import Note
+from namioto.karaoke.operations import Drop, Match, SoundRef
 from namioto.karaoke.sounds import natural_sounds
 from namioto.lyricmap.confidence import FIT_ERROR_SECONDS, MARGIN_PER_SECOND, QUALITY, REST_RATIO, read
 from namioto.lyricmap.raw import Raw
@@ -57,6 +60,41 @@ def test_a_note_that_ends_before_the_raw_line_end_is_low():
     _lines, _operations, readings = _readings("あ", [[Raw(0.0, 1.0, 0.9)]], _notes((0.0, 0.4)))
     assert readings[0].fit_error > FIT_ERROR_SECONDS
     assert readings[0].low
+
+
+@pytest.mark.parametrize(
+    ("onset", "length", "fit_error"),
+    [(0.9, 0.05, 0.1), (0.9, 0.2, 0.2), (1.9, 1.0, 2.8), (2.9, 0.05, 0.1), (2.9, 0.2, 0.2)],
+)
+def test_a_line_end_drop_uses_its_onset_boundary_for_under_run(onset, length, fit_error):
+    lines = natural_sounds("あ\nい\nう")
+    raw = [[Raw(0.0, 1.0, 0.9)], [Raw(onset, length, 0.9)], [Raw(3.0, 1.0, 0.9)]]
+    operations = [Match(SoundRef(0, 0), (1,)), Drop(SoundRef(1, 0)), Match(SoundRef(2, 0), (2,))]
+    readings = read(lines, raw, _notes((0.0, 1.0), (3.0, 4.0)), operations)
+    assert readings[1].fit_error == pytest.approx(fit_error)
+
+
+def test_line_end_drops_at_the_stream_edges_use_the_only_note_boundary():
+    lines = natural_sounds("あ\nい\nう")
+    raw = [[Raw(0.8, 0.1, 0.9)], [Raw(1.0, 1.0, 0.9)], [Raw(2.1, 0.2, 0.9)]]
+    operations = [Drop(SoundRef(0, 0)), Match(SoundRef(1, 0), (1,)), Drop(SoundRef(2, 0))]
+    readings = read(lines, raw, _notes((1.0, 2.0)), operations)
+    assert readings[0].fit_error == pytest.approx(0.2)
+    assert readings[2].fit_error == pytest.approx(0.4)
+
+
+@pytest.mark.parametrize("rest", [0.0, 0.1, 8.0435, 40.0])
+def test_a_line_end_drop_before_a_rest_is_not_low_confidence(rest):
+    next_start = 65.3254 + rest
+    _lines, operations, readings = _readings(
+        "ぱい\nあ",
+        [[Raw(64.62, 0.14), Raw(65.22, 0.135)], [Raw(next_start, 0.2174)]],
+        _notes((64.6732, 65.3254), (next_start, next_start + 0.2174)),
+    )
+    assert operations[1] == Drop(SoundRef(0, 1))
+    assert readings[1].fit_error == pytest.approx(0.135)
+    assert not readings[0].low
+    assert not readings[1].low
 
 
 def test_a_tie_between_two_operations_is_a_low_margin():

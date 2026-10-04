@@ -1,20 +1,21 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """Rebuild a `.krc` from the natural Sounds and a mapping, rather than patching the input's `.N`.
 
-The input's `.N` and `(...)` carried a mapping; the rebuild throws them away and starts from the
-Sounds the text naturally reads. Each Sound's `.N` lands on the smallest Unit that still writes that
-Sound whole - `(しょ).2`, never `し.2ょ` - and a merge folds its Sounds into one legal `(...).1`. A
-Sound that takes one note gets no `.N` at all. The rebuilt text is parsed and flattened again; if its
-Sound or token sequence moved, the rebuild is refused, so nothing that would mis-time a sound is ever
-written. Qt-free.
+The input's `.N`, `.+` and `(...)` carried a mapping; the rebuild throws them away and starts from
+the Sounds the text naturally reads. Each Sound's `.N` lands on the smallest Unit that still writes that
+Sound whole - `(しょ).2`, never `し.2ょ`. A merge uses `(...).1` within a container and `.+` to
+continue across containers without changing the ruby structure. A Sound that takes one note gets
+no `.N` at all. The rebuilt text is parsed and flattened again; if its Sound or token sequence
+moved, the rebuild is refused, so nothing that would mis-time a sound is ever written. Qt-free.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
+from itertools import groupby
 
 from namioto.karaoke.model import Group, KrcError, Line, Unit, Word
-from namioto.karaoke.operations import Operation, partition
+from namioto.karaoke.operations import Merge, Operation, partition
 from namioto.karaoke.parser import parse
 from namioto.karaoke.sounds import SoundLine, _chars, _entries, natural_sounds
 from namioto.karaoke.writer import dumps
@@ -34,14 +35,23 @@ def rebuild(text: str, operations: Sequence[Operation]) -> str:
     line_index = 0
     for chapter in lyrics.chapters:
         for line in chapter.lines:
-            _rebuild_line(line, plan[line_index])
+            pieces = []
+            for operation in plan[line_index]:
+                for index, (_container, refs) in enumerate(
+                    groupby(operation.sounds, key=lambda ref: lines[line_index].sounds[ref.index].container)
+                ):
+                    count = len(list(refs))
+                    joined = isinstance(operation, Merge) and index > 0
+                    override = None if joined or (isinstance(operation, Merge) and count == 1) else operation.dot
+                    pieces.append((count, override, joined))
+            _rebuild_line(line, pieces)
             line_index += 1
     rebuilt = dumps(lyrics, dotted=True)
     _verify(lines, rebuilt)
     return rebuilt
 
 
-def _rebuild_line(line: Line, operations: list[Operation]) -> None:
+def _rebuild_line(line: Line, pieces: list[tuple[int, int | None, bool]]) -> None:
     """Replace the units of one line with the ones the mapping writes."""
     cursor = 0
     new_units: list[Unit] = []
@@ -51,7 +61,7 @@ def _rebuild_line(line: Line, operations: list[Operation]) -> None:
         nonlocal cursor
         if not run:
             return
-        taken = _take(operations, cursor, len(_entries(run)))
+        taken = _take(pieces, cursor, len(_entries(run)))
         cursor += len(taken)
         new_units.extend(_build(run, taken))
         run.clear()
@@ -61,42 +71,44 @@ def _rebuild_line(line: Line, operations: list[Operation]) -> None:
             run.extend(_chars(unit))
             continue
         flush()
+        unit.override = None
+        unit.join_previous = False
         for part in unit.ruby.parts:
             atoms = [char for inner in part for char in _chars(inner)]
-            taken = _take(operations, cursor, len(_entries(atoms)))
+            taken = _take(pieces, cursor, len(_entries(atoms)))
             cursor += len(taken)
             part[:] = _build(atoms, taken)
         new_units.append(unit)
     flush()
-    if cursor != len(operations):
+    if cursor != len(pieces):
         raise KrcError("the mapping does not cover this line's sounds")
     line.units = new_units
 
 
-def _take(operations: list[Operation], cursor: int, count: int) -> list[Operation]:
-    taken: list[Operation] = []
+def _take(pieces: list[tuple[int, int | None, bool]], cursor: int, count: int) -> list[tuple[int, int | None, bool]]:
+    taken = []
     found = 0
     at = cursor
     while found < count:
-        operation = operations[at]
-        taken.append(operation)
-        found += len(operation.sounds)
+        piece = pieces[at]
+        taken.append(piece)
+        found += piece[0]
         at += 1
     if found != count:
         raise KrcError("the mapping does not cover this container's sounds")
     return taken
 
 
-def _build(atoms: list[str], operations: list[Operation]) -> list[Unit]:
+def _build(atoms: list[str], pieces: list[tuple[int, int | None, bool]]) -> list[Unit]:
     """The units one container's characters become: an override lands on the Sound's whole range."""
     entries = _entries(atoms)
-    starts: dict[int, tuple[int, int | None]] = {}
+    starts: dict[int, tuple[int, int | None, bool]] = {}
     at = 0
-    for operation in operations:
+    for count, override, joined in pieces:
         low = entries[at][1]
-        high = entries[at + len(operation.sounds) - 1][2]
-        starts[low] = (high, operation.dot)
-        at += len(operation.sounds)
+        high = entries[at + count - 1][2]
+        starts[low] = (high, override, joined)
+        at += count
     units: list[Unit] = []
     index = 0
     while index < len(atoms):
@@ -104,27 +116,21 @@ def _build(atoms: list[str], operations: list[Operation]) -> list[Unit]:
             units.append(Unit(Word(atoms[index])))
             index += 1
             continue
-        high, override = starts[index]
-        units.extend(_units(atoms[index : high + 1], override))
+        high, override, joined = starts[index]
+        units.extend(_units(atoms[index : high + 1], override, joined))
         index = high + 1
     return units
 
 
-def _units(chars: list[str], override: int | None) -> list[Unit]:
+def _units(chars: list[str], override: int | None, joined: bool) -> list[Unit]:
     """A Sound's characters as one unit: a word, or a group when an override must write them whole.
 
-    With no override, the characters stay words of their own, so `しょ` is not needlessly grouped.
+    Without an override or continuation, the characters stay words of their own.
     """
-    if override is None:
+    if override is None and not joined:
         return [Unit(Word(char)) for char in chars]
-    if len(chars) == 1:
-        return [_overridden(Unit(Word(chars[0])), override)]
-    return [_overridden(Unit(Group([Word(char) for char in chars])), override)]
-
-
-def _overridden(unit: Unit, override: int) -> Unit:
-    unit.override = override
-    return unit
+    base = Word(chars[0]) if len(chars) == 1 else Group([Word(char) for char in chars])
+    return [Unit(base, override=override, join_previous=joined)]
 
 
 def _verify(before: list[SoundLine], rebuilt: str) -> None:

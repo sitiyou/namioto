@@ -83,6 +83,12 @@ def test_a_merge_tiles_its_note_across_its_sounds():
     assert "\\k50}い" in line
 
 
+def test_a_cross_container_merge_keeps_the_ruby_and_tiles_the_note():
+    line = _dialogues("泣[な]い.+", [[(0.0, 0.5), (0.5, 1.0)]])[0]
+    assert "\\k50}泣|<な" in line
+    assert "\\k50}い" in line
+
+
 def test_the_settings_name_the_font_and_the_overlay():
     ass = generate_ass("あ", [[(0.0, 0.5)]], settings=AssSettings(font="Test Font", overlay_color="FF0000"))
     assert "Style: K1,Test Font,96," in ass

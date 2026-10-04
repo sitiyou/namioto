@@ -146,6 +146,53 @@ def test_a_kanji_run_with_a_ruby_is_an_auto_group():
     assert unit.text == "季節"
 
 
+@pytest.mark.parametrize(
+    "text",
+    ["泣[な]い.+", "あい.+う.+", "あ(いう).+", "あ字[いう].+", "文字[い,う.+]", "泣[な]、い.+", "あhello.+"],
+)
+def test_continuations_reuse_one_note_without_changing_natural_mora(text):
+    line = parse(text).chapters[0].lines[0]
+    assert line.total_mora() == 1
+    assert sum(unit.natural_mora for unit in line.units) >= 2
+    assert parse(text, merge=False)
+
+
+def test_a_continuation_suffix_binds_only_the_preceding_unit():
+    units = parse("あいう.+").chapters[0].lines[0].units
+    assert [unit.join_previous for unit in units] == [False, False, True]
+    assert [unit.mora for unit in units] == [1, 1, 0]
+    unit = parse("字[いう.+]").chapters[0].lines[0].units[0]
+    assert unit.natural_mora == 2
+    assert unit.mora == 1
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "い.+",
+        "あ\nい.+",
+        "あ\n---\nい.+",
+        "あ.0い.+",
+        "あ.2い.+",
+        "(あい).3う.+",
+        "あい.1.+",
+        "あい.+.1",
+        "あい.+.+",
+        "あ字[い.0う].+",
+        "あ字[いう.+].+",
+        "字[いう.+].1",
+        "字[いう.+].2",
+        "字[いう.+].0",
+        "あ、.+",
+        "あしょ.+",
+        "あ(いき).+ゃ",
+    ],
+)
+def test_invalid_continuations_are_rejected(text):
+    with pytest.raises(ValueError):
+        parse(text)
+
+
 def test_parentheses_around_one_word_change_nothing():
     plain = parse("あ").chapters[0].lines[0].units[0]
     grouped = parse("(あ)").chapters[0].lines[0].units[0]
