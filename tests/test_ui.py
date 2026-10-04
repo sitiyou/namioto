@@ -5282,9 +5282,9 @@ def test_the_overlapping_blocks_of_a_shared_note_draw_no_edge_between_them(windo
 
 
 def test_a_sound_that_covers_no_note_is_marked_grey(own_window, tmp_path) -> None:
-    (tmp_path / "song.krc").write_text("あい\n", encoding="utf-8")
+    (tmp_path / "song.krc").write_text("あか\n", encoding="utf-8")
     own_window.project_path = tmp_path / "song.nto"
-    own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", raw=(((0.0, 1.0), (3.0, 0.5)),))
+    own_window._stored_lyrics = project.Lyrics(key=text_key("あか\n"), model="mms", raw=(((0.0, 1.0), (3.0, 0.5)),))
     own_window._lyric_key = ""
     own_window.transport.bpm.setValue(60.0)
     own_window.view.set_channels((Channel(channel=0),))
@@ -5292,6 +5292,22 @@ def test_a_sound_that_covers_no_note_is_marked_grey(own_window, tmp_path) -> Non
     own_window._watch_lyrics()
 
     assert own_window.view.lyric_zero == ((False, True),)
+
+
+@pytest.mark.parametrize("model", ["mms", "yohane"])
+def test_pattern_weights_apply_to_both_aligners_without_changing_evidence(own_window, tmp_path, model) -> None:
+    text = "泣[な]い"
+    raw = (((0.0, 0.74), (0.74, 0.26)),)
+    own_window.transport.bpm.setValue(60.0)
+    own_window.view.set_channels((Channel(channel=0),))
+    own_window.view.set_notes(((60, 0.0, 1.0, 0),))
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._stored_lyrics = project.Lyrics(text=text, key=text_key(text), model=model, raw=raw)
+    own_window._watch_lyrics()
+    assert own_window.view.lyric_operations == (Merge((SoundRef(0, 0), SoundRef(0, 1)), 1),)
+    assert own_window.view.lyric_raw == raw
+    assert own_window.export_krc(tmp_path / "exported.krc")
+    assert (tmp_path / "exported.krc").read_text(encoding="utf-8") == "泣[な]い.+"
 
 
 def test_short_sounds_on_one_note_fall_to_zero(own_window, tmp_path) -> None:

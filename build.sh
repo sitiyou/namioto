@@ -69,6 +69,7 @@ build_app() {
         --onedir \
         --windowed \
         --collect-data qtawesome \
+        --collect-all janome \
         namioto/ui/app.py
     copy_licenses dist/namioto
 }

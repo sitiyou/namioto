@@ -351,11 +351,39 @@ cost = sum(abs(raw_onset - predicted_onset))
 
 延长后续休止时，只要 onset 选取的最近边界仍是前一条 NOTE.end，该 drop 的基础代价 MUST 不变。onset 与边界的实际偏差仍计入代价，结束参考点既不成为 NOTE 分区硬边界，也不成为 onset 拖动的硬上限。
 
-基础代价不得添加隐式 `drop`、match 大小或 merge 大小惩罚。不得保留 `HOLD_PRICE`、`REACH_TIE`、share 阈值或字符类别特价。
+基础边界代价不添加固定数值惩罚。每个候选 operation 按 §7.2.1 的 pattern 权重乘以整项基础代价，包含首个 onset 和原有的行末结束项；不单独修改成员 onset 项，不添加毫秒常数。
+
+#### 7.2.1 operation pattern 权重
+
+```text
+weighted_cost(operation) = boundary_cost(operation) * weight(operation)
+```
+
+match 和 drop 的权重始终为 `1`。merge 按以下优先级匹配，命中后立即返回，不叠加、不相乘其他规则：
+
+1. 首个或末个 Sound 是 `っ／ッ`：返回 `EDGE_SOKUON_MERGE_WEIGHT`，初值 `1.5`；内部促音不触发本条。
+2. 成员数 `N >= 3`：返回 `1 + MERGE_SIZE_SLOPE * (N - 2)`，斜率初值 `0.5`。
+3. 完整符合经验组合的两成员 merge：返回 `EMPIRICAL_MERGE_WEIGHT`，初值 `0.8`。
+4. 其他：返回 `1`。
+
+边缘促音优先于规模，因此四成员边缘促音 merge 仍返回 `1.5`，而普通四成员返回 `2`。`(もーす)` 不满足完整经验组合，三成员权重为 `1.5`，不对其中的 `もー` 做局部优惠。
+
+经验组合只包括以下读音连接：
+
+- 前一个 Sound 有末尾元音，后一个 Sound 是显式 `ー`；此项不受分词边界限制。
+- 同一可靠词法单元内，后一个 Sound 是独立元音，且与前项末尾元音相同，或形成 `a+i`、`o+u`、`e+i` 连接。
+
+词法上下文使用 Python 库 Janome 分析原文，不用辞书读音改写 ruby 或自然 Sound。只有辞书读音与原有读音对应、且源文字范围能完整落入一个词时，才启用词内特征。未知词、读音不一致及不可拆分 ruby 跨词边界时保守退化，不提供词内优惠；显式 `ー` 的规则仍可使用。
+
+例如 `私[わたし]はいない` 中 `は｜い…` 不获得优惠，而同词内 `な＋い` 可以获得优惠。普通 match、drop，包括促音的独立 match/drop，不受这些权重影响；不存在针对 operation 排列的额外规则。
+
+三个参数使用代码中的具名常量，不进入设置界面或工程字段；MMS、yohane 和其他对齐器统一使用同一规则。调整权重不修改 raw、`raw_length` 或自然读音，也不影响 confirmed 硬锚点和 read-only faithful 模式。
+
+前向 DP、后向候选代价和置信度诊断 MUST 使用同一权重。基础代价为零时，加权后仍为零；权重只表达软倾向，不构成 operation 禁令或新的候选合法性条件。
 
 ### 7.3 精确平局
 
-只有基础时间代价完全相同时，按以下词典序裁决：
+只有加权后的时间代价完全相同时，按以下词典序裁决：
 
 ```text
 complexity =
@@ -370,9 +398,9 @@ complexity =
 
 平局规则不得以微小浮点常量改变真实取舍。
 
-### 7.4 无字符硬编码
+### 7.4 无字符 operation 禁令
 
-所有自然 Sound 都允许参与 `match`、合法 `merge` 和 `drop`。`っ/ッ`、`ー`、`ん` 等不得拥有硬编码禁令；§7.2 的 drop 最近边界规则对所有 Sound 一律适用。语言特征可进入未来的置信度诊断，但不得产生新 operation 或破坏 KRC 语法规则。
+所有自然 Sound 都允许参与 `match`、合法 `merge` 和 `drop`。`っ/ッ`、`ー`、`ん` 等不得拥有硬编码禁令；§7.2 的 drop 最近边界规则对所有 Sound 一律适用。§7.2.1 的语言特征只影响候选代价和置信度，不产生新 operation、不删减合法候选，也不破坏 KRC 语法规则。
 
 ---
 
@@ -384,8 +412,8 @@ complexity =
 
 每个 suggested operation 至少检查：
 
-1. **`fit_error`**：当前 operation 的预测边界与 raw 证据的绝对误差；行末额外比较结束参考点 `onset + raw_length`，但只计 **under-run**——预测 end 早于结束参考点才算误差；预测 end 晚于结束参考点（音符延音、行尾休止）不计；
-2. **`mapping_margin`**：禁止当前 operation 后重新求最佳合法映射，计算替代方案与全局最优的代价差，并按 operation 涉及的 NOTE 时长归一化；
+1. **`fit_error`**：当前 operation 的预测边界与 raw 证据的绝对误差，整项乘以 §7.2.1 的同一 pattern 权重；行末额外比较结束参考点 `onset + raw_length`，但只计 **under-run**——预测 end 早于结束参考点才算误差；预测 end 晚于结束参考点（音符延音、行尾休止）不计，扣除 over-run 时也使用同一权重；
+2. **`mapping_margin`**：禁止当前 operation 后重新求最佳合法映射，计算替代方案与全局最优的加权代价差，并按 operation 涉及的 NOTE 时长归一化；
 3. **`alignment_quality`**：成员 token score、缺失数据和 aligner 行级 problem；
 4. **内部 rest**：match 内相邻 NOTE 的 gap 相对周围 NOTE 时长是否异常。
 
@@ -401,7 +429,7 @@ complexity =
 - 不在本规范中虚构固定数值；
 - 暂不暴露为用户设置。
 
-operation 的规模本身不降低置信度。只要拟合、余量、对齐质量和 rest 都合理，大 match 或大 merge 可以是高置信度。
+operation 的规模不另设低置信度判据，但 merge 的规模权重会影响 `fit_error` 和 `mapping_margin`。只要加权拟合、余量、对齐质量和 rest 都合理，大 match 或大 merge 仍可以是高置信度。
 
 ### 8.2 aligner problem
 
@@ -770,8 +798,8 @@ read-only KRC 原文复制不依赖 edit mapping 门禁。read-only ASS 使用 �
 3. 自动映射只有 match、merge、drop 三类 operation；
 4. 无冲突时每个 target NOTE 恰好被消费一次；
 5. 每个 Sound 恰好属于一个 operation；
-6. match、merge、drop 的预测 onset 使用同一边界误差模型；
-7. merge 等分 onset 参与代价；`A=0.0, B=0.9, NOTE=(0,1)` 时，`match(A)+drop(B)` 比 merge 更便宜；
+6. match、merge、drop 的预测 onset 使用同一基础边界误差模型，再按候选 operation 的唯一 pattern 权重整项计价；
+7. merge 等分 onset 参与代价；普通两成员 merge 的 `A=0.0, B=0.9, NOTE=(0,1)` 情形，`match(A)+drop(B)` 比 merge 更便宜；
 8. merge 可跨 ruby part、`]` 和顶层/ruby，但不得跨行或 chapter；
 9. merge candidate 必须通过 parse/flatten token round-trip；
 10. `っ/ッ` 等字符没有硬编码 operation 禁令；
@@ -793,4 +821,9 @@ read-only KRC 原文复制不依赖 edit mapping 门禁。read-only ASS 使用 �
 26. 不存在独立的行末 end 拖动柄或命中区域；
 27. `.+` 不跨行、不跳过 `.0`，不接续占多个 NOTE 的 Sound；
 28. 连续 `.+` 与已有单 NOTE group 形成一个共享组，NOTE 时间和槽数不得重复累计；
-29. `.+` 与重叠 `.N`/`.+` 标注报错，不设置隐式覆盖优先级。
+29. `.+` 与重叠 `.N`/`.+` 标注报错，不设置隐式覆盖优先级；
+30. operation pattern 只乘原有代价，不添加固定惩罚，零代价保持为零；
+31. 边缘促音、规模、经验组合按顺序命中返回；内部促音不触发边缘规则；
+32. 经验优惠不跨词界，显式 `ー` 除外；不可靠的词法/读音对应保守退化；
+33. 前向 DP、后向候选余量和拟合误差使用同一权重，行末 over-run 也按同一权重扣除；
+34. 代码参数调整不受词法缓存影响，且对所有对齐器采用相同规则。

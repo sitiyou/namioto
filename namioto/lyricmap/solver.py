@@ -4,8 +4,9 @@
 Every Sound is exactly one `match`, `merge` or `drop`, and every note is consumed exactly once, so
 the cost - each operation's raw onset against where it predicts the onset lands, plus the line's last
 Sound against its onset plus reference duration - is settled over the whole song rather than line
-by line. A line boundary does not cut the note stream, so a line's last Sound may run over the rest
-between lines; a `merge` stays within one line but may cross ruby containers. Confirmed operations
+by line. Each operation's whole cost takes its pattern weight; no fixed penalty is added. A line
+boundary does not cut the note stream, so a line's last Sound may run over the rest between lines;
+a `merge` stays within one line but may cross ruby containers. Confirmed operations
 are hard anchors: the DP solves the stretches between them and never moves them.
 
 Exact ties are broken the way the spec orders them: less structural complexity first, then the
@@ -26,6 +27,7 @@ from namioto.karaoke.sounds import SoundLine
 from namioto.lyricmap.notes import Note
 from namioto.lyricmap.problems import MappingError
 from namioto.lyricmap.raw import Raw, validate
+from namioto.lyricmap.weights import merge_weights
 
 # match, merge, drop in the order a tie prefers them
 _RANK = {"match": 0, "merge": 1, "drop": 2}
@@ -40,6 +42,7 @@ class _Context:
     line_end: list[float]
     is_last: list[bool]
     maxm: list[int]
+    merge_weights: list[tuple[float, ...]]
     notes: list
     total: int
 
@@ -84,12 +87,14 @@ def _position(operation: Operation, context: _Context) -> int | None:
 
 
 def _context(lines: Sequence[SoundLine], rows: Sequence[Sequence[Raw]], notes: list) -> _Context:
-    info: list[tuple[int, int, tuple]] = []
+    info: list[tuple[int, int]] = []
+    weights: list[tuple[float, ...]] = []
     line_start: list[int] = []
     line_count: list[int] = []
     raw_start: list[float] = []
     line_end: list[float] = []
     for line_index, line in enumerate(lines):
+        weights.extend(merge_weights(line))
         line_start.append(len(info))
         line_count.append(len(line.sounds))
         line_end.append(rows[line_index][-1].reference_end if line.sounds else 0.0)
@@ -102,7 +107,7 @@ def _context(lines: Sequence[SoundLine], rows: Sequence[Sequence[Raw]], notes: l
     for index in range(total - 2, -1, -1):
         if info[index][0] == info[index + 1][0]:
             maxm[index] = maxm[index + 1] + 1
-    return _Context(info, line_start, line_count, raw_start, line_end, is_last, maxm, notes, total)
+    return _Context(info, line_start, line_count, raw_start, line_end, is_last, maxm, weights, notes, total)
 
 
 def _boundary(context: _Context, note_at: int) -> float:
@@ -159,7 +164,7 @@ def _merge_base(context: _Context, index: int, run: int, note_at: int) -> float:
     last = index + run - 1
     if context.is_last[last]:
         cost += abs(_line_end(context, last) - end)
-    return cost
+    return cost * context.merge_weights[index][run - 2]
 
 
 def _global(ref: SoundRef, context: _Context) -> int:
@@ -378,11 +383,12 @@ def diagnose(
 ) -> list[tuple[float, float]]:
     """Per operation, its own fit error and its margin over the best alternative from the same state.
 
-    The fit error is the operation's boundary error against the raw evidence, save that at a line end
-    only an end short of the end reference counts: a note held past the sung line is normal, not a
-    mismatch. The margin keeps the operation's prefix and asks what the cheapest mapping from there
-    without it would cost; the completion is the unanchored backward pass, so with confirmed anchors
-    the margin of the suggested operations around them is approximate. Both numbers are in seconds;
+    The fit error is the operation's pattern-weighted boundary error against the raw evidence,
+    save that at a line end only an end short of the end reference counts: a note held past the
+    sung line is normal, not a mismatch. The margin keeps the operation's prefix and asks what the
+    cheapest mapping from there without it would cost; the completion is the unanchored backward
+    pass, so with confirmed anchors the margin of the suggested operations around them is
+    approximate. Both numbers are in seconds;
     normalising and judging them belongs to `confidence`.
     """
     validate(lines, raw)
@@ -394,6 +400,7 @@ def diagnose(
     found: list[tuple[float, float]] = []
     sound_at, note_at = 0, 0
     for operation in operations:
+        weight = 1.0
         if isinstance(operation, Match):
             count = len(operation.notes)
             base = _match_base(context, sound_at, note_at, count)
@@ -401,6 +408,7 @@ def diagnose(
             landing = (sound_at + 1, note_at + count)
         elif isinstance(operation, Merge):
             count = len(operation.sounds)
+            weight = context.merge_weights[sound_at][count - 2]
             base = _merge_base(context, sound_at, count, note_at)
             end_at, predicted_end = sound_at + count - 1, context.notes[note_at].end
             landing = (sound_at + count, note_at + 1)
@@ -409,7 +417,7 @@ def diagnose(
             end_at, predicted_end = sound_at, _drop_point(context, sound_at, note_at)
             landing = (sound_at + 1, note_at)
         alternative = _alternative(context, grid, sound_at, note_at, operation)
-        fit = base - _line_end_overshoot(context, end_at, predicted_end)
+        fit = base - weight * _line_end_overshoot(context, end_at, predicted_end)
         found.append((fit, alternative - (base + grid[landing[0]][landing[1]])))
         sound_at, note_at = landing
     return found

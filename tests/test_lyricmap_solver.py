@@ -11,7 +11,7 @@ from namioto.karaoke.operations import Drop, Match, Merge, SoundRef, partition
 from namioto.karaoke.sounds import natural_sounds
 from namioto.lyricmap.problems import MappingError
 from namioto.lyricmap.raw import Raw
-from namioto.lyricmap.solver import _context, backward, solve
+from namioto.lyricmap.solver import _context, _drop_base, _match_base, _merge_base, backward, solve
 
 
 def _notes(*spans):
@@ -68,7 +68,7 @@ def test_a_line_end_drop_does_not_pay_for_the_following_rest(rest):
 
 
 def test_a_drop_consumes_no_note():
-    lines, _operations, rows = _solve("あい", [[Raw(0.0, 1.0), Raw(5.0, 1.0)]], _notes((0.0, 1.0)))
+    lines, _operations, rows = _solve("あか", [[Raw(0.0, 1.0), Raw(5.0, 1.0)]], _notes((0.0, 1.0)))
     assert any(isinstance(operation, Drop) for operation in rows[0])
 
 
@@ -129,8 +129,84 @@ def test_no_character_is_banned_from_a_merge():
 def test_an_exact_tie_prefers_the_earlier_match():
     # merge(A, B) and match(A)+drop(B) cost the same 0.25 and have the same complexity, so the
     # solution keeping A's match (rank 0) beats the one merging (rank 1) on the earlier sound
-    lines, _operations, rows = _solve("あい", [[Raw(0.0, 0.75), Raw(0.75, 0.25)]], _notes((0.0, 1.0)))
+    lines, _operations, rows = _solve("あか", [[Raw(0.0, 0.75), Raw(0.75, 0.25)]], _notes((0.0, 1.0)))
     assert [type(operation).__name__ for operation in rows[0]] == ["Match", "Drop"]
+
+
+def test_an_empirical_pair_can_outweigh_match_and_drop():
+    raw = [[Raw(0.0, 0.76), Raw(0.76, 0.24)]]
+    notes = _notes((0.0, 1.0))
+    assert _solve("ない", raw, notes)[1] == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
+    assert _solve("なか", raw, notes)[1] == [Match(SoundRef(0, 0), (1,)), Drop(SoundRef(0, 1))]
+
+
+def test_an_empirical_weight_resolves_an_unweighted_tie():
+    assert _solve("あい", [[Raw(0.0, 0.75), Raw(0.75, 0.25)]], _notes((0.0, 1.0)))[1] == [
+        Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)
+    ]
+
+
+def test_the_size_weight_can_prefer_a_smaller_merge_and_drop():
+    assert _solve("あかさ", [[Raw(0.0, 0.5), Raw(0.5, 0.25), Raw(0.75, 0.25)]], _notes((0.0, 1.0)))[1] == [
+        Merge((SoundRef(0, 0), SoundRef(0, 1)), 1),
+        Drop(SoundRef(0, 2)),
+    ]
+
+
+def test_an_edge_sokuon_weight_can_prefer_match_and_drop():
+    raw = [[Raw(0.0, 0.72), Raw(0.72, 0.28)]]
+    notes = _notes((0.0, 1.0))
+    assert _solve("きっ", raw, notes)[1] == [Match(SoundRef(0, 0), (1,)), Drop(SoundRef(0, 1))]
+    assert _solve("きか", raw, notes)[1] == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
+
+
+def test_a_confirmed_merge_is_not_overridden_by_pattern_weights():
+    anchor = Merge((SoundRef(0, 0), SoundRef(0, 1)), 1, confirmed=True)
+    assert _solve("きっ", [[Raw(0.0, 0.72), Raw(0.72, 0.28)]], _notes((0.0, 1.0)), [anchor])[1] == [anchor]
+
+
+def test_a_leading_sokuon_can_still_drop_before_a_match():
+    assert _solve("っか", [[Raw(0.0, 0.29), Raw(0.29, 0.71)]], _notes((0.0, 1.0)))[1] == [
+        Drop(SoundRef(0, 0)),
+        Match(SoundRef(0, 1), (1,)),
+    ]
+
+
+def test_multiplicative_weights_preserve_a_zero_cost_merge():
+    lines, operations, _rows = _solve("あっ", [[Raw(0.0, 0.5), Raw(0.5, 0.5)]], _notes((0.0, 1.0)))
+    assert operations == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
+    assert backward(_context(lines, [[Raw(0.0, 0.5), Raw(0.5, 0.5)]], _notes((0.0, 1.0))))[0][0] == 0.0
+
+
+def test_the_whole_merge_cost_including_first_onset_and_line_end_is_weighted():
+    lines = natural_sounds("ない")
+    context = _context(lines, [[Raw(0.1, 0.5), Raw(0.6, 0.6)]], _notes((0.0, 1.0)))
+    assert _merge_base(context, 0, 2, 0) == pytest.approx(0.32)
+    assert _match_base(context, 0, 0, 1) == pytest.approx(0.1)
+    assert _drop_base(context, 1, 1) == pytest.approx(0.6)
+
+
+@pytest.mark.parametrize("text", ["ない", "きっ", "きっちく", "もーす"])
+@pytest.mark.parametrize("notes", [_notes((0.0, 1.0)), _notes((0.0, 0.5), (0.6, 1.0))])
+def test_forward_and_backward_use_the_same_weighted_costs(text, notes):
+    lines = natural_sounds(text)
+    raw = [[Raw(index * 0.3 + 0.03, 0.2) for index in range(len(lines[0].sounds))]]
+    context = _context(lines, raw, notes)
+    operations = solve(lines, raw, notes)
+    sound_at = note_at = 0
+    cost = 0.0
+    for operation in operations:
+        if isinstance(operation, Match):
+            cost += _match_base(context, sound_at, note_at, len(operation.notes))
+        elif isinstance(operation, Merge):
+            cost += _merge_base(context, sound_at, len(operation.sounds), note_at)
+        else:
+            cost += _drop_base(context, sound_at, note_at)
+        sound_at += len(operation.sounds)
+        note_at += operation.slots
+    assert sound_at == context.total
+    assert note_at == len(notes)
+    assert cost == pytest.approx(backward(context)[0][0])
 
 
 def test_a_confirmed_drop_is_forced_and_kept():

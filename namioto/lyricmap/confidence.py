@@ -2,9 +2,9 @@
 """How much a mapping trusts each of its operations, and the named thresholds that decide it.
 
 Confidence is read off four things a whole operation either has or has not: how far its predicted
-boundaries sit from the raw evidence (`fit_error`, a line end counted only when the note ends short
-of the sung line), how much cheaper it is than the best alternative
-mapping from the same state (`margin`), how sure the aligner was of its Sounds and whether it doubted
+boundaries sit from the raw evidence (`fit_error`, using the operation's pattern weight and a
+line end counted only when the note ends short of the sung line), how much cheaper it is than the
+best alternative mapping from the same state (`margin`), how sure the aligner was of its Sounds and whether it doubted
 the line (`quality`), and whether a match stretches over an unusual rest (`rest`). The thresholds are
 named constants so a real corpus can move them, and nothing here changes the mapping itself. Qt-free.
 """
@@ -20,7 +20,6 @@ from namioto.lyricmap.notes import Note
 from namioto.lyricmap.raw import Raw
 from namioto.lyricmap.solver import diagnose
 
-# a raw boundary more than a fifth of a second off is the operation's own trouble
 FIT_ERROR_SECONDS = 0.2
 # the alternative must cost this much more per second of the notes it takes, or the choice is a coin toss
 MARGIN_PER_SECOND = 0.05

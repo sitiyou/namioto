@@ -6,7 +6,7 @@ from __future__ import annotations
 import pytest
 
 from namioto.document import Note
-from namioto.karaoke.operations import Drop, Match, SoundRef
+from namioto.karaoke.operations import Drop, Match, Merge, SoundRef
 from namioto.karaoke.sounds import natural_sounds
 from namioto.lyricmap.confidence import FIT_ERROR_SECONDS, MARGIN_PER_SECOND, QUALITY, REST_RATIO, read
 from namioto.lyricmap.raw import Raw
@@ -98,9 +98,49 @@ def test_a_line_end_drop_before_a_rest_is_not_low_confidence(rest):
 
 
 def test_a_tie_between_two_operations_is_a_low_margin():
-    _lines, _operations, readings = _readings("あい", [[Raw(0.0, 0.75, 0.9), Raw(0.75, 0.25, 0.9)]], _notes((0.0, 1.0)))
+    _lines, _operations, readings = _readings("あか", [[Raw(0.0, 0.75, 0.9), Raw(0.75, 0.25, 0.9)]], _notes((0.0, 1.0)))
     assert readings[0].margin < MARGIN_PER_SECOND
     assert readings[0].low
+
+
+def test_a_merge_weights_fit_and_removes_the_weighted_line_end_overshoot():
+    _lines, operations, readings = _readings("ない", [[Raw(0.1, 0.5, 0.9), Raw(0.6, 0.2, 0.9)]], _notes((0.0, 1.0)))
+    assert operations == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
+    assert readings[0].fit_error == pytest.approx(0.16)
+    assert not readings[0].low
+
+
+def test_a_merge_weights_line_end_under_run_as_well_as_onsets():
+    _lines, operations, readings = _readings("ない", [[Raw(0.1, 0.5, 0.9), Raw(0.6, 0.6, 0.9)]], _notes((0.0, 1.0)))
+    assert operations == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
+    assert readings[0].fit_error == pytest.approx(0.32)
+    assert readings[0].low
+
+
+def test_empirical_weighting_does_not_hide_a_large_alignment_error():
+    _lines, operations, readings = _readings("あい", [[Raw(0.0, 1.0), Raw(5.0, 1.0)]], _notes((0.0, 1.0)))
+    assert operations == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
+    assert readings[0].fit_error == pytest.approx(7.6)
+    assert readings[0].low
+
+
+def test_the_margin_compares_weighted_alternatives():
+    _lines, operations, readings = _readings("ない", [[Raw(0.0, 0.76), Raw(0.76, 0.24)]], _notes((0.0, 1.0)))
+    assert operations == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
+    assert readings[0].fit_error == pytest.approx(0.208)
+    assert readings[0].margin == pytest.approx(0.032)
+
+
+def test_a_long_vowel_pair_has_more_margin_than_a_three_sound_merge():
+    _lines, operations, readings = _readings(
+        "もーす",
+        [[Raw(155.5, 0.12), Raw(155.733, 0.02), Raw(155.9, 0.06)]],
+        _notes((155.5428, 155.9776)),
+    )
+    assert operations == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1), Drop(SoundRef(0, 2))]
+    assert readings[0].fit_error == pytest.approx(0.056)
+    assert readings[0].margin == pytest.approx(0.2490800368)
+    assert not any(reading.low for reading in readings)
 
 
 def test_an_abnormal_rest_inside_a_match_is_low():
