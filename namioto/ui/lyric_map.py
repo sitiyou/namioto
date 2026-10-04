@@ -21,7 +21,7 @@ from namioto.lyricmap import confidence, faithful
 from namioto.lyricmap.notes import TimedNote, resolve
 from namioto.lyricmap.problems import MappingError
 from namioto.lyricmap.raw import Raw
-from namioto.lyricmap.solver import solve
+from namioto.lyricmap.solver import MappingState, solve
 from namioto.lyricmap.spans import sound_spans
 
 Span = tuple[float | None, float | None]
@@ -42,6 +42,7 @@ class LyricResult:
     filtered: tuple = ()
     readings: tuple = ()
     error: str = ""
+    state: MappingState | None = None
 
 
 def map_lyrics(
@@ -53,13 +54,15 @@ def map_lyrics(
     notes: Sequence[tuple] = (),
     mode: str = "edit",
     anchors: Sequence[Operation] = (),
+    previous: LyricResult | None = None,
 ) -> LyricResult:
     """The mapping for the mode in force: the aligner's times in edit, the `.krc`'s own in read.
 
     `raw` is one `(onset, raw_length)` per Sound, per line; `scores` the alignment confidence;
     `notes` the target channel as `(start, end, pitch, id)` tuples. A mapping that cannot be made -
     missing alignment, no notes, a broken anchor - comes back with `.error` set and the raw times as
-    the drawn spans, so the strip still shows what it has.
+    the drawn spans, so the strip still shows what it has. `previous` permits local time-edit
+    solves when the lyric and NOTE structure and conflict filtering are unchanged.
     """
     lines = list(lines)
     raw = [[(span[0], span[1]) for span in row] for row in raw]
@@ -69,7 +72,7 @@ def map_lyrics(
         except (MappingError, ValueError) as error:
             return _failed(lines, raw, str(error))
     try:
-        return _edit_result(lines, raw, scores, flagged, notes, anchors)
+        return _edit_result(lines, raw, scores, flagged, notes, anchors, previous)
     except (MappingError, ValueError) as error:
         return _failed(lines, raw, str(error))
     except Exception as error:  # noqa: BLE001 - the worker reports whatever the mapping raised
@@ -95,10 +98,11 @@ def _read_result(text, lines, raw, notes) -> LyricResult:
     )
 
 
-def _edit_result(lines, raw, scores, flagged, notes, anchors) -> LyricResult:
+def _edit_result(lines, raw, scores, flagged, notes, anchors, previous) -> LyricResult:
     rows = [_raw_row(raw[index], scores[index] if index < len(scores) else ()) for index in range(len(lines))]
     resolved = resolve([TimedNote(*note) for note in notes])
-    operations = tuple(solve(lines, rows, resolved.stream, anchors))
+    state = previous.state if previous is not None and previous.filtered == resolved.filtered else None
+    operations = tuple(solve(lines, rows, resolved.stream, anchors, state))
     readings = tuple(confidence.read(lines, rows, resolved.stream, operations, flagged))
     spans = sound_spans([len(line.sounds) for line in lines], operations, resolved.stream)
     red, zero, group, mapped = _tables(lines, operations, readings, resolved.stream)
@@ -113,6 +117,7 @@ def _edit_result(lines, raw, scores, flagged, notes, anchors) -> LyricResult:
         operations=operations,
         filtered=tuple(resolved.filtered),
         readings=readings,
+        state=MappingState.capture(lines, rows, resolved.stream, anchors, operations),
     )
 
 

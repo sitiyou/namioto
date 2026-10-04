@@ -51,13 +51,17 @@ def verify(
     flagged: Sequence[bool] = (),
     broken: bool = False,
     subtitle: bool = False,
+    pending: bool = False,
 ) -> Gate:
     """Everything that blocks the mapping's export, and the canonical `.krc` if nothing does.
 
     `broken` says the lyrics could not even be normalised into Sounds; `filtered` is the notes a
     conflict kept out of the stream; `subtitle` adds the subtitle's own condition that at least one
-    Sound is actually shown. A low-confidence operation blocks only while it is unconfirmed.
+    Sound is actually shown. `pending` blocks export until the current mapping is ready.
+    A low-confidence operation blocks only while it is unconfirmed.
     """
+    if pending:
+        return Gate((Problem(codes.MAPPING_PENDING, "the lyric mapping is still being calculated"),))
     if broken:
         return Gate((Problem(codes.UNNORMALIZABLE_KRC, "the lyrics do not normalise into sounds"),))
     issues: list[Problem] = []

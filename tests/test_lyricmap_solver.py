@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from functools import cache
+
 import pytest
 
 from namioto.document import Note
@@ -11,11 +13,42 @@ from namioto.karaoke.operations import Drop, Match, Merge, SoundRef, partition
 from namioto.karaoke.sounds import natural_sounds
 from namioto.lyricmap.problems import MappingError
 from namioto.lyricmap.raw import Raw
-from namioto.lyricmap.solver import _context, _drop_base, _match_base, _merge_base, backward, solve
+from namioto.lyricmap.solver import _context, _drop_base, _match_base, _merge_base, solve
 
 
 def _notes(*spans):
     return [Note(60, start, end - start, id=index + 1) for index, (start, end) in enumerate(spans)]
+
+
+def _cost(context, operations):
+    sound_at = note_at = 0
+    cost = 0.0
+    for operation in operations:
+        if isinstance(operation, Match):
+            cost += _match_base(context, sound_at, note_at, operation.slots)
+        elif isinstance(operation, Merge):
+            cost += _merge_base(context, sound_at, len(operation.sounds), note_at)
+        else:
+            cost += _drop_base(context, sound_at, note_at)
+        sound_at += len(operation.sounds)
+        note_at += operation.slots
+    return cost
+
+
+def _minimum(context):
+    @cache
+    def visit(sound, note):
+        if sound == context.total:
+            return 0.0 if note == len(context.notes) else float("inf")
+        costs = [_drop_base(context, sound, note) + visit(sound + 1, note)]
+        for count in range(1, len(context.notes) - note + 1):
+            costs.append(_match_base(context, sound, note, count) + visit(sound + 1, note + count))
+        if note < len(context.notes):
+            for run in range(2, context.maxm[sound] + 1):
+                costs.append(_merge_base(context, sound, run, note) + visit(sound + run, note + 1))
+        return min(costs)
+
+    return visit(0, 0)
 
 
 def _solve(text, raw, notes, anchors=()):
@@ -64,7 +97,7 @@ def test_a_line_end_drop_does_not_pay_for_the_following_rest(rest):
     lines, operations, rows = _solve("ぱい\nあ", raw, notes)
     assert rows == [[Match(SoundRef(0, 0), (1,)), Drop(SoundRef(0, 1))], [Match(SoundRef(1, 0), (2,))]]
     assert rebuild("ぱい\nあ", operations) == "ぱい.0\nあ"
-    assert backward(_context(lines, raw, notes))[0][0] == pytest.approx(0.1882)
+    assert _cost(_context(lines, raw, notes), operations) == pytest.approx(0.1882)
 
 
 def test_a_drop_consumes_no_note():
@@ -175,7 +208,7 @@ def test_a_leading_sokuon_can_still_drop_before_a_match():
 def test_multiplicative_weights_preserve_a_zero_cost_merge():
     lines, operations, _rows = _solve("あっ", [[Raw(0.0, 0.5), Raw(0.5, 0.5)]], _notes((0.0, 1.0)))
     assert operations == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
-    assert backward(_context(lines, [[Raw(0.0, 0.5), Raw(0.5, 0.5)]], _notes((0.0, 1.0))))[0][0] == 0.0
+    assert _cost(_context(lines, [[Raw(0.0, 0.5), Raw(0.5, 0.5)]], _notes((0.0, 1.0))), operations) == 0.0
 
 
 def test_the_whole_merge_cost_including_first_onset_and_line_end_is_weighted():
@@ -188,7 +221,7 @@ def test_the_whole_merge_cost_including_first_onset_and_line_end_is_weighted():
 
 @pytest.mark.parametrize("text", ["ない", "きっ", "きっちく", "もーす"])
 @pytest.mark.parametrize("notes", [_notes((0.0, 1.0)), _notes((0.0, 0.5), (0.6, 1.0))])
-def test_forward_and_backward_use_the_same_weighted_costs(text, notes):
+def test_forward_finds_the_minimum_of_all_weighted_candidates(text, notes):
     lines = natural_sounds(text)
     raw = [[Raw(index * 0.3 + 0.03, 0.2) for index in range(len(lines[0].sounds))]]
     context = _context(lines, raw, notes)
@@ -206,7 +239,7 @@ def test_forward_and_backward_use_the_same_weighted_costs(text, notes):
         note_at += operation.slots
     assert sound_at == context.total
     assert note_at == len(notes)
-    assert cost == pytest.approx(backward(context)[0][0])
+    assert cost == pytest.approx(_minimum(context))
 
 
 def test_a_confirmed_drop_is_forced_and_kept():

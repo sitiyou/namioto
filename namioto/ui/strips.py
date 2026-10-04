@@ -206,7 +206,7 @@ class SoundStrip(ViewportStrip):
 
     def contextMenuEvent(self, event) -> None:
         """A Sound's own menu: drop it, merge it, dissolve its merge or confirm its operation."""
-        if not self.view.lyric_editable:
+        if not self.view.lyric_editable or self.view.lyric_mapping_pending:
             return
         found = self._sound_at(event.pos().x())
         if found is None:

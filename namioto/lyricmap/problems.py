@@ -23,6 +23,7 @@ INVALID_ANCHOR = "invalid_anchor"
 UNWRITABLE_MERGE = "unwritable_merge"
 ROUND_TRIP_MISMATCH = "round_trip_mismatch"
 UNCOVERED_NOTE = "uncovered_note"
+MAPPING_PENDING = "mapping_pending"
 
 
 @dataclass(frozen=True)
@@ -49,6 +50,7 @@ __all__ = [
     "LOW_CONFIDENCE_DROP",
     "LOW_CONFIDENCE_MATCH",
     "LOW_CONFIDENCE_MERGE",
+    "MAPPING_PENDING",
     "MappingError",
     "NO_LYRIC_SOUNDS",
     "NO_TARGET_NOTES",

@@ -1,10 +1,10 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""The global DP that lays the whole song's Sounds onto the whole target NOTE stream at once.
+"""The mapping DP, with local re-solving against a previous mapping for time-only edits.
 
 Every Sound is exactly one `match`, `merge` or `drop`, and every note is consumed exactly once, so
-the cost - each operation's raw onset against where it predicts the onset lands, plus the line's last
-Sound against its onset plus reference duration - is settled over the whole song rather than line
-by line. Each operation's whole cost takes its pattern weight; no fixed penalty is added. A line
+the cost compares each operation's raw onset against its predicted onset, plus the line's last
+Sound against its onset plus reference duration. Full solves settle this over the whole song rather
+than line by line. Each operation's whole cost takes its pattern weight; no fixed penalty is added. A line
 boundary does not cut the note stream, so a line's last Sound may run over the rest between lines;
 a `merge` stays within one line but may cross ruby containers. Confirmed operations
 are hard anchors: the DP solves the stretches between them and never moves them.
@@ -12,9 +12,11 @@ are hard anchors: the DP solves the stretches between them and never moves them.
 Exact ties are broken the way the spec orders them: less structural complexity first, then the
 solution that keeps the earlier Sound's `match`, then `match` over `merge` over `drop`. The tie is
 encoded as a base-3 number over the sounds, one digit per Sound, so a whole song's worth of ties still
-compares as an integer; that makes the DP `O(sounds * notes)` states and `O(line length^2)` for
-one note's merge candidates, which is the deliberate ceiling here and is worth a per-segment split or
-an incremental merge cost only if a real song outgrows it. Qt-free.
+compares as an integer. Full solves visit `O(sounds * notes)` states, with `O(line length^2)`
+merge work per starting Sound and note. Time-only edits reuse operations outside the changed lines
+and their neighbours, fixing the previous NOTE boundaries. This local optimum need not be the
+whole song's optimum; a full solve remains available. Invalid local boundaries expand the range
+before falling back to the whole song. Qt-free.
 """
 
 from __future__ import annotations
@@ -24,13 +26,31 @@ from dataclasses import dataclass
 
 from namioto.karaoke.operations import Drop, Match, Merge, Operation, SoundRef
 from namioto.karaoke.sounds import SoundLine
-from namioto.lyricmap.notes import Note
+from namioto.lyricmap.notes import Note, TimedNote
 from namioto.lyricmap.problems import MappingError
 from namioto.lyricmap.raw import Raw, validate
 from namioto.lyricmap.weights import merge_weights
 
-# match, merge, drop in the order a tie prefers them
-_RANK = {"match": 0, "merge": 1, "drop": 2}
+
+@dataclass(frozen=True)
+class MappingState:
+    """Immutable inputs and operations of a completed edit mapping, never loaded from disk."""
+
+    lines: tuple[SoundLine, ...]
+    raw: tuple[tuple[Raw, ...], ...]
+    notes: tuple[TimedNote, ...]
+    anchors: tuple[Operation, ...]
+    operations: tuple[Operation, ...]
+
+    @classmethod
+    def capture(cls, lines, raw, notes, anchors, operations) -> MappingState:
+        return cls(
+            tuple(lines),
+            tuple(tuple(row) for row in raw),
+            tuple(TimedNote(note.start, note.end, note.pitch, note.id) for note in notes),
+            tuple(anchors),
+            tuple(operations),
+        )
 
 
 @dataclass(frozen=True)
@@ -52,12 +72,12 @@ def solve(
     raw: Sequence[Sequence[Raw]],
     notes: Sequence[Note],
     anchors: Sequence[Operation] = (),
+    previous: MappingState | None = None,
 ) -> list[Operation]:
-    """The mapping for the whole song: a partition of its Sounds and the note stream.
+    """Partition all Sounds and notes, retaining confirmed anchors.
 
-    `raw` is one onset and reference duration per Sound, per line. `notes` is the target channel's
-    single voice, in stream order. `anchors` are the confirmed operations the DP must keep.
-    Raises `MappingError` when the input cannot yield a mapping.
+    `previous` permits an approximate local solve for time-only changes. Structural changes use
+    the full DP. Raises `MappingError` when the input cannot yield a mapping.
     """
     validate(lines, raw)
     note_list = list(notes)
@@ -66,17 +86,68 @@ def solve(
         raise MappingError("no_lyric_sounds", "the lyrics have no sounds")
     if not note_list:
         raise MappingError("no_target_notes", "the target channel has no notes")
-
     pinned, forced = _anchors(anchors, context)
+    if previous is not None:
+        changed = _changed_lines(lines, raw, note_list, anchors, previous)
+        if changed is not None:
+            if not changed:
+                return list(previous.operations)
+            low, high = max(0, min(changed) - 1), min(len(lines), max(changed) + 2)
+            while low > 0 or high < len(lines):
+                before = [op for op in previous.operations if op.sounds[0].line < low]
+                after = [op for op in previous.operations if op.sounds[0].line >= high]
+                sa = context.line_start[low]
+                sb = context.line_start[high] if high < len(lines) else context.total
+                na = sum(op.slots for op in before)
+                nb = len(note_list) - sum(op.slots for op in after)
+                try:
+                    local = _solve_range(context, pinned, forced, sa, sb, na, nb)
+                    return before + local + after
+                except MappingError:
+                    low, high = max(0, low - 1), min(len(lines), high + 1)
+    return _solve_range(context, pinned, forced, 0, context.total, 0, len(note_list))
+
+
+def _changed_lines(lines, raw, notes, anchors, previous: MappingState) -> set[int] | None:
+    if tuple(lines) != previous.lines or [(n.id, n.pitch) for n in notes] != [(n.id, n.pitch) for n in previous.notes]:
+        return None
+    changed = {index for index, row in enumerate(raw) if tuple(row) != previous.raw[index]}
+    for operation in set(anchors) ^ set(previous.anchors):
+        changed.update(ref.line for ref in operation.sounds)
+    moved = {
+        note.id: (old, note)
+        for old, note in zip(previous.notes, notes, strict=True)
+        if old.start != note.start or old.end != note.end
+    }
+    for operation in previous.operations:
+        ids = (
+            operation.notes
+            if isinstance(operation, Match)
+            else (operation.note,)
+            if isinstance(operation, Merge)
+            else ()
+        )
+        if any(identifier in moved for identifier in ids):
+            changed.update(ref.line for ref in operation.sounds)
+    for old, note in moved.values():
+        low, high = min(old.start, note.start), max(old.end, note.end)
+        changed.update(index for index, row in enumerate(raw) if any(low <= sound.onset <= high for sound in row))
+    return changed
+
+
+def _solve_range(context, pinned, forced, sa, sb, na, nb) -> list[Operation]:
     fixed = set(forced)
     operations: list[Operation] = []
-    sound_at, note_at = 0, 0
+    sound_at, note_at = sa, na
     for low, high, first, last, operation in pinned:
+        if high <= sa or low >= sb:
+            continue
+        if low < sound_at or high > sb or first < note_at or last > nb:
+            raise MappingError("invalid_anchor", "a confirmed operation crosses the local boundary")
         operations.extend(_segment(context, sound_at, low, note_at, first, fixed))
         operations.append(operation)
         sound_at, note_at = high, last
-    operations.extend(_segment(context, sound_at, context.total, note_at, len(note_list), fixed))
-    operations.sort(key=lambda operation: min(context.line_start[ref.line] + ref.index for ref in operation.sounds))
+    operations.extend(_segment(context, sound_at, sb, note_at, nb, fixed))
     return [forced.get(_position(operation, context), operation) for operation in operations]
 
 
@@ -216,6 +287,8 @@ def _note_indices(ids: Sequence[int], context: _Context) -> list[int]:
     found = [at.get(identifier) for identifier in ids]
     if any(index is None for index in found):
         raise MappingError("invalid_anchor", "a confirmed operation names a note that is not in the stream")
+    if found != list(range(found[0], found[0] + len(found))):
+        raise MappingError("invalid_anchor", "a confirmed operation's notes do not run on")
     return found
 
 
@@ -337,67 +410,15 @@ def _rebuild(context: _Context, back, sa: int, na: int, size: int, count: int) -
     return operations
 
 
-def backward(context: _Context) -> list[list[float]]:
-    """`grid[i][j]`: the cheapest base cost from state (i, j) - i Sounds and j notes taken - to the end.
-
-    A match's cost does not depend on how many notes it takes when the Sound is not its line's last,
-    so its best length is a suffix minimum over the row; a line-last Sound folds its end reference into the
-    same suffix. That is what keeps the backward pass at the same `O(sounds * notes)` as the forward.
-    """
-    total = context.total
-    notes = context.notes
-    size = len(notes)
-    infinity = float("inf")
-    grid = [[infinity] * (size + 1) for _ in range(total + 1)]
-    grid[total][size] = 0.0
-    for index in range(total - 1, -1, -1):
-        row = grid[index]
-        nxt = grid[index + 1]
-        row[size] = _drop_base(context, index, size) + nxt[size]
-        if context.is_last[index]:
-            line_end = _line_end(context, index)
-            suffix = [infinity] * (size + 1)
-            for end_at in range(size - 1, -1, -1):
-                suffix[end_at] = min(abs(line_end - notes[end_at].end) + nxt[end_at + 1], suffix[end_at + 1])
-        else:
-            suffix = [infinity] * (size + 1)
-            for end_at in range(size - 1, -1, -1):
-                suffix[end_at] = min(nxt[end_at + 1], suffix[end_at + 1])
-        onset = context.raw_start[index]
-        top = min(context.maxm[index], total - index)
-        for at in range(size - 1, -1, -1):
-            best = _drop_base(context, index, at) + nxt[at]
-            match = abs(onset - notes[at].start) + suffix[at]
-            if match < best:
-                best = match
-            for run in range(2, top + 1):
-                candidate = _merge_base(context, index, run, at) + grid[index + run][at + 1]
-                if candidate < best:
-                    best = candidate
-            row[at] = best
-    return grid
-
-
-def diagnose(
+def fit_errors(
     lines: Sequence[SoundLine], raw: Sequence[Sequence[Raw]], notes: Sequence[Note], operations: Sequence[Operation]
-) -> list[tuple[float, float]]:
-    """Per operation, its own fit error and its margin over the best alternative from the same state.
-
-    The fit error is the operation's pattern-weighted boundary error against the raw evidence,
-    save that at a line end only an end short of the end reference counts: a note held past the
-    sung line is normal, not a mismatch. The margin keeps the operation's prefix and asks what the
-    cheapest mapping from there without it would cost; the completion is the unanchored backward
-    pass, so with confirmed anchors the margin of the suggested operations around them is
-    approximate. Both numbers are in seconds;
-    normalising and judging them belongs to `confidence`.
-    """
+) -> list[float]:
+    """Pattern-weighted errors in seconds; line ends count only under-run."""
     validate(lines, raw)
-    note_list = list(notes)
-    if not note_list:
+    if not notes:
         return []
-    context = _context(lines, raw, note_list)
-    grid = backward(context)
-    found: list[tuple[float, float]] = []
+    context = _context(lines, raw, list(notes))
+    found: list[float] = []
     sound_at, note_at = 0, 0
     for operation in operations:
         weight = 1.0
@@ -405,37 +426,15 @@ def diagnose(
             count = len(operation.notes)
             base = _match_base(context, sound_at, note_at, count)
             end_at, predicted_end = sound_at, context.notes[note_at + count - 1].end
-            landing = (sound_at + 1, note_at + count)
         elif isinstance(operation, Merge):
             count = len(operation.sounds)
             weight = context.merge_weights[sound_at][count - 2]
             base = _merge_base(context, sound_at, count, note_at)
             end_at, predicted_end = sound_at + count - 1, context.notes[note_at].end
-            landing = (sound_at + count, note_at + 1)
         else:
             base = _drop_base(context, sound_at, note_at)
             end_at, predicted_end = sound_at, _drop_point(context, sound_at, note_at)
-            landing = (sound_at + 1, note_at)
-        alternative = _alternative(context, grid, sound_at, note_at, operation)
-        fit = base - weight * _line_end_overshoot(context, end_at, predicted_end)
-        found.append((fit, alternative - (base + grid[landing[0]][landing[1]])))
-        sound_at, note_at = landing
+        found.append(base - weight * _line_end_overshoot(context, end_at, predicted_end))
+        sound_at += len(operation.sounds)
+        note_at += operation.slots
     return found
-
-
-def _alternative(context: _Context, grid, sound_at: int, note_at: int, operation: Operation) -> float:
-    """The cheapest mapping from this state that does not take this operation."""
-    best = float("inf")
-    if not isinstance(operation, Drop):
-        best = _drop_base(context, sound_at, note_at) + grid[sound_at + 1][note_at]
-    if note_at < len(context.notes):
-        for count in range(1, len(context.notes) - note_at + 1):
-            if isinstance(operation, Match) and count == len(operation.notes):
-                continue
-            best = min(best, _match_base(context, sound_at, note_at, count) + grid[sound_at + 1][note_at + count])
-        top = min(context.maxm[sound_at], context.total - sound_at)
-        for run in range(2, top + 1):
-            if isinstance(operation, Merge) and run == len(operation.sounds):
-                continue
-            best = min(best, _merge_base(context, sound_at, run, note_at) + grid[sound_at + run][note_at + 1])
-    return best

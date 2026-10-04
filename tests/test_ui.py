@@ -4791,6 +4791,7 @@ def test_the_export_button_writes_an_ass_subtitle(own_window, monkeypatch, tmp_p
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), raw=(((0.0, 1.0), (1.0, 1.0)),))
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
     monkeypatch.setattr(
         QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "exported"), "ASS subtitle (*.ass)")
     )
@@ -5128,6 +5129,7 @@ def test_an_alignment_puts_each_sound_on_the_note_its_time_covers(own_window, tm
     own_window._lyric_key = ""
     own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", raw=(((0.0, 1.0), (1.0, 1.0)),))
     own_window._load_sounds()
+    wait_for_lyric_mapping(own_window)
 
     assert own_window.view.lyric_times == (((0.0, 1.0), (1.0, 2.0)),)  # the merge tiles the one note
     assert own_window.view.lyric_red == ((False, False),)
@@ -5140,6 +5142,7 @@ def test_mapping_the_lyrics_to_the_active_channel(own_window, tmp_path) -> None:
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), raw=(((0.0, 1.0), (1.0, 1.0)),))
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
 
     assert own_window._lyric_channel == 0  # the stored mapping names channel 0
     assert own_window.view.lyric_times == (((0.0, 1.0), (None, None)),)  # channel 0 has one note
@@ -5160,11 +5163,13 @@ def _mapped_pair(own_window, tmp_path, raw=((0.0, 1.0), (1.0, 1.0))) -> None:
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), raw=(raw,))
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
 
 
 def test_dropping_a_sound_marks_it_zero_and_keeps_the_rest(own_window, tmp_path) -> None:
     _mapped_pair(own_window, tmp_path)
     own_window.sound_strip.lyric_action_requested.emit("drop", 0, 1)
+    wait_for_lyric_mapping(own_window)
 
     assert own_window.view.lyric_zero == ((False, True),)
     assert any(
@@ -5177,6 +5182,7 @@ def test_dropping_a_sound_marks_it_zero_and_keeps_the_rest(own_window, tmp_path)
 def test_a_lyric_edit_is_one_undo_step(own_window, tmp_path) -> None:
     _mapped_pair(own_window, tmp_path)
     own_window.sound_strip.lyric_action_requested.emit("drop", 0, 1)
+    wait_for_lyric_mapping(own_window)
     assert own_window.view.lyric_zero == ((False, True),)
 
     own_window.view.undo()
@@ -5196,6 +5202,7 @@ def test_a_cross_container_merge_is_green_and_exports_a_continuation(own_window,
         text="泣[な]い", key=text_key("泣[な]い"), raw=(((0.0, 0.5), (0.5, 0.5)),)
     )
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
     assert own_window.view.lyric_operations == (Merge((SoundRef(0, 0), SoundRef(0, 1)), 1),)
     assert own_window.view.lyric_red == ((False, False),)
     assert own_window.export_krc(tmp_path / "exported.krc")
@@ -5213,6 +5220,7 @@ def test_read_mode_uses_continuations_without_changing_edit_evidence(own_window,
         text="泣[な]い.+", key=text_key("泣[な]い.+"), raw=(((0.0, 1.0), (1.0, 1.0)),)
     )
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
     assert own_window.view.lyric_mapped == (((1,), (2,)),)
     raw = own_window.view.lyric_raw
     own_window._set_lyric_mode("read")
@@ -5225,6 +5233,7 @@ def test_read_mode_uses_continuations_without_changing_edit_evidence(own_window,
 def test_merging_two_sounds_confirms_the_pair(own_window, tmp_path) -> None:
     _mapped_pair(own_window, tmp_path, raw=((0.0, 0.5), (0.5, 0.5)))
     own_window.sound_strip.lyric_action_requested.emit("merge", 0, 1)
+    wait_for_lyric_mapping(own_window)
 
     assert any(
         isinstance(operation, Merge) and operation.confirmed and len(operation.sounds) == 2
@@ -5236,7 +5245,10 @@ def test_merging_two_sounds_confirms_the_pair(own_window, tmp_path) -> None:
 def test_a_merge_can_be_dissolved_again(own_window, tmp_path) -> None:
     _mapped_pair(own_window, tmp_path, raw=((0.0, 0.5), (0.5, 0.5)))
     own_window.sound_strip.lyric_action_requested.emit("merge", 0, 1)
+    wait_for_lyric_mapping(own_window)
+    assert any(operation.confirmed for operation in own_window.view.lyric_operations)
     own_window.sound_strip.lyric_action_requested.emit("dissolve", 0, 0)
+    wait_for_lyric_mapping(own_window)
 
     assert not any(operation.confirmed for operation in own_window.view.lyric_operations)
 
@@ -5250,6 +5262,7 @@ def test_a_grouped_run_is_marked_on_the_strip(own_window, tmp_path) -> None:
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 2.0, 0),))
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
 
     assert own_window.view.lyric_group == ((0, 0),)
 
@@ -5290,6 +5303,7 @@ def test_a_sound_that_covers_no_note_is_marked_grey(own_window, tmp_path) -> Non
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0),))
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
 
     assert own_window.view.lyric_zero == ((False, True),)
 
@@ -5304,6 +5318,7 @@ def test_pattern_weights_apply_to_both_aligners_without_changing_evidence(own_wi
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(text=text, key=text_key(text), model=model, raw=raw)
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
     assert own_window.view.lyric_operations == (Merge((SoundRef(0, 0), SoundRef(0, 1)), 1),)
     assert own_window.view.lyric_raw == raw
     assert own_window.export_krc(tmp_path / "exported.krc")
@@ -5321,6 +5336,7 @@ def test_short_sounds_on_one_note_fall_to_zero(own_window, tmp_path) -> None:
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0),))  # one note under three sounds: the first keeps it
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
 
     assert own_window.view.lyric_raw == (((0.0, 0.9), (0.9, 0.05), (0.95, 0.05)),)
     assert own_window.view.lyric_zero == ((False, True, True),)
@@ -5336,6 +5352,7 @@ def test_a_block_is_the_note_the_sound_maps_to(own_window, tmp_path) -> None:
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 0.4, 0)))
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
 
     # タ sits on note 0 and に on note 1: a block is the whole note a sound maps to, not its raw span
     assert own_window.view.lyric_zero == ((False, False),)
@@ -5421,12 +5438,14 @@ def test_the_strip_hides_until_the_times_arrive(own_window, tmp_path) -> None:
     own_window._stored_lyrics = None
     own_window.lyrics_text = "あい\n"
     own_window._load_sounds()
+    wait_for_lyric_mapping(own_window)
     assert own_window.view.lyric_times == (((None, None), (None, None)),)
     assert own_window.sound_strip.isHidden()
 
     own_window._stored_lyrics = project.Lyrics(key=text_key("あい\n"), model="mms", raw=(((0.0, 1.0), (1.0, 1.0)),))
     own_window._lyric_key = ""
     own_window._load_sounds()
+    wait_for_lyric_mapping(own_window)
     assert own_window.view.lyric_times == (((0.0, 1.0), (1.0, 2.0)),)
     assert not own_window.sound_strip.isHidden()
 
@@ -5486,6 +5505,7 @@ def test_exporting_krc_writes_the_mapping_back(own_window, monkeypatch, tmp_path
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(text="あい\n", key=text_key("あい\n"), raw=(((0.0, 0.5), (0.5, 0.5)),))
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
     monkeypatch.setattr(
         QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "exported"), "Lyrics file (*.krc)")
     )
@@ -5509,6 +5529,7 @@ def test_read_mode_lays_the_krcs_own_dot_n_onto_the_notes(own_window, tmp_path) 
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(text="あ.2\n", key=text_key("あ.2\n"), mode="read")
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
 
     assert own_window._lyric_mode == "read"
     assert own_window.view.lyric_times == (((0.0, 2.0),),)  # one sound held over both notes
@@ -5524,6 +5545,7 @@ def test_read_mode_draws_a_dot_n_sound_where_it_holds_off(own_window, tmp_path) 
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(text="あい.0う\n", key=text_key("あい.0う\n"), mode="read")
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
     own_window.sound_strip.setVisible(True)
     QApplication.processEvents()
 
@@ -5540,6 +5562,7 @@ def test_read_mode_reads_a_ruby_part_by_part(own_window, tmp_path) -> None:
     text = "確信犯[かく,(しん).1,はん]\n"
     own_window._stored_lyrics = project.Lyrics(text=text, key=text_key(text), mode="read")
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
 
     # the `.1` group's two sounds share the third note; か, く, は and ん take one each
     assert own_window.view.lyric_times == (((0.0, 1.0), (1.0, 2.0), (2.0, 2.5), (2.5, 3.0), (3.0, 4.0), (4.0, 5.0)),)
@@ -5612,6 +5635,7 @@ def test_a_read_only_strip_does_not_drag(own_window, tmp_path) -> None:
     own_window.project_path = tmp_path / "song.nto"
     own_window._stored_lyrics = project.Lyrics(text="あい\n", key=text_key("あい\n"), mode="read")
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
     own_window.sound_strip.setVisible(True)
     QApplication.processEvents()
     before = own_window.view.lyric_raw
@@ -5936,3 +5960,261 @@ def test_exporting_leaves_the_krc_alone(own_window, monkeypatch, tmp_path) -> No
 
     assert own_window._on_export_midi() is True
     assert (tmp_path / "song.krc").read_text(encoding="utf-8") == "あん\n"
+
+
+class _ManualLyricMapper(QObject):
+    mapped = pyqtSignal(object)
+    failed = pyqtSignal(str)
+    finished = pyqtSignal()
+    instances: list = []
+
+    def __init__(self, revision, request, parent=None):
+        super().__init__(parent)
+        self.revision = revision
+        self.request = request
+
+    def start(self):
+        self.instances.append(self)
+
+    def complete(self):
+        from namioto.ui.lyric_map import map_lyrics
+
+        self.mapped.emit((self.revision, map_lyrics(**self.request)))
+        self.finished.emit()
+
+    def wait(self):
+        pass
+
+
+def _manual_mapping(monkeypatch):
+    _ManualLyricMapper.instances = []
+    monkeypatch.setattr("namioto.ui.app.LyricMapper", _ManualLyricMapper)
+    return _ManualLyricMapper.instances
+
+
+def test_mapping_computation_runs_outside_the_gui_thread(own_window, tmp_path, monkeypatch):
+    from threading import get_ident
+
+    from namioto.ui import lyric_map
+
+    main = get_ident()
+    called = []
+    original = lyric_map.map_lyrics
+
+    def record(**request):
+        called.append(get_ident())
+        return original(**request)
+
+    monkeypatch.setattr(lyric_map, "map_lyrics", record)
+    _mapped_pair(own_window, tmp_path)
+    assert called
+    assert all(thread != main for thread in called)
+    own_window._on_lyric_action("drop", 0, 1)
+    assert own_window.view.lyric_mapping_pending
+    wait_for_lyric_mapping(own_window)
+    assert all(thread != main for thread in called)
+    assert own_window.view.lyric_zero == ((False, True),)
+
+
+def test_a_same_channel_map_click_forces_a_full_solve(own_window, tmp_path, monkeypatch):
+    _mapped_pair(own_window, tmp_path)
+    workers = _manual_mapping(monkeypatch)
+    dirty = own_window.project_dirty
+    own_window.edit.map_channel.click()
+    assert len(workers) == 1
+    assert workers[0].request["previous"] is None
+    assert own_window.project_dirty == dirty
+    workers[0].complete()
+    assert not own_window.view.lyric_mapping_pending
+
+
+def test_saving_during_a_local_mapping_does_not_request_a_full_solve(own_window, tmp_path, monkeypatch):
+    _mapped_pair(own_window, tmp_path)
+    previous = own_window._lyric_map_result
+    workers = _manual_mapping(monkeypatch)
+    own_window.view.begin_gesture("Move lyrics")
+    own_window.view.set_sound_onset(0, 1, 1.1)
+    own_window.view.commit_gesture()
+    revision = own_window._lyric_map_revision
+    assert own_window.save_project(tmp_path / "saved.nto")
+    assert own_window._lyric_map_revision == revision
+    assert own_window._lyric_map_pending is None
+    assert workers[0].request["previous"] is previous
+    assert project.load(tmp_path / "saved.nto").lyrics.raw == (((0.0, 1.0), (1.1, 1.0)),)
+    workers[0].complete()
+    assert not own_window.view.lyric_mapping_pending
+
+
+def test_loading_same_lyrics_replaces_evidence_and_only_starts_one_full_mapping(own_window, tmp_path, monkeypatch):
+    _mapped_pair(own_window, tmp_path)
+    raw = (((0.1, 1.0), (1.2, 1.0)),)
+    path = tmp_path / "other.nto"
+    project.save(
+        project.Project(
+            notes=(project.Note(0.0, 1.0, 60, id=41), project.Note(1.0, 1.0, 62, id=99)),
+            lyrics=project.Lyrics(text="あい", key=text_key("あい"), raw=raw),
+        ),
+        path,
+    )
+    workers = _manual_mapping(monkeypatch)
+    assert own_window.load_project(path)
+    assert len(workers) == 1
+    assert workers[0].request["previous"] is None
+    assert own_window.view.lyric_raw == raw
+    assert [note.id for note in own_window.view.notes()] == [41, 99]
+    workers[0].complete()
+    assert not own_window.view.lyric_mapping_pending
+    assert not own_window._lyric_error
+
+
+def test_a_mapping_result_cannot_overwrite_a_drag_in_progress(own_window, tmp_path, monkeypatch):
+    _mapped_pair(own_window, tmp_path)
+    workers = _manual_mapping(monkeypatch)
+    view = own_window.view
+    original = view.lyric_operations
+    before = view.undo_stack.count()
+    own_window._remap_lyrics_async()
+    view.begin_gesture("Move lyrics")
+    view.set_sound_onset(0, 1, 1.1)
+    workers[0].complete()
+    assert view.lyric_raw == (((0.0, 1.0), (1.1, 1.0)),)
+    assert view.lyric_operations == original
+    assert view.lyric_mapping_pending
+    assert len(workers) == 1
+    view.commit_gesture()
+    assert len(workers) == 2
+    assert workers[1].request["raw"] == [[(0.0, 1.0), (1.1, 1.0)]]
+    workers[1].complete()
+    assert not view.lyric_mapping_pending
+    assert view.undo_stack.count() == before + 1
+
+
+def test_continuous_edits_only_queue_the_latest_mapping(own_window, tmp_path, monkeypatch):
+    _mapped_pair(own_window, tmp_path)
+    workers = _manual_mapping(monkeypatch)
+    own_window._remap_lyrics_async()
+    for onset in (1.1, 1.2, 1.3):
+        own_window.view.begin_gesture("Move lyrics")
+        own_window.view.set_sound_onset(0, 1, onset)
+        own_window.view.commit_gesture()
+    assert len(workers) == 1
+    assert own_window._lyric_map_pending[1]["raw"] == [[(0.0, 1.0), (1.3, 1.0)]]
+    workers[0].failed.emit("obsolete failure")
+    assert own_window.view.lyric_mapping_pending
+    assert not own_window._lyric_error
+    workers[0].complete()
+    assert len(workers) == 2
+    assert own_window.view.lyric_mapping_pending
+    assert workers[1].request["raw"] == [[(0.0, 1.0), (1.3, 1.0)]]
+    workers[1].complete()
+    assert own_window.view.lyric_raw == (((0.0, 1.0), (1.3, 1.0)),)
+    assert not own_window.view.lyric_mapping_pending
+
+
+def test_pending_mapping_blocks_lyric_actions_and_exports_but_not_saving_or_midi(own_window, tmp_path, monkeypatch):
+    _mapped_pair(own_window, tmp_path)
+    workers = _manual_mapping(monkeypatch)
+    before = own_window.view.undo_stack.count()
+    operations = own_window.view.lyric_operations
+    own_window._remap_lyrics()
+    assert own_window.view.lyric_mapping_pending
+    assert not own_window.transport.export_krc_action.isEnabled()
+    assert not own_window.transport.export_ass_action.isEnabled()
+    assert own_window.transport.export_midi_action.isEnabled()
+    assert not own_window.export_krc(tmp_path / "pending.krc")
+    assert not own_window.export_ass(tmp_path / "pending.ass")
+    assert not (tmp_path / "pending.krc").exists()
+    assert not (tmp_path / "pending.ass").exists()
+    assert own_window._verification().counts() == {"mapping_pending": 1}
+    own_window._on_lyric_action("merge", 0, 1)
+    assert own_window.view.lyric_operations == operations
+    assert own_window.view.undo_stack.count() == before
+    assert own_window.save_project(tmp_path / "pending.nto")
+    assert own_window.export_midi(tmp_path / "pending.mid")
+    workers[0].complete()
+    assert own_window.transport.export_krc_action.isEnabled()
+    assert own_window.transport.export_ass_action.isEnabled()
+    assert own_window.export_krc(tmp_path / "ready.krc")
+    assert own_window.view.undo_stack.count() == before
+
+
+@pytest.mark.parametrize("finish", ["commit_gesture", "cancel_gesture"])
+def test_an_unchanged_gesture_does_not_leave_mapping_pending(own_window, tmp_path, monkeypatch, finish):
+    _mapped_pair(own_window, tmp_path)
+    workers = _manual_mapping(monkeypatch)
+    own_window._remap_lyrics_async()
+    own_window.view.begin_gesture("Move lyrics")
+    workers[0].complete()
+    getattr(own_window.view, finish)()
+    assert len(workers) == 2
+    workers[1].complete()
+    assert not own_window.view.lyric_mapping_pending
+
+
+def test_read_mode_disables_onset_dragging_before_its_mapping_finishes(own_window, tmp_path, monkeypatch):
+    _mapped_pair(own_window, tmp_path)
+    workers = _manual_mapping(monkeypatch)
+    own_window._set_lyric_mode("read")
+    assert own_window.view.lyric_mapping_pending
+    assert not own_window.view.lyric_editable
+    before = own_window.view.lyric_raw
+    strip = own_window.sound_strip
+    sound_mouse(own_window, QEvent.Type.MouseButtonPress, strip._x(1.0))
+    sound_mouse(own_window, QEvent.Type.MouseMove, strip._x(1.5))
+    sound_mouse(own_window, QEvent.Type.MouseButtonRelease, strip._x(1.5))
+    assert own_window.view.lyric_raw == before
+    assert not own_window.view.gesture_active
+    workers[0].complete()
+    assert not own_window.view.lyric_mapping_pending
+
+
+def test_changed_conflict_filtering_invalidates_the_cached_mapping(monkeypatch):
+    from namioto.ui import lyric_map
+
+    text = "\n".join(["あ"] * 5)
+    request = {
+        "text": text,
+        "lines": natural_sounds(text),
+        "raw": [[(row * 4.0, 1.0)] for row in range(5)],
+        "notes": [(row * 4.0, row * 4.0 + 1.0, 60, row + 1) for row in range(5)],
+    }
+    previous = lyric_map.map_lyrics(**request)
+    assert previous.state is not None
+    cached = []
+    original = lyric_map.solve
+
+    def record(lines, raw, notes, anchors, state):
+        cached.append(state)
+        return original(lines, raw, notes, anchors, state)
+
+    monkeypatch.setattr(lyric_map, "solve", record)
+    request["notes"].append((0.0, 1.0, 62, 99))
+    result = lyric_map.map_lyrics(**request, previous=previous)
+    assert cached == [None]
+    assert [note.id for note in result.filtered] == [99]
+    assert result.operations == previous.operations
+    assert not result.error
+
+
+def test_time_edit_undo_and_redo_preserve_sparse_note_ids_and_anchors(own_window, tmp_path):
+    own_window.transport.bpm.setValue(60.0)
+    own_window.view.set_notes(((60, 0.0, 1.0, 0, 41), (62, 1.0, 1.0, 0, 99)))
+    own_window.project_path = tmp_path / "song.nto"
+    anchor = Match(SoundRef(0, 0), (41,), confirmed=True)
+    own_window._stored_lyrics = project.Lyrics(
+        text="あい", key=text_key("あい"), raw=(((0.0, 1.0), (1.0, 1.0)),), operations=(anchor,)
+    )
+    own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
+    view = own_window.view
+    view.begin_gesture("Move lyrics")
+    view.set_sound_onset(0, 1, 1.1)
+    view.commit_gesture()
+    wait_for_lyric_mapping(own_window)
+    for restore, onset in ((view.undo, 1.0), (view.redo, 1.1)):
+        restore()
+        wait_for_lyric_mapping(own_window)
+        assert [note.id for note in view.notes()] == [41, 99]
+        assert view.lyric_raw[0][1][0] == onset
+        assert anchor in view.lyric_operations
+        assert not own_window._lyric_error

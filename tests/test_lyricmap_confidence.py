@@ -8,7 +8,7 @@ import pytest
 from namioto.document import Note
 from namioto.karaoke.operations import Drop, Match, Merge, SoundRef
 from namioto.karaoke.sounds import natural_sounds
-from namioto.lyricmap.confidence import FIT_ERROR_SECONDS, MARGIN_PER_SECOND, QUALITY, REST_RATIO, read
+from namioto.lyricmap.confidence import FIT_ERROR_SECONDS, QUALITY, REST_RATIO, read
 from namioto.lyricmap.raw import Raw
 from namioto.lyricmap.solver import solve
 
@@ -97,10 +97,10 @@ def test_a_line_end_drop_before_a_rest_is_not_low_confidence(rest):
     assert not readings[1].low
 
 
-def test_a_tie_between_two_operations_is_a_low_margin():
+def test_a_tie_does_not_make_a_well_fitted_match_low_confidence():
     _lines, _operations, readings = _readings("あか", [[Raw(0.0, 0.75, 0.9), Raw(0.75, 0.25, 0.9)]], _notes((0.0, 1.0)))
-    assert readings[0].margin < MARGIN_PER_SECOND
-    assert readings[0].low
+    assert readings[0].fit_error == 0.0
+    assert not readings[0].low
 
 
 def test_a_merge_weights_fit_and_removes_the_weighted_line_end_overshoot():
@@ -124,14 +124,14 @@ def test_empirical_weighting_does_not_hide_a_large_alignment_error():
     assert readings[0].low
 
 
-def test_the_margin_compares_weighted_alternatives():
+def test_weighted_fit_error_still_checks_the_threshold():
     _lines, operations, readings = _readings("ない", [[Raw(0.0, 0.76), Raw(0.76, 0.24)]], _notes((0.0, 1.0)))
     assert operations == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
     assert readings[0].fit_error == pytest.approx(0.208)
-    assert readings[0].margin == pytest.approx(0.032)
+    assert readings[0].low
 
 
-def test_a_long_vowel_pair_has_more_margin_than_a_three_sound_merge():
+def test_a_long_vowel_pair_and_drop_keep_their_fit_confidence():
     _lines, operations, readings = _readings(
         "もーす",
         [[Raw(155.5, 0.12), Raw(155.733, 0.02), Raw(155.9, 0.06)]],
@@ -139,7 +139,6 @@ def test_a_long_vowel_pair_has_more_margin_than_a_three_sound_merge():
     )
     assert operations == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1), Drop(SoundRef(0, 2))]
     assert readings[0].fit_error == pytest.approx(0.056)
-    assert readings[0].margin == pytest.approx(0.2490800368)
     assert not any(reading.low for reading in readings)
 
 

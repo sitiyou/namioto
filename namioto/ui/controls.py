@@ -642,7 +642,7 @@ class EditBar(_Group):
         self.align = icon_button("align", tr("Align lyrics: put a time on every sound with the forced aligner"))
         self.align.setEnabled(False)
         self.align.clicked.connect(self.align_requested)
-        self.map_channel = icon_button("map", tr("Map lyrics to the current channel"))
+        self.map_channel = icon_button("map", tr("Map lyrics to the current channel, or recalculate the whole mapping"))
         self.map_channel.setEnabled(False)
         self.map_channel.clicked.connect(self.map_channel_requested)
         self.lyric_lock = icon_button("lock", "", checkable=True)

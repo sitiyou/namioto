@@ -320,12 +320,22 @@ Drop(sound)
 
 ### 7.1 求解范围
 
-自动映射把整首歌词的 Sound 与整首 target NOTE stream 一次全局求解：
+首次映射与主动全量重算把整首歌词的 Sound 与整首 target NOTE stream 一次全局求解：
 
 - 行边界不切断 NOTE 流；
 - 一行最后一个 Sound 可以 match 到下一行第一个 Sound 之前的多个 NOTE；
 - merge 不得跨行；
 - confirmed operation 是硬锚点；DP 只优化锚点之间的区间。
+
+普通 Sound onset、NOTE 起止时间修改及其撤销/重做默认只重算受影响歌词行及前后各一行：
+
+- 局部 Sound/NOTE 分界取自上次完成的映射，范围外复用旧 operation；这些分界不是用户 confirmed 锚点，不持久化为确认状态；
+- 范围内保留合法 confirmed operation；局部不可解或锚点超出旧 NOTE 分界时扩大范围，必要时回退全量；
+- 局部结果不保证整曲最优；局部可解不构成全局最优的证明；
+- NOTE 增删、顺序或 pitch 变化、冲突过滤结果变化、歌词结构变化、目标通道切换使用全量；
+- MAP 按钮在同一目标通道上主动执行全量重算；编辑后空闲和导出不自动重算整曲。
+
+所有映射入口在后台计算。等待期间继续显示新证据时间与上次映射块，可以继续修改时间；只应用最新输入版本的结果，只保留最新待处理请求。计算期间允许保存工程和导出 MIDI，禁止歌词导出及依赖旧映射的确认、合并等操作。后台结果不增加 undo step，撤销/重做保持 NOTE 稳定 ID。
 
 ### 7.2 基础边界代价
 
@@ -379,7 +389,7 @@ match 和 drop 的权重始终为 `1`。merge 按以下优先级匹配，命中�
 
 三个参数使用代码中的具名常量，不进入设置界面或工程字段；MMS、yohane 和其他对齐器统一使用同一规则。调整权重不修改 raw、`raw_length` 或自然读音，也不影响 confirmed 硬锚点和 read-only faithful 模式。
 
-前向 DP、后向候选代价和置信度诊断 MUST 使用同一权重。基础代价为零时，加权后仍为零；权重只表达软倾向，不构成 operation 禁令或新的候选合法性条件。
+DP 与置信度拟合误差 MUST 使用同一权重。基础代价为零时，加权后仍为零；权重只表达软倾向，不构成 operation 禁令或新的候选合法性条件。
 
 ### 7.3 精确平局
 
@@ -413,13 +423,10 @@ complexity =
 每个 suggested operation 至少检查：
 
 1. **`fit_error`**：当前 operation 的预测边界与 raw 证据的绝对误差，整项乘以 §7.2.1 的同一 pattern 权重；行末额外比较结束参考点 `onset + raw_length`，但只计 **under-run**——预测 end 早于结束参考点才算误差；预测 end 晚于结束参考点（音符延音、行尾休止）不计，扣除 over-run 时也使用同一权重；
-2. **`mapping_margin`**：禁止当前 operation 后重新求最佳合法映射，计算替代方案与全局最优的加权代价差，并按 operation 涉及的 NOTE 时长归一化；
-3. **`alignment_quality`**：成员 token score、缺失数据和 aligner 行级 problem；
-4. **内部 rest**：match 内相邻 NOTE 的 gap 相对周围 NOTE 时长是否异常。
+2. **`alignment_quality`**：成员 token score、缺失数据和 aligner 行级 problem；
+3. **内部 rest**：match 内相邻 NOTE 的 gap 相对周围 NOTE 时长是否异常。
 
 `fit_error` 的单向行末规则只属于置信度：§7.2 的 DP 基础代价仍是对称绝对误差，映射本身不因置信度改变。行末 drop 的置信度 MUST 使用 §7.2 中按 raw onset 选取的同一个最近 NOTE 边界作为预测 end，不得另取下一条 NOTE.start。
-
-没有替代方案只表示 `mapping_margin` 通过，不能掩盖很大的 `fit_error`。
 
 具体阈值：
 
@@ -429,7 +436,7 @@ complexity =
 - 不在本规范中虚构固定数值；
 - 暂不暴露为用户设置。
 
-operation 的规模不另设低置信度判据，但 merge 的规模权重会影响 `fit_error` 和 `mapping_margin`。只要加权拟合、余量、对齐质量和 rest 都合理，大 match 或大 merge 仍可以是高置信度。
+operation 的规模不另设低置信度判据，但 merge 的规模权重会影响 `fit_error`。只要加权拟合、对齐质量和 rest 都合理，大 match 或大 merge 仍可以是高置信度。
 
 ### 8.2 aligner problem
 
@@ -497,7 +504,7 @@ UI 至少支持：
 - 结果立即成为 confirmed；
 - 受替换的旧 operation 解除确认；
 - 其他 confirmed operation 保持不变；
-- DP 自动重算新锚点两侧未确认区间；
+- DP 在局部范围内重算新锚点两侧未确认区间；旧分界失效时扩大范围或回退全量；
 - 若新锚点与既有锚点交叉、重复消费或使区间无合法解，拒绝该编辑并说明冲突。
 
 移动两个 match 之间的 NOTE 边界是一个原子操作，两侧新 match 都成为 confirmed，并只产生一个 undo step。
@@ -524,7 +531,7 @@ raw `|` 只编辑对应 Sound 的 onset：
 3. 只重算受影响区间；
 4. 新结果仍按正常置信度处理，不因用户拖过就自动 confirmed。
 
-建议 UI 可显示当前 operation、预测边界、误差和接近的替代映射，但不得自动建议用户删除或移动 MIDI。
+建议 UI 可显示当前 operation、预测边界和误差，但不得自动建议用户删除或移动 MIDI。
 
 ### 9.4 MIDI 修改后的锚点
 
@@ -825,5 +832,8 @@ read-only KRC 原文复制不依赖 edit mapping 门禁。read-only ASS 使用 �
 30. operation pattern 只乘原有代价，不添加固定惩罚，零代价保持为零；
 31. 边缘促音、规模、经验组合按顺序命中返回；内部促音不触发边缘规则；
 32. 经验优惠不跨词界，显式 `ー` 除外；不可靠的词法/读音对应保守退化；
-33. 前向 DP、后向候选余量和拟合误差使用同一权重，行末 over-run 也按同一权重扣除；
-34. 代码参数调整不受词法缓存影响，且对所有对齐器采用相同规则。
+33. DP 与拟合误差使用同一权重，行末 over-run 也按同一权重扣除；
+34. 代码参数调整不受词法缓存影响，且对所有对齐器采用相同规则；
+35. 局部时间修改复用范围外 operation，保留 confirmed 锚点，边界失效可扩大或回退；
+36. 连续编辑只应用最新版本映射；计算中的工程可保存，但歌词导出与依赖旧映射的编辑被阻止；
+37. MAP 同通道点击强制全量，后台结果不增加 undo step，撤销/重做保持 NOTE ID。

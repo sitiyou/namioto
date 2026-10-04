@@ -70,7 +70,7 @@ from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
 from namioto.ui.ipc_commands import WindowBridge
 from namioto.ui.ipc_server import IpcServer
 from namioto.ui.loading import LoadingThread
-from namioto.ui.lyric_map import LyricMapper, map_lyrics
+from namioto.ui.lyric_map import LyricMapper
 from namioto.ui.lyrics_dialog import LyricsDialog, LyricsWatcher
 from namioto.ui.midi_dialog import MidiImportDialog
 from namioto.ui.open_dialog import OpenAudioDialog
@@ -252,6 +252,10 @@ class MainWindow(QMainWindow):
         self._lyric_map_thread: LyricMapper | None = None
         self._lyric_map_pending = None
         self._lyric_map_revision = 0
+        self._lyric_map_result = None
+        self._lyric_map_status = QLabel(i18n.tr("Calculating lyric mapping…"), self)
+        self._lyric_map_status.hide()
+        self.statusBar().addPermanentWidget(self._lyric_map_status)
         self.loader: SpectrumLoader | None = None
         self.tempo_loader: TempoLoader | None = None
         self._tempo_manual = False
@@ -383,6 +387,8 @@ class MainWindow(QMainWindow):
         self.view.notes_changed.connect(self._update_status)
         self.view.notes_changed.connect(self._mark_dirty)
         self.view.notes_changed.connect(self._remap_lyrics_async)
+        self.view.gesture_started.connect(self._invalidate_lyric_mapping)
+        self.view.gesture_finished.connect(self._remap_lyrics_async)
         self.view.channels_changed.connect(self._on_channels_changed)
         self.view.active_channel_changed.connect(self._on_active_channel_changed)
         self.transport.channels.toggled.connect(self.channel_panel.setVisible)
@@ -517,6 +523,7 @@ class MainWindow(QMainWindow):
             self._watch_lyrics()
         finally:
             self._loading = False
+        self._remap_lyrics()
         self._update_status()
 
     def _open_settings(self) -> None:
@@ -1019,6 +1026,7 @@ class MainWindow(QMainWindow):
             filtered=resolved.filtered,
             flagged=self._lyric_flags,
             subtitle=subtitle,
+            pending=self.view.lyric_mapping_pending,
         )
 
     def _gate_message(self, gate) -> str:
@@ -1102,6 +1110,7 @@ class MainWindow(QMainWindow):
             self.project_dirty = False
             self.autosave_timer.stop()
             self._stored_lyrics = opened.lyrics
+            self._lyric_key = ""
             self._watch_lyrics(materialize=True)
             missing = self._open_audio(project.resolve_audio(self.project_path, opened.audio))
             self.view.set_channels(opened.channels)
@@ -1114,6 +1123,7 @@ class MainWindow(QMainWindow):
             self.view.undo_stack.clear()  # another document starts its history over
         finally:
             self._loading = False
+        self._remap_lyrics()
         self._update_status()
         self.statusBar().showMessage(
             i18n.tr("Opened {name} — {notes} notes", name=self.project_path.name, notes=len(opened.notes)) + missing
@@ -1238,6 +1248,7 @@ class MainWindow(QMainWindow):
                 )
         finally:
             self._loading = False
+        self._remap_lyrics_async()
         self._mark_dirty()
 
     def _merge_midi(self, imported, mapping) -> None:
@@ -1366,15 +1377,15 @@ class MainWindow(QMainWindow):
         self.edit.map_channel.setEnabled(path is not None and self._lyric_mode == "edit")
         self.edit.lyric_lock.setEnabled(path is not None)
         self.edit.set_lyric_mode(self._lyric_mode)
-        self._load_sounds()
-        self._remap_lyrics()  # the mode may have changed even when the text did not
+        if not self._load_sounds():
+            self._remap_lyrics_async()
 
-    def _load_sounds(self) -> None:
+    def _load_sounds(self) -> bool:
         """Derive the sounds of the open `.krc` and lay them onto the notes the project kept."""
         text = self.lyrics_text
         key = text_key(text) if text else ""
         if key == self._lyric_key and bool(self.view.lyric_lines) == bool(text):
-            return
+            return False
         self._lyric_key = key
         self._lyric_model = ""
         lines = []
@@ -1403,15 +1414,14 @@ class MainWindow(QMainWindow):
             self._lyric_scores = None
             self._lyric_problems = None
             self.view.lyric_operations = []
-        self.view.load_lyrics(lines, raw, raw=raw)
-        self._remap_lyrics(lines)
+        self.view.load_lyrics(lines, raw, raw=raw, editable=self._lyric_mode != "read")
+        self._remap_lyrics()
+        return True
 
-    def _remap_lyrics(self, lines=None) -> None:
-        """Map the open sounds onto the target channel and hand the strip what to draw."""
-        self._lyric_map_revision += 1
-        self._lyric_map_pending = None
-        result = map_lyrics(**self._mapping_request(self.view.lyric_lines if lines is None else lines))
-        self._apply_lyric_mapping(result)
+    def _remap_lyrics(self) -> None:
+        """Request a full mapping, including when the current channel is mapped again."""
+        self._lyric_map_result = None
+        self._remap_lyrics_async()
 
     def _mapping_request(self, lines) -> dict:
         """Everything the mapper thread needs, snapshotted so the GUI thread may move on."""
@@ -1428,15 +1438,43 @@ class MainWindow(QMainWindow):
             "notes": tuple(self._target_notes()),
             "mode": self._lyric_mode,
             "anchors": tuple(operation for operation in self.view.lyric_operations if operation.confirmed),
+            "previous": self._lyric_map_result,
         }
 
+    def _set_lyric_mapping_pending(self, pending: bool) -> None:
+        self.view.lyric_mapping_pending = pending
+        self.transport.export_krc_action.setEnabled(not pending)
+        self.transport.export_ass_action.setEnabled(not pending)
+        self._lyric_map_status.setVisible(pending)
+
+    def _invalidate_lyric_mapping(self) -> None:
+        self._lyric_map_revision += 1
+        self._lyric_map_pending = None
+        self._set_lyric_mapping_pending(bool(self.view.lyric_lines))
+
     def _remap_lyrics_async(self) -> None:
+        if self._loading or self.view.gesture_active:
+            return
         if not self.view.lyric_lines:
-            self._remap_lyrics()
+            self._invalidate_lyric_mapping()
+            self._lyric_map_result = None
+            self._lyric_filtered = ()
+            self._lyric_readings = ()
+            if not self.lyrics_text:
+                self._lyric_error = ""
+            self.sound_strip.hide()
+            self.view.set_filtered_notes(())
+            return
+        snapshot = self._mapping_request(self.view.lyric_lines)
+        if self._lyric_map_pending is not None and self._lyric_map_pending[1] == snapshot:
+            return
+        thread = self._lyric_map_thread
+        if thread is not None and thread.revision == self._lyric_map_revision and thread.request == snapshot:
             return
         self._lyric_map_revision += 1
-        request = (self._lyric_map_revision, self._mapping_request(self.view.lyric_lines))
-        if self._lyric_map_thread is not None:
+        request = (self._lyric_map_revision, snapshot)
+        self._set_lyric_mapping_pending(bool(self.view.lyric_lines))
+        if thread is not None:
             self._lyric_map_pending = request
             return
         self._start_lyric_mapper(request)
@@ -1445,7 +1483,7 @@ class MainWindow(QMainWindow):
         revision, request = request
         thread = LyricMapper(revision, request, self)
         thread.mapped.connect(self._on_lyric_mapping)
-        thread.failed.connect(self._on_lyric_mapping_failed)
+        thread.failed.connect(partial(self._on_lyric_mapping_failed, revision))
         thread.finished.connect(partial(self._on_lyric_mapper_finished, thread))
         thread.finished.connect(thread.deleteLater)
         self._lyric_map_thread = thread
@@ -1453,11 +1491,23 @@ class MainWindow(QMainWindow):
 
     def _on_lyric_mapping(self, result) -> None:
         revision, mapping = result
+        if revision != self._lyric_map_revision or self.view.gesture_active:
+            return
+        thread = self._lyric_map_thread
+        snapshot = self._mapping_request(self.view.lyric_lines)
+        if thread is None or any(thread.request[key] != value for key, value in snapshot.items() if key != "previous"):
+            return
+        self._lyric_map_result = mapping
+        self._apply_lyric_mapping(mapping)
+        self._set_lyric_mapping_pending(False)
+        if mapping.error:
+            self.statusBar().showMessage(mapping.error)
+
+    def _on_lyric_mapping_failed(self, revision: int, message: str) -> None:
         if revision != self._lyric_map_revision:
             return
-        self._apply_lyric_mapping(mapping)
-
-    def _on_lyric_mapping_failed(self, message: str) -> None:
+        self._lyric_error = message
+        self._set_lyric_mapping_pending(False)
         self.statusBar().showMessage(message)
 
     def _on_lyric_mapper_finished(self, thread) -> None:
@@ -1512,6 +1562,7 @@ class MainWindow(QMainWindow):
         if mode not in project.LYRIC_MODES or mode == self._lyric_mode:
             return
         self._lyric_mode = mode
+        self.view.lyric_editable = mode != "read"
         self.edit.align.setEnabled(self.lyrics_path() is not None and mode == "edit")
         self.edit.map_channel.setEnabled(self.lyrics_path() is not None and mode == "edit")
         self._mark_dirty()
@@ -1634,7 +1685,7 @@ class MainWindow(QMainWindow):
         self._lyric_model = model
         self._lyric_flags = tuple(flagged) if len(flagged) == len(lines) else ()
         self.view.load_lyrics(lines, (), raw=raw)
-        self._remap_lyrics(lines)
+        self._remap_lyrics()
         self._mark_dirty()
         self.statusBar().showMessage(i18n.tr("Aligned {lines} lines", lines=len(lines)))
 
@@ -1644,17 +1695,21 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(i18n.tr("Mapping the lyrics needs edit mode"))
             return
         channel = self.view.active_channel
-        if channel == self._lyric_channel and self.view.lyric_operations:
+        self._lyric_channel_chosen = True
+        if channel == self._lyric_channel:
+            self._remap_lyrics()
             return
         self._lyric_channel = channel
-        self._lyric_channel_chosen = True
         self.view.lyric_operations = []  # anchors naming another channel's notes no longer hold
         self._mark_dirty()
-        self._remap_lyrics_async()
+        self._remap_lyrics()
 
     def _on_lyric_action(self, kind: str, line: int, index: int) -> None:
         """A Sound's context menu: one gesture, one undo step, one remap of the rest."""
         if self._lyric_mode != "edit":
+            return
+        if self.view.lyric_mapping_pending:
+            self.statusBar().showMessage(i18n.tr("Calculating lyric mapping…"))
             return
         spots = [(line, index)]
         if kind == "drop":
@@ -1716,7 +1771,7 @@ class MainWindow(QMainWindow):
             if anchor is not None:
                 surviving.append(anchor)
             self.view.lyric_operations = surviving
-            self._remap_lyrics()
+            self._remap_lyrics_async()
             self._mark_dirty()
 
     def _open_audio(self, target: Path | None) -> str:
@@ -1753,6 +1808,8 @@ class MainWindow(QMainWindow):
         if self._auto_align_thread is not None:
             self._auto_align_thread.wait()  # a pass in flight may still be reading the audio
             self._auto_align_thread = None
+        self._lyric_map_revision += 1
+        self._lyric_map_pending = None
         if self._lyric_map_thread is not None:
             self._lyric_map_thread.wait()
             self._lyric_map_thread = None

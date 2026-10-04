@@ -377,6 +377,8 @@ CATALOGS: dict[str, dict[str, str]] = {
         "Lyrics reloaded from {name}": "已从 {name} 重新载入歌词",
         "The lyrics changed — align again to move them onto the notes": "歌词已变化 — 再次对齐以把它们放到音符上",
         "Re-aligning the lyrics…": "正在重新对齐歌词…",
+        "Calculating lyric mapping…": "正在计算歌词映射…",
+        "Map lyrics to the current channel, or recalculate the whole mapping": "将歌词映射到当前通道，或重新计算整曲映射",
         # main window
         "Namioto project (*{suffix})": "Namioto 工程 (*{suffix})",
         "Audio file ({patterns})": "音频文件（{patterns}）",

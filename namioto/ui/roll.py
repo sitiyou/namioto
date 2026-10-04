@@ -105,7 +105,7 @@ class _RollState:
     """
 
     channels: tuple[Channel, ...]
-    notes: tuple[tuple[int, float, float, int], ...]
+    notes: tuple[tuple[int, float, float, int, int], ...]
     selected: frozenset[int]
     active_channel: int
     lyrics: tuple = ()
@@ -290,6 +290,8 @@ class PianoRollView(QGraphicsView):
     viewport_changed = pyqtSignal()
     zoom_changed = pyqtSignal()
     notes_changed = pyqtSignal()
+    gesture_started = pyqtSignal()
+    gesture_finished = pyqtSignal()
     channels_changed = pyqtSignal()
     active_channel_changed = pyqtSignal(int)
     hover_changed = pyqtSignal(object)
@@ -342,6 +344,7 @@ class PianoRollView(QGraphicsView):
         self._lyric_mapped: tuple[tuple[tuple[int, ...], ...], ...] = ()
         self._lyric_operations: tuple = ()
         self._lyric_editable = True
+        self.lyric_mapping_pending = False
         self._highlight_note: int | None = None
         self._highlight_sounds: tuple[tuple[int, int], ...] = ()
 
@@ -485,6 +488,11 @@ class PianoRollView(QGraphicsView):
         """Whether the strip may drag its raw times; off while the `.krc` itself lays them out."""
         return self._lyric_editable
 
+    @lyric_editable.setter
+    def lyric_editable(self, editable: bool) -> None:
+        self._lyric_editable = bool(editable)
+        self.lyrics_changed.emit()
+
     @property
     def lyric_operations(self) -> tuple:
         """The mapping's operations, kept with the undo state so an edit is one step."""
@@ -613,6 +621,10 @@ class PianoRollView(QGraphicsView):
         self.lyrics_changed.emit()
         return True
 
+    @property
+    def gesture_active(self) -> bool:
+        return self._gesture_before is not None
+
     def note_seconds(self) -> list[tuple[float, float]]:
         return [(self.to_seconds(note.start), self.to_seconds(note.end)) for note in self.notes()]
 
@@ -660,7 +672,7 @@ class PianoRollView(QGraphicsView):
         return _RollState(
             channels=tuple(self.channels),
             notes=tuple(
-                (note.pitch, self.to_seconds(note.start), self.to_seconds(note.duration), note.channel)
+                (note.pitch, self.to_seconds(note.start), self.to_seconds(note.duration), note.channel, note.id)
                 for note in self.notes()
             ),
             selected=frozenset(index for index, item in enumerate(self._items) if item.isSelected()),
@@ -696,6 +708,7 @@ class PianoRollView(QGraphicsView):
         if self._gesture_before is None:
             self._gesture_before = self._capture()
             self._gesture_text = text
+            self.gesture_started.emit()
 
     def commit_gesture(self) -> None:
         before, text = self._gesture_before, self._gesture_text
@@ -705,6 +718,7 @@ class PianoRollView(QGraphicsView):
         self._gesture_text = ""
         if self._push(before, self._capture(), text):
             self.notes_changed.emit()  # a move or a trim is a change of the notes like any other
+        self.gesture_finished.emit()
 
     def cancel_gesture(self) -> None:
         """Drop the gesture in flight: undo its in-memory effect and record no undo step.
@@ -718,11 +732,12 @@ class PianoRollView(QGraphicsView):
         self._gesture_text = ""
         gesture, self._gesture = self._gesture, None
         if gesture is None:
+            self.gesture_finished.emit()
             return
-        if gesture.created is not None and gesture.created in self._items:
+        created = gesture.created is not None and gesture.created in self._items
+        if created:
             self.document.remove_note(gesture.created.note)
             self._drop_item(gesture.created)
-            self.notes_changed.emit()
         for item, (start, pitch, duration) in gesture.snapshot.items():
             if item in self._items:
                 item.set_range(start, pitch)
@@ -730,6 +745,9 @@ class PianoRollView(QGraphicsView):
         self._update_scene()
         self._sync_channel_visuals()
         self.view_changed.emit()
+        if created:
+            self.notes_changed.emit()
+        self.gesture_finished.emit()
 
     def _restore_state(self, state: _RollState) -> None:
         """Put a snapshot back in one rebuild, selecting the same notes by position again.
@@ -747,8 +765,8 @@ class PianoRollView(QGraphicsView):
             self._lyric_mapped = ()
             self._sync_lyric_highlight()
             self.set_notes(
-                (pitch, self.to_beats(start), self.to_beats(duration), channel)
-                for pitch, start, duration, channel in state.notes
+                (pitch, self.to_beats(start), self.to_beats(duration), channel, identifier)
+                for pitch, start, duration, channel, identifier in state.notes
             )
             self.set_channels(state.channels)
             for index in state.selected:
