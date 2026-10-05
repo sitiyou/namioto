@@ -7,9 +7,8 @@ The header is the two styles the lines alternate on (`K1`/`K2`, `H1`/`H2` for a 
 turns into per-syllable motion; each dialogue then carries one `\\k` per syllable, a ruby written
 `base|<ruby` or `#|ruby` the way the template reads it.
 
-`AssSettings` is the part a user may tune - the font, the overlay colour, the fades, the lead time
-and the guide dots. The geometry every template shares (borders, blur, margins, the sweep) is fixed
-here, since it is the shape of the animation and not a preference.
+`AssSettings` holds the export options: timing, font, layout, colours and blur. Unspecified blur
+colours are derived from the overlay, while the sweep's motion stays fixed.
 
 Qt-free: the module reads a `.krc` and times and returns text; the editor is what calls it.
 """
@@ -22,18 +21,6 @@ from dataclasses import dataclass, field
 
 from namioto.karaoke.sounds import natural_sounds
 
-FONTSIZE = 96
-TOP_FONTSIZE = 96
-BORD = 5
-BORD_FURI = 3
-MARGIN_H = 64
-MARGIN_V = 48
-RUBY_OFFSET = 10
-BASE_OUTLINE_COLOR = "222222"
-OVERLAY_OUTLINE_COLOR = "EFEFEF"
-BLUR = 10
-BLUR_SCALE = 2.0
-CLIP_SIZE = 24
 # the sweep's middle stretch: the first SWEEP_FAST_FRAC of the distance at an average of
 # SWEEP_SPEED_RATIO times the steady speed, easing down to it, the two meeting at t1_frac
 SWEEP_FAST_FRAC = 0.3
@@ -76,7 +63,7 @@ _EVENTS_FORMAT = "Format: Layer, Start, End, Style, Name, MarginL, MarginR, Marg
 
 @dataclass(frozen=True)
 class AssSettings:
-    """What the user tunes about a subtitle; the geometry every template shares is not here."""
+    """Export preferences; colours are RGB hex, with empty blur colours derived automatically."""
 
     font: str = "sans-serif"
     overlay_color: str = FALLBACK_COLOR  # RGB hex, converted to the ASS order
@@ -84,16 +71,33 @@ class AssSettings:
     fade_out_ms: int = 200
     lead_time_ms: int = 5000
     guide_dot_duration_ms: int = 1000
+    offset_ms: int = 0
+    font_size: int = 96
+    border: int = 5
+    border_furi: int = 3
+    margin_h: int = 64
+    margin_v: int = 48
+    ruby_offset: int = 10
+    base_outline_color: str = "222222"
+    overlay_outline_color: str = "EFEFEF"
+    blur: int = 10
+    blur_scale: float = 2.0
+    overlay_blur_color: str = ""
+    base_blur_color: str = ""
+    clip_size: int = 24
     track_style: Mapping[int, str] = field(default_factory=dict)
+
+    def blur_colours(self) -> tuple[str, str]:
+        """The resolved blur colours in RGB order, for the export form's automatic values."""
+        config = _Config.from_settings(self)
+        return _to_ass(config.overlay_blur), _to_ass(config.base_blur)
 
 
 @dataclass(frozen=True)
 class _Config:
     """The colours and spacings the templates are written with, derived once per file."""
 
-    font: str
-    fade_in_ms: int
-    fade_out_ms: int
+    settings: AssSettings
     overlay: str
     overlay_blur: str
     base_blur: str
@@ -104,12 +108,12 @@ class _Config:
     @classmethod
     def from_settings(cls, settings: AssSettings) -> _Config:
         overlay = _to_ass(settings.overlay_color)
-        overlay_blur = _shade(overlay, 0.6, 1.0)
-        base_blur = _base_shade(overlay_blur)
+        overlay_blur = (
+            _to_ass(settings.overlay_blur_color) if settings.overlay_blur_color else _shade(overlay, 0.6, 1.0)
+        )
+        base_blur = _to_ass(settings.base_blur_color) if settings.base_blur_color else _base_shade(overlay_blur)
         return cls(
-            font=settings.font,
-            fade_in_ms=settings.fade_in_ms,
-            fade_out_ms=settings.fade_out_ms,
+            settings=settings,
             overlay=overlay,
             overlay_blur=overlay_blur,
             base_blur=base_blur,
@@ -120,25 +124,24 @@ class _Config:
 
     @property
     def border_blur(self) -> int:
-        return round(BORD * BLUR_SCALE)
+        return round(self.settings.border * self.settings.blur_scale)
 
     @property
     def border_furi_blur(self) -> int:
-        return round(BORD_FURI * BLUR_SCALE)
+        return round(self.settings.border_furi * self.settings.blur_scale)
 
     @property
     def margin_k1(self) -> int:
-        return MARGIN_V * 2 + FONTSIZE // 2 * 3
+        return self.settings.margin_v * 2 + self.settings.font_size // 2 * 3
 
     @property
     def margin_lead(self) -> int:
-        return MARGIN_V * 3 + FONTSIZE * 3
+        return self.settings.margin_v * 3 + self.settings.font_size * 3
 
     @property
     def ruby_offset(self) -> str:
-        if RUBY_OFFSET == 0:
-            return ""
-        return ("+" if RUBY_OFFSET > 0 else "-") + str(abs(RUBY_OFFSET))
+        offset = self.settings.ruby_offset
+        return f"{offset:+d}" if offset else ""
 
 
 def _to_ass(rgb: str) -> str:
@@ -236,13 +239,13 @@ def _size_pop() -> list[str]:
 
 
 def _style(name, *, alignment, margin_v, config: _Config, fontname=None, fontsize=None, outline=2, shadow=2) -> str:
-    fontname = config.font if fontname is None else fontname
-    fontsize = FONTSIZE if fontsize is None else fontsize
+    fontname = config.settings.font if fontname is None else fontname
+    fontsize = config.settings.font_size if fontsize is None else fontsize
     return (
         f"Style: {name},{fontname},{fontsize},"
-        f"&H00FFFFFF,&H000000FF,&H00{BASE_OUTLINE_COLOR},&H00000000,"
+        f"&H00FFFFFF,&H000000FF,&H00{_to_ass(config.settings.base_outline_color)},&H00000000,"
         f"0,0,0,0,100,100,0,0,1,{outline},{shadow},{alignment},"
-        f"{MARGIN_H},{MARGIN_H},{margin_v},1"
+        f"{config.settings.margin_h},{config.settings.margin_h},{margin_v},1"
     )
 
 
@@ -289,7 +292,7 @@ def _effect_rows(
     def num(value: float) -> str:
         return format(value, "g")
 
-    size = CLIP_SIZE
+    size = config.settings.clip_size
     closed_clip = _clip(f"!$sleft-{size}!", 0, f"!$sleft-{size}!", 1080)
     pop = _size_pop() if scale else []
 
@@ -319,8 +322,8 @@ def _effect_rows(
                     _pos("$center", y),
                     _an(5),
                     _shad(0),
-                    _blur(BLUR),
-                    _fad(config.fade_in_ms, config.fade_out_ms),
+                    _blur(config.settings.blur),
+                    _fad(config.settings.fade_in_ms, config.settings.fade_out_ms),
                     *pop,
                     _bord(blur_bord),
                     _color(outline=base_blur),
@@ -336,8 +339,8 @@ def _effect_rows(
                     _pos("$center", y),
                     _an(5),
                     _shad(0),
-                    _blur(BLUR),
-                    _fad(config.fade_in_ms, config.fade_out_ms),
+                    _blur(config.settings.blur),
+                    _fad(config.settings.fade_in_ms, config.settings.fade_out_ms),
                     _color(primary=overlay, outline=overlay_blur),
                     _alpha(0xCC),
                     _t("$sstart", "$send", _alpha(0x33)),
@@ -353,7 +356,7 @@ def _effect_rows(
                     _pos("$center", y),
                     _an(5),
                     _shad(0),
-                    _fad(config.fade_in_ms, config.fade_out_ms),
+                    _fad(config.settings.fade_in_ms, config.settings.fade_out_ms),
                     *pop,
                     _bord(edge_bord),
                     _color(outline=base_outline),
@@ -368,7 +371,7 @@ def _effect_rows(
                     _pos("$center", y),
                     _an(5),
                     _shad(0),
-                    _fad(config.fade_in_ms, config.fade_out_ms),
+                    _fad(config.settings.fade_in_ms, config.settings.fade_out_ms),
                     _color(primary=overlay, outline=overlay_outline),
                     closed_clip,
                     _t(f"!$sstart-{size}!", "$sstart", _clip(f"!$sleft-{size}!", 0, "$sleft", 1080)),
@@ -385,7 +388,7 @@ def _effect_rows(
         "template syl noblank",
         "$middle",
         blur_bord=config.border_blur,
-        edge_bord=BORD,
+        edge_bord=config.settings.border,
     )
     if furi:
         rows += quad(
@@ -393,7 +396,7 @@ def _effect_rows(
             "template furi",
             f"!$middle{config.ruby_offset}!",
             blur_bord=config.border_furi_blur,
-            edge_bord=BORD_FURI,
+            edge_bord=config.settings.border_furi,
         )
     return rows
 
@@ -401,11 +404,13 @@ def _effect_rows(
 def _header(config: _Config) -> str:
     styles = [
         _style("K1", alignment=1, margin_v=config.margin_k1, config=config),
-        _style("K2", alignment=3, margin_v=MARGIN_V, config=config),
-        _style(LEAD_STYLE, alignment=1, margin_v=config.margin_lead, config=config),
-        _style("H1", alignment=8, margin_v=MARGIN_V, fontsize=TOP_FONTSIZE, config=config),
-        _style("H2", alignment=8, margin_v=config.margin_k1, fontsize=TOP_FONTSIZE, config=config),
+        _style("K2", alignment=3, margin_v=config.settings.margin_v, config=config),
+        _style(LEAD_STYLE, alignment=1, margin_v=config.margin_lead, fontname="sans-serif", config=config),
+        _style("H1", alignment=8, margin_v=config.settings.margin_v, config=config),
+        _style("H2", alignment=8, margin_v=config.margin_k1, config=config),
     ]
+    base_outline = _to_ass(config.settings.base_outline_color)
+    overlay_outline = _to_ass(config.settings.overlay_outline_color)
     effects: list[str] = []
     for name in ("K1", "K2"):
         effects += _effect_rows(
@@ -414,8 +419,8 @@ def _header(config: _Config) -> str:
             overlay=config.overlay,
             overlay_blur=config.overlay_blur,
             base_blur=config.base_blur,
-            base_outline=BASE_OUTLINE_COLOR,
-            overlay_outline=OVERLAY_OUTLINE_COLOR,
+            base_outline=base_outline,
+            overlay_outline=overlay_outline,
         )
     effects += _effect_rows(
         LEAD_STYLE,
@@ -423,8 +428,8 @@ def _header(config: _Config) -> str:
         overlay=config.overlay,
         overlay_blur=config.overlay_blur,
         base_blur=config.base_blur,
-        base_outline=BASE_OUTLINE_COLOR,
-        overlay_outline=OVERLAY_OUTLINE_COLOR,
+        base_outline=base_outline,
+        overlay_outline=overlay_outline,
         scale=False,
         furi=False,
         sweep=False,
@@ -436,8 +441,8 @@ def _header(config: _Config) -> str:
             overlay=config.top_overlay,
             overlay_blur=config.top_overlay_blur,
             base_blur=config.top_base_blur,
-            base_outline=BASE_OUTLINE_COLOR,
-            overlay_outline=OVERLAY_OUTLINE_COLOR,
+            base_outline=base_outline,
+            overlay_outline=overlay_outline,
         )
     return _assemble(styles, effects)
 
@@ -463,6 +468,7 @@ class _GlyphTiming:
     glyph: _Glyph
     start_ms: int
     end_ms: int
+    clipped: bool = False
 
     @property
     def duration_ms(self) -> int:
@@ -517,7 +523,7 @@ def _glyph(sound, continuation: bool) -> _Glyph:
     )
 
 
-def _line_timings(line, spans: Sequence[tuple | None]) -> _LineTimings | None:
+def _line_timings(line, spans: Sequence[tuple | None], offset_ms: int = 0) -> _LineTimings | None:
     """One glyph per Sound, its own derived span; a dropped Sound has no time of its own.
 
     The spans are one per Sound, so nothing is counted or divided here - a Sound of two characters
@@ -532,18 +538,22 @@ def _line_timings(line, spans: Sequence[tuple | None]) -> _LineTimings | None:
     last = 0
     for sound, span in zip(line.sounds, spans, strict=True):
         continuation = sound.rubied and previous == sound.container
+        clipped = False
         if span is None or span[0] is None or span[1] is None:
             start = end = last
+            clipped = bool(offset_ms < 0 and not seen)
         else:
-            start, end = _ms(span[0]), _ms(span[1])
-            seen = True
+            start, end = _ms(span[0]) + offset_ms, _ms(span[1]) + offset_ms
+            clipped = offset_ms < 0 and end <= 0
+            seen = seen or not clipped
+            start, end = max(0, start), max(0, end)
         last = end
-        timings.append(_GlyphTiming(_glyph(sound, continuation), start, end))
+        timings.append(_GlyphTiming(_glyph(sound, continuation), start, end, clipped))
         previous = sound.container
     return _LineTimings(timings) if seen else None
 
 
-def _plan(lines: Sequence, times: Sequence[Sequence[tuple | None]]) -> list[list[_PlannedLine]]:
+def _plan(lines: Sequence, times: Sequence[Sequence[tuple | None]], offset_ms: int = 0) -> list[list[_PlannedLine]]:
     """The glyphs of every line, grouped by chapter, with the mapping's spans in reading order."""
     planned: list[list[_PlannedLine]] = []
     rows: list[_PlannedLine] = []
@@ -554,7 +564,7 @@ def _plan(lines: Sequence, times: Sequence[Sequence[tuple | None]]) -> list[list
                 planned.append(rows)
             rows = []
             chapter = line.chapter
-        timing = _line_timings(line, times[index] if index < len(times) else ())
+        timing = _line_timings(line, times[index] if index < len(times) else (), offset_ms)
         if timing is not None:
             rows.append(_PlannedLine(line.track, timing))
     if chapter != -1:
@@ -588,18 +598,18 @@ def _calculate_lead_times(lines: list[_LineInfo], config: _Config, lead_time_ms:
             line.line_start_ms = max(0, ideal)
             continue
         previous = lines[index - 1]
-        previous_end = previous.line_end_ms + config.fade_out_ms
-        required = line.first_word_start - config.fade_in_ms
+        previous_end = previous.line_end_ms + config.settings.fade_out_ms
+        required = line.first_word_start - config.settings.fade_in_ms
         if ideal - previous_end > MIN_GAP_MS:
-            previous.line_end_ms += config.fade_out_ms
+            previous.line_end_ms += config.settings.fade_out_ms
             line.line_start_ms = ideal
         elif required - previous_end > MIN_GAP_MS:
-            previous.line_end_ms += config.fade_out_ms
+            previous.line_end_ms += config.settings.fade_out_ms
             line.line_start_ms = previous_end + MIN_GAP_MS
         else:
             # the two rows are too close to fade apart cleanly; let the fade overlap the karaoke
-            previous.line_end_ms += config.fade_out_ms
-            line.line_start_ms = line.first_word_start - config.fade_in_ms
+            previous.line_end_ms += config.settings.fade_out_ms
+            line.line_start_ms = max(0, line.first_word_start - config.settings.fade_in_ms)
 
 
 def _format_ass_time(ms: int) -> str:
@@ -658,6 +668,8 @@ def _generate_karaoke_text(timing: _LineTimings, lead_time_ms: int, next_start_m
 
     for index, item in enumerate(glyphs):
         glyph = item.glyph
+        if item.clipped:
+            continue
         if durations[index] == 0 and glyph.small:
             for earlier in range(index - 1, -1, -1):
                 if durations[earlier] >= 2 * MIN_WORD_DURATION:
@@ -729,7 +741,7 @@ def generate_ass(
     """
     settings = settings or AssSettings()
     config = _Config.from_settings(settings)
-    planned = _plan(natural_sounds(lyrics_text), spans)
+    planned = _plan(natural_sounds(lyrics_text), spans, settings.offset_ms)
     style_rows = _assign_row_styles(planned, settings.track_style)
     for rows in style_rows.values():
         if rows:

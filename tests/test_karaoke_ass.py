@@ -104,3 +104,103 @@ def test_a_line_with_no_time_is_left_out():
     ass = generate_ass("あ", [[(None, None)]])
     assert "[Events]" in ass
     assert "Dialogue:" not in ass
+
+
+def test_layout_and_effect_options_reach_styles_and_templates():
+    settings = AssSettings(
+        font="Test Font",
+        font_size=72,
+        border=7,
+        border_furi=4,
+        margin_h=32,
+        margin_v=20,
+        ruby_offset=-6,
+        blur=8,
+        blur_scale=1.5,
+        base_outline_color="123456",
+        overlay_outline_color="ABCDEF",
+        overlay_blur_color="102030",
+        base_blur_color="405060",
+        clip_size=18,
+        fade_in_ms=300,
+        fade_out_ms=150,
+    )
+    ass = generate_ass("字[じ]", [[(5.0, 6.0)]], settings=settings)
+    assert "Style: K1,Test Font,72,&H00FFFFFF,&H000000FF,&H00563412" in ass
+    assert ",1,32,32,148,1" in ass
+    assert ",3,32,32,20,1" in ass
+    assert "Style: LEAD,sans-serif,72," in ass
+    assert ",1,32,32,276,1" in ass
+    for tag in (
+        r"\bord7",
+        r"\bord4",
+        r"\bord10",
+        r"\bord6",
+        r"\blur8",
+        r"\fad(300,150)",
+        r"\3c&H563412&",
+        r"\3c&HEFCDAB&",
+        r"\3c&H302010&",
+        r"\3c&H605040&",
+        "!$middle-6!",
+        "!$sleft-18!",
+    ):
+        assert tag in ass
+
+
+def test_zero_borders_blur_and_ruby_offset_are_supported():
+    ass = generate_ass(
+        "字[じ]",
+        [[(1.0, 2.0)]],
+        settings=AssSettings(
+            border=0,
+            border_furi=0,
+            blur=0,
+            blur_scale=0,
+            ruby_offset=0,
+            clip_size=0,
+        ),
+    )
+    assert r"\bord0" in ass
+    assert r"\blur0" in ass
+    assert "!$middle!" in ass
+    assert "!$sleft-0!" in ass
+
+
+def test_positive_offset_moves_dialogues_and_guide_dots_without_changing_spans():
+    spans = [[(5.0, 5.5)]]
+    dialogues = _dialogues("あ", spans, settings=AssSettings(offset_ms=2000))
+    assert dialogues[0].startswith("Dialogue: 0,0:00:04.00,0:00:07.00,LEAD")
+    assert dialogues[1].startswith("Dialogue: 0,0:00:02.00,0:00:07.50,K1")
+    assert spans == [[(5.0, 5.5)]]
+
+
+def test_negative_offset_trims_elapsed_karaoke_without_borrowing_time_back():
+    dialogues = _dialogues("青[あお]い", [[(0.0, 1.0), (1.0, 2.0), (2.5, 3.0)]], settings=AssSettings(offset_ms=-1500))
+    assert len(dialogues) == 1
+    assert dialogues[0].startswith("Dialogue: 0,0:00:00.00,0:00:01.50,K1")
+    assert r"{\k0}青|<あ{\k50}#|お{\k50}{\k50}い" in dialogues[0]
+    assert r"\k-" not in dialogues[0]
+
+
+def test_a_partial_syllable_keeps_only_its_time_after_zero():
+    line = _dialogues("あい", [[(0.0, 1.0), (1.0, 2.0)]], settings=AssSettings(offset_ms=-250))[0]
+    assert r"{\k0}{\k75}あ{\k100}い" in line
+    assert ",0:00:00.00,0:00:01.75,K1" in line
+
+
+def test_lines_fully_before_zero_are_omitted():
+    dialogues = _dialogues("あ\nい", [[(0.0, 1.0)], [(3.0, 4.0)]], settings=AssSettings(offset_ms=-2000))
+    assert len(dialogues) == 1
+    assert "あ" not in dialogues[0]
+    assert r"{\k100}い" in dialogues[0]
+
+
+def test_auto_base_blur_follows_the_manual_overlay_blur():
+    settings = AssSettings(overlay_blur_color="123456")
+    overlay, base = settings.blur_colours()
+    assert overlay == "123456"
+    assert base != AssSettings().blur_colours()[1]
+    ass = generate_ass("あ", [[(0.0, 1.0)]], settings=settings)
+    assert r"\3c&H563412&" in ass
+    assert rf"\3c&H{base[4:] + base[2:4] + base[:2]}&" in ass

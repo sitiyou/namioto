@@ -64,6 +64,7 @@ from namioto.lyrics import text_key
 from namioto.playback import note_frequency
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner
+from namioto.ui.ass_dialog import AssDialog
 from namioto.ui.audio import open_player
 from namioto.ui.channel_panel import ChannelPanel
 from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
@@ -1050,6 +1051,14 @@ class MainWindow(QMainWindow):
         if not self.view.notes():
             self.statusBar().showMessage(i18n.tr("There are no notes to time the subtitle with"))
             return False
+        gate = self._verification(subtitle=True)
+        if not gate.open():
+            self.statusBar().showMessage(self._gate_message(gate))
+            return False
+        dialog = AssDialog(self.settings, self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return False
+        selected = dialog.values()
         name = Path(self.audio_path).stem if self.audio_path is not None else "untitled"
         suggested = Path(self._start_directory()) / f"{name}.ass"
         chosen, _filter = QFileDialog.getSaveFileName(
@@ -1060,9 +1069,13 @@ class MainWindow(QMainWindow):
         )
         if not chosen:
             return False
-        return self.export_ass(chosen)
+        if not self.export_ass(chosen, settings=AssSettings(**vars(selected.ass))):
+            return False
+        self.settings.ass = selected.ass
+        self.settings_store.flush()
+        return True
 
-    def export_ass(self, path: str | Path) -> bool:
+    def export_ass(self, path: str | Path, *, settings: AssSettings | None = None) -> bool:
         """Write the karaoke subtitle to `path`, adding the `.ass` suffix if missing."""
         target = Path(path)
         if target.suffix.lower() != ".ass":
@@ -1072,8 +1085,8 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage(self._gate_message(gate))
             return False
         try:
-            text = generate_ass(gate.canonical, self._derived_spans(), settings=self._ass_settings())
-        except KrcError as error:
+            text = generate_ass(gate.canonical, self._derived_spans(), settings=settings or self._ass_settings())
+        except (KrcError, ValueError) as error:
             self.statusBar().showMessage(i18n.tr("The subtitle could not be built: {error}", error=error))
             return False
         try:
@@ -1086,15 +1099,7 @@ class MainWindow(QMainWindow):
 
     def _ass_settings(self) -> AssSettings:
         """The subtitle's own preferences, gathered for `karaoke.generate_ass`."""
-        stored = self.settings.ass
-        return AssSettings(
-            font=stored.font,
-            overlay_color=stored.overlay_color,
-            fade_in_ms=stored.fade_in_ms,
-            fade_out_ms=stored.fade_out_ms,
-            lead_time_ms=stored.lead_time_ms,
-            guide_dot_duration_ms=stored.guide_dot_duration_ms,
-        )
+        return AssSettings(**vars(self.settings.ass))
 
     def load_project(self, path: str | Path) -> bool:
         """Open a project: its values come over the running ones, and its notes replace the roll."""

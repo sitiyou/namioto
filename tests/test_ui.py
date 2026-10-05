@@ -59,6 +59,8 @@ from namioto.lyrics import text_key
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog, Aligner
 from namioto.ui.app import MainWindow, TempoLoader
+from namioto.ui.ass_dialog import GROUPS as ASS_GROUPS
+from namioto.ui.ass_dialog import AssDialog
 from namioto.ui.audio import BuiltinSynth, MidiPortOut, find_port, find_synth_port
 from namioto.ui.controls import Cluster, EditBar, TransportBar, ValueSlider
 from namioto.ui.form import WrappedLabel, _show_device_status, field_editor
@@ -2784,7 +2786,7 @@ def test_the_settings_window_lists_every_visible_field(own_window) -> None:
     }
     assert names == expected  # `editor` has no page: its switches are what the program remembers itself
     pages = [dialog.findChild(QTabWidget).tabText(index) for index in range(dialog.findChild(QTabWidget).count())]
-    assert pages == ["General", "Devices", "Tempo", "Lyrics", "Network", "MIDI", "ASS subtitle", "Remote"]
+    assert pages == ["General", "Devices", "Tempo", "Lyrics", "Network", "MIDI", "Remote"]
     dialog.close()
 
 
@@ -2841,6 +2843,7 @@ def test_the_gpu_row_says_whether_its_runtime_is_installed(qt_app, monkeypatch) 
 
 
 def test_restoring_defaults_puts_every_widget_back(own_window) -> None:
+    own_window.settings.ass.font_size = 72
     dialog = SettingsDialog(own_window.settings, parent=own_window)
     row_writer(dialog, "tempo", "window_seconds")(8.0)
     row_writer(dialog, "midi", "wavetone")(False)
@@ -2850,6 +2853,7 @@ def test_restoring_defaults_puts_every_widget_back(own_window) -> None:
     values = dialog.values()
     assert store.get_value(values, "midi", "wavetone") is True
     assert store.get_value(values, "tempo", "window_seconds") == 12.0
+    assert values.ass.font_size == 72
     dialog.close()
 
 
@@ -4784,7 +4788,8 @@ def test_the_export_button_writes_a_midi_file(own_window, monkeypatch, tmp_path)
     assert own_window.project_path is None  # an export leaves the document where it was
 
 
-def test_the_export_button_writes_an_ass_subtitle(own_window, monkeypatch, tmp_path) -> None:
+@pytest.fixture
+def subtitle_window(own_window, tmp_path):
     own_window.transport.bpm.setValue(60.0)
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 1.0, 0), (62, 1.0, 1.0, 0)))
@@ -4792,16 +4797,138 @@ def test_the_export_button_writes_an_ass_subtitle(own_window, monkeypatch, tmp_p
     own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), raw=(((0.0, 1.0), (1.0, 1.0)),))
     own_window._watch_lyrics()
     wait_for_lyric_mapping(own_window)
+    return own_window
+
+
+def test_the_export_button_writes_an_ass_subtitle(subtitle_window, monkeypatch, tmp_path) -> None:
+    own_window = subtitle_window
+
+    def options(dialog):
+        dialog.editors["font_size"].setValue(72)
+        dialog.editors["offset_ms"].setValue(1000)
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(AssDialog, "exec", options)
     monkeypatch.setattr(
         QFileDialog, "getSaveFileName", lambda *a, **k: (str(tmp_path / "exported"), "ASS subtitle (*.ass)")
     )
-
+    before = own_window.view.notes()
     assert own_window._on_export_ass() is True
     target = tmp_path / "exported.ass"  # the export adds its own suffix
     text = target.read_text(encoding="utf-8")
     assert "[Script Info]" in text
     assert "Dialogue: 0," in text
+    assert "Style: K1,sans-serif,72," in text
+    assert "0:00:03.00,K1" in text
+    assert own_window.view.notes() == before
+    assert own_window.settings.ass.font_size == 72
+    assert store.load().ass.font_size == 72
+    assert store.load().ass.offset_ms == 1000
     assert own_window.project_path == tmp_path / "song.nto"  # an export leaves the document where it was
+
+
+@pytest.mark.parametrize("stop", ("options", "path", "write", "build"))
+def test_cancelled_or_failed_subtitle_export_does_not_remember_options(subtitle_window, monkeypatch, tmp_path, stop):
+    original = store.to_dict(subtitle_window.settings)
+    saved = store.default_path().read_bytes() if store.default_path().exists() else None
+    seen = []
+
+    def options(dialog):
+        seen.append("options")
+        dialog.editors["font_size"].setValue(24)
+        return QDialog.DialogCode.Rejected if stop == "options" else QDialog.DialogCode.Accepted
+
+    def path(*args, **kwargs):
+        seen.append("path")
+        return ("" if stop == "path" else str(tmp_path / "out.ass"), "")
+
+    def fail(*args, **kwargs):
+        raise OSError("read-only")
+
+    monkeypatch.setattr(AssDialog, "exec", options)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", path)
+    if stop == "write":
+        monkeypatch.setattr("namioto.ui.app.write_text", fail)
+    if stop == "build":
+
+        def fail_build(*args, **kwargs):
+            raise ValueError("invalid subtitle")
+
+        monkeypatch.setattr("namioto.ui.app.generate_ass", fail_build)
+    assert not subtitle_window._on_export_ass()
+    assert seen == (["options"] if stop == "options" else ["options", "path"])
+    assert store.to_dict(subtitle_window.settings) == original
+    assert (store.default_path().read_bytes() if store.default_path().exists() else None) == saved
+    assert not (tmp_path / "out.ass").exists()
+
+
+def test_ass_options_cover_the_single_track_settings_without_mutating_them(own_window):
+    original = store.to_dict(own_window.settings)
+    dialog = AssDialog(own_window.settings, own_window)
+    assert set(dialog.editors) == set(vars(own_window.settings.ass))
+    assert set(dialog.editors) == {name for _, names in ASS_GROUPS for name in names}
+    assert dialog.export_button.isEnabled()
+    dialog.editors["font_size"].setValue(40)
+    dialog.reject()
+    assert store.to_dict(own_window.settings) == original
+
+
+def test_ass_automatic_colours_follow_the_overlay_and_manual_blur(own_window):
+    from namioto.karaoke import AssSettings
+
+    dialog = AssDialog(own_window.settings, own_window)
+    before = dialog.editors["overlay_blur_color"].text()
+    dialog.editors["overlay_color"].setText("FF0000")
+    assert dialog.editors["overlay_blur_color"].text() != before
+    assert dialog.values().ass.overlay_blur_color == ""
+    assert not dialog.editors["overlay_blur_color"].isEnabled()
+    dialog.automatic["overlay_blur_color"].setChecked(False)
+    assert dialog.editors["overlay_blur_color"].isEnabled()
+    dialog.editors["overlay_blur_color"].setText("123456")
+    expected = AssSettings(overlay_color="FF0000", overlay_blur_color="123456").blur_colours()[1]
+    assert dialog.editors["base_blur_color"].text() == expected
+    dialog.editors["overlay_color"].setText("00FF00")
+    assert dialog.values().ass.overlay_blur_color == "123456"
+    assert dialog.values().ass.base_blur_color == ""
+    dialog.restore_defaults()
+    assert vars(dialog.values().ass) == vars(store.Settings().ass)
+    assert all(check.isChecked() for check in dialog.automatic.values())
+
+
+def test_ass_numeric_options_enforce_their_lower_bounds(own_window):
+    dialog = AssDialog(own_window.settings, own_window)
+    for name in ("font_size", "guide_dot_duration_ms"):
+        dialog.editors[name].setValue(0)
+        assert dialog.editors[name].value() == 1
+    for name in ("border", "border_furi", "margin_h", "margin_v", "blur", "blur_scale", "clip_size"):
+        dialog.editors[name].setValue(-1)
+        assert dialog.editors[name].value() == 0
+    for name in ("ruby_offset", "offset_ms"):
+        dialog.editors[name].setValue(-10)
+        assert dialog.editors[name].value() == -10
+
+
+def test_ass_options_validate_and_pick_rgb_colours(own_window, monkeypatch):
+    from PyQt6.QtWidgets import QColorDialog
+
+    dialog = AssDialog(own_window.settings, own_window)
+    dialog.editors["lead_time_ms"].setValue(0)
+    assert not dialog.export_button.isEnabled()
+    assert "Fade in" in dialog.hint.text()
+    dialog._accept()
+    assert dialog.result() != QDialog.DialogCode.Accepted
+    dialog.editors["fade_in_ms"].setValue(0)
+    assert dialog.export_button.isEnabled()
+    dialog.editors["overlay_color"].setText("invalid")
+    assert not dialog.export_button.isEnabled()
+    monkeypatch.setattr(QColorDialog, "getColor", lambda *args: QColor("#12ABEF"))
+    dialog._choose_colour(dialog.editors["overlay_color"])
+    assert dialog.editors["overlay_color"].text() == "12ABEF"
+    assert dialog.export_button.isEnabled()
+    dialog.editors["font"].setText("a,b")
+    assert not dialog.export_button.isEnabled()
+    dialog.restore_defaults()
+    assert dialog.export_button.isEnabled()
 
 
 def test_a_subtitle_needs_lyrics_and_notes(own_window) -> None:
