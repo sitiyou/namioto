@@ -152,6 +152,7 @@ class NoteItem(QGraphicsRectItem):
         super().__init__()
         self.note = note
         self.filtered = False
+        self.lyric_text = ""
         self.fill, self.edge_light, self.edge_dark = theme.note_shades(QColor(theme.NOTE_PALETTE[0]))
         self.setPen(QPen(Qt.PenStyle.NoPen))
         self.setFlag(QGraphicsItem.GraphicsItemFlag.ItemIsSelectable, True)
@@ -221,6 +222,22 @@ class NoteItem(QGraphicsRectItem):
             painter.setPen(QPen(QColor(theme.LYRIC_BAD), max(1.0, 2 * px)))
             painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.drawRect(rect)
+        if self.lyric_text:
+            painter.setClipRect(rect)
+            painter.scale(px, py)
+            font = QFont()
+            font.setPixelSize(max(12, round(rect.height() / py * 0.9)))
+            font.setBold(True)
+            painter.setFont(font)
+            painter.setPen(colors.note_selected_edge if selected else QColor(theme.LYRIC_TEXT))
+            text = painter.fontMetrics().elidedText(
+                self.lyric_text, Qt.TextElideMode.ElideRight, max(0, int(rect.width() / px) - 6)
+            )
+            painter.drawText(
+                QRectF(3, 0, max(0, rect.width() / px - 6), rect.height() / py),
+                int(Qt.AlignmentFlag.AlignVCenter),
+                text,
+            )
         painter.restore()
 
 
@@ -728,10 +745,14 @@ class PianoRollView(QGraphicsView):
         """
         if self._gesture_before is None:
             return
+        before = self._gesture_before
         self._gesture_before = None
         self._gesture_text = ""
         gesture, self._gesture = self._gesture, None
         if gesture is None:
+            self._lyric_raw = before.lyric_raw
+            self._lyric_operations = before.lyric_operations
+            self.lyrics_changed.emit()
             self.gesture_finished.emit()
             return
         created = gesture.created is not None and gesture.created in self._items
@@ -798,7 +819,16 @@ class PianoRollView(QGraphicsView):
     def _sync_channel_visuals(self) -> None:
         """Body colour, bevel, stacking and visibility all come from the channel list; the notes only
         show while editing, the way WaveTone keeps its graph to the spectrum outside note edit mode."""
+        labels = {}
+        for row, line in enumerate(self._lines):
+            mapped = self._lyric_mapped[row] if row < len(self._lyric_mapped) else ()
+            for column, ids in enumerate(mapped):
+                for position, identifier in enumerate(ids):
+                    labels.setdefault(identifier, []).append(("↳ " if position else "") + line.sounds[column].label)
         for note in self.notes():
+            note.lyric_text = " ".join(labels.get(note.id, ()))
+            note.setToolTip(note.lyric_text)
+            note.update()
             note.fill, note.edge_light, note.edge_dark = theme.note_shades(self.channel_color(note.channel))
             channel = self._channel(note.channel)
             note.setVisible(self.edit_mode and (channel.visible if channel else True))

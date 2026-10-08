@@ -59,6 +59,7 @@ from namioto.karaoke import AssSettings, KrcError, generate_ass
 from namioto.karaoke.operations import Drop, Match, Merge, SoundRef
 from namioto.karaoke.sounds import natural_sounds
 from namioto.lyricmap import Raw, from_spans, snap_to_beats, sound_spans, verify
+from namioto.lyricmap.editing import drop_sound
 from namioto.lyricmap.notes import TimedNote, resolve
 from namioto.lyrics import text_key
 from namioto.playback import note_frequency
@@ -251,6 +252,10 @@ class MainWindow(QMainWindow):
         self._auto_align_thread: Aligner | None = None
         self._auto_align_key = ""
         self._lyric_map_thread: LyricMapper | None = None
+        self._lyric_drag_request = None
+        self._lyric_drag_result = None
+        self._lyric_drag_valid = False
+        self._lyric_drag_finishing = False
         self._lyric_map_pending = None
         self._lyric_map_revision = 0
         self._lyric_map_result = None
@@ -278,6 +283,9 @@ class MainWindow(QMainWindow):
         self.sound_strip = SoundStrip(self.view)
         self.sound_strip.setVisible(False)
         self.sound_strip.lyric_action_requested.connect(self._on_lyric_action)
+        self.sound_strip.mapping_drag_started.connect(self._begin_lyric_drag)
+        self.sound_strip.mapping_preview_requested.connect(self._preview_lyric_drag)
+        self.sound_strip.mapping_drag_finished.connect(self._finish_lyric_drag)
         self.keyboard = PianoKeyboard(self.view)
         self.player, self.player_name = self._make_player()
         self._current_player_key = self._player_key()
@@ -1496,7 +1504,21 @@ class MainWindow(QMainWindow):
 
     def _on_lyric_mapping(self, result) -> None:
         revision, mapping = result
-        if revision != self._lyric_map_revision or self.view.gesture_active:
+        if revision != self._lyric_map_revision:
+            return
+        if self._lyric_drag_request is not None:
+            self._lyric_drag_valid = not mapping.error
+            if mapping.error:
+                self._apply_lyric_mapping(self._lyric_drag_result)
+                self.statusBar().showMessage(mapping.error)
+            else:
+                self._apply_lyric_mapping(mapping)
+                self._lyric_map_result = mapping
+            self._set_lyric_mapping_pending(False)
+            if self._lyric_drag_finishing:
+                self._finish_lyric_drag(True)
+            return
+        if self.view.gesture_active:
             return
         thread = self._lyric_map_thread
         snapshot = self._mapping_request(self.view.lyric_lines)
@@ -1514,6 +1536,11 @@ class MainWindow(QMainWindow):
         self._lyric_error = message
         self._set_lyric_mapping_pending(False)
         self.statusBar().showMessage(message)
+        if self._lyric_drag_request is not None:
+            self._lyric_drag_valid = False
+            self._apply_lyric_mapping(self._lyric_drag_result)
+            if self._lyric_drag_finishing:
+                self._finish_lyric_drag(False)
 
     def _on_lyric_mapper_finished(self, thread) -> None:
         if thread is not self._lyric_map_thread:
@@ -1709,6 +1736,55 @@ class MainWindow(QMainWindow):
         self._mark_dirty()
         self._remap_lyrics()
 
+    def _begin_lyric_drag(self) -> None:
+        if self._lyric_map_result is None or self._lyric_map_result.error:
+            return
+        self._lyric_drag_request = self._mapping_request(self.view.lyric_lines)
+        self._lyric_drag_result = self._lyric_map_result
+        self._lyric_drag_valid = False
+        self._lyric_drag_finishing = False
+        self.view.begin_gesture(i18n.tr("Move lyrics"))
+        self._set_lyric_mapping_pending(False)
+
+    def _preview_lyric_drag(self, anchors) -> None:
+        if self._lyric_drag_request is None:
+            return
+        self._lyric_map_revision += 1
+        self._lyric_map_pending = None
+        self._lyric_drag_valid = False
+        if anchors is None:
+            self._apply_lyric_mapping(self._lyric_drag_result)
+            self._lyric_map_result = self._lyric_drag_result
+            self._set_lyric_mapping_pending(False)
+            self.statusBar().showMessage(i18n.tr("No valid mapping at this position"))
+            return
+        snapshot = dict(self._lyric_drag_request, anchors=anchors)
+        request = (self._lyric_map_revision, snapshot)
+        self._set_lyric_mapping_pending(True)
+        if self._lyric_map_thread is not None:
+            self._lyric_map_pending = request
+        else:
+            self._start_lyric_mapper(request)
+
+    def _finish_lyric_drag(self, commit: bool) -> None:
+        if self._lyric_drag_request is None:
+            return
+        if commit and self.view.lyric_mapping_pending:
+            self._lyric_drag_finishing = True
+            return
+        valid = commit and self._lyric_drag_valid
+        baseline = self._lyric_drag_result
+        self._lyric_drag_request = None
+        self._lyric_drag_result = None
+        self._lyric_drag_finishing = False
+        if valid:
+            self.view.commit_gesture()
+        else:
+            self._invalidate_lyric_mapping()
+            self._lyric_map_result = baseline
+            self._apply_lyric_mapping(baseline)
+            self.view.cancel_gesture()
+
     def _on_lyric_action(self, kind: str, line: int, index: int) -> None:
         """A Sound's context menu: one gesture, one undo step, one remap of the rest."""
         if self._lyric_mode != "edit":
@@ -1718,7 +1794,11 @@ class MainWindow(QMainWindow):
             return
         spots = [(line, index)]
         if kind == "drop":
-            self._edit_lyric("Drop sound", Drop(SoundRef(line, index), confirmed=True), spots)
+            anchors = drop_sound(self.view.lyric_operations, SoundRef(line, index))
+            if anchors is not None:
+                self._begin_lyric_drag()
+                self._preview_lyric_drag(anchors)
+                self._finish_lyric_drag(True)
         elif kind == "keep":
             self._edit_lyric("Keep sound", None, spots, release=Drop)
         elif kind == "merge":

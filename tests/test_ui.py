@@ -26,6 +26,7 @@ from PyQt6.QtGui import (
     QImage,
     QKeyEvent,
     QMouseEvent,
+    QPainter,
     QPalette,
     QWheelEvent,
 )
@@ -82,7 +83,6 @@ from namioto.ui.roll import (
 )
 from namioto.ui.settings_dialog import PAGES, SettingsDialog
 from namioto.ui.spectrogram import SpectrumImage, SpectrumLoader
-from namioto.ui.strips import SOUND_GAP_PX
 from namioto.ui.transcription_dialog import TranscriptionDialog
 
 DEMO_NOTES = (
@@ -194,9 +194,9 @@ def ruler_click(window, beats: float) -> None:
     ruler_mouse(window, QEvent.Type.MouseButtonRelease, x)
 
 
-def sound_mouse(window, kind, x: float) -> None:
+def sound_mouse(window, kind, x: float, y: float = 10.0) -> None:
     """Send a mouse event to the lyrics strip, whose columns line up with the roll's."""
-    position = QPointF(x, 10.0)
+    position = QPointF(x, y)
     event = QMouseEvent(
         kind,
         position,
@@ -4945,7 +4945,11 @@ def test_a_narrow_sound_still_names_itself(window) -> None:
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
     window.sound_strip._update_hover((0, 1))
+    assert window.sound_strip.toolTip() == "い"
+    window.sound_strip._toggle_raw(True)
+    window.sound_strip._update_hover((0, 1))
     assert window.sound_strip.toolTip() == "い\nReference duration: 1.000 s"
+    window.sound_strip._toggle_raw(False)
     window.view.load_lyrics((), ())
     window.sound_strip.setVisible(False)
 
@@ -4972,6 +4976,7 @@ def test_the_sound_strip_renders_the_current_line(window) -> None:
 
 
 def test_dragging_a_sound_onset_preserves_all_reference_durations(window) -> None:
+    window.sound_strip._toggle_raw(True)
     times = [[(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)]]
     window.view.load_lyrics(natural_sounds("あいう"), times)
     window.sound_strip.setVisible(True)
@@ -4989,9 +4994,11 @@ def test_dragging_a_sound_onset_preserves_all_reference_durations(window) -> Non
     window.view.undo()
     wait_for_lyric_mapping(window)
     assert window.view.lyric_raw[0] == ((0.0, 1.0), (1.0, 1.0), (2.0, 1.0))
+    window.sound_strip._toggle_raw(False)
 
 
 def test_the_last_sound_onset_has_no_reference_end_limit(window) -> None:
+    window.sound_strip._toggle_raw(True)
     window.view.load_lyrics(natural_sounds("あい"), [[(0.0, 1.0), (1.0, 2.0)]])
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
@@ -5001,9 +5008,11 @@ def test_the_last_sound_onset_has_no_reference_end_limit(window) -> None:
     sound_mouse(window, QEvent.Type.MouseButtonRelease, window.sound_strip._x(5.0))
 
     assert window.view.lyric_raw[0] == ((0.0, 1.0), (5.0, 1.0))
+    window.sound_strip._toggle_raw(False)
 
 
 def test_a_zero_duration_final_sound_can_be_dragged_right_and_undone(own_window) -> None:
+    own_window.sound_strip._toggle_raw(True)
     own_window.transport.bpm.setValue(60.0)
     view = own_window.view
     view.load_lyrics(natural_sounds("ーす"), [[(0.0, 1.0), (1.0, 2.0)]], raw=[[(0.0, 1.0), (1.0, 0.0)]])
@@ -5174,7 +5183,7 @@ def test_the_sound_strip_lays_a_row_out_once_per_refresh(window) -> None:
     try:
         strip._boundary_at(x)
         assert not calls  # a second hit test reuses the rows already laid out
-        strip._invalidate()
+        strip._refresh()
         strip._boundary_at(x)
         assert calls  # a refresh lays them out again
     finally:
@@ -5183,34 +5192,24 @@ def test_the_sound_strip_lays_a_row_out_once_per_refresh(window) -> None:
         window.sound_strip.setVisible(False)
 
 
-def test_two_bars_never_land_on_each_other(window) -> None:
-    window.view.load_lyrics(natural_sounds("あいう"), [[(0.0, 1.0), (1.0, 1.0), (1.0, 2.0)]])
+def test_drop_labels_never_land_on_each_other(window) -> None:
+    window.view.load_lyrics(natural_sounds("あいう"), [[(0.0, 1.0), (None, None), (None, None)]])
     window.sound_strip.setVisible(True)
     QApplication.processEvents()
 
     first = window.sound_strip._boundary_x(0, 1)
     second = window.sound_strip._boundary_x(0, 2)
     assert first is not None and second is not None
-    # a coincident pair is pushed apart, so each can be grabbed and dragged on its own
-    assert second - first >= SOUND_GAP_PX
+    blocks = window.sound_strip._blocks()
+    assert blocks[(0, 1)].top() > blocks[(0, 0)].bottom()
+    assert blocks[(0, 2)].left() > blocks[(0, 1)].right()
 
 
-def test_a_grabbed_bar_drops_back_to_its_true_time(window) -> None:
-    window.view.load_lyrics(natural_sounds("あいう"), [[(0.0, 1.0), (1.0, 1.0), (1.0, 2.0)]])
-    window.sound_strip.setVisible(True)
-    QApplication.processEvents()
+def test_mapped_labels_ignore_raw_onsets(window) -> None:
+    window.view.load_lyrics(natural_sounds("あい"), [[(0.0, 1.0), (1.0, 2.0)]], raw=[[(0.2, 0.1), (0.8, 0.1)]])
     strip = window.sound_strip
-
-    true = strip._x(1.0)
-    stepped = strip._boundary_x(0, 1)
-    assert stepped is not None and stepped == pytest.approx(true - SOUND_GAP_PX)
-    assert strip._boundary_x(0, 2) == pytest.approx(true)  # the sound after it keeps its place
-
-    sound_mouse(window, QEvent.Type.MouseButtonPress, stepped)
-    assert strip._boundary_x(0, 1) == pytest.approx(true)  # in hand it shows its real time
-
-    sound_mouse(window, QEvent.Type.MouseButtonRelease, stepped)
-    assert strip._boundary_x(0, 1) == pytest.approx(true - SOUND_GAP_PX)
+    assert strip._boundary_x(0, 1) == pytest.approx(strip._x(1.0))
+    assert strip._raw_boundary_at(strip._x(0.8)) == (0, 1)
 
 
 class _Metrics:
@@ -5291,6 +5290,157 @@ def _mapped_pair(own_window, tmp_path, raw=((0.0, 1.0), (1.0, 1.0))) -> None:
     own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), raw=(raw,))
     own_window._watch_lyrics()
     wait_for_lyric_mapping(own_window)
+
+
+def test_note_lyric_font_is_bold_and_tracks_vertical_zoom(own_window, monkeypatch) -> None:
+    own_window.view.set_notes(((60, 0, 1, 0),))
+    note = own_window.view.notes()[0]
+    note.lyric_text = "あ"
+    fonts = []
+    original = QPainter.setFont
+
+    def capture_font(painter, font):
+        fonts.append(QFont(font))
+        original(painter, font)
+
+    monkeypatch.setattr(QPainter, "setFont", capture_font)
+    for zoom_x, zoom_y in ((100, 16), (100, 60), (100, 120), (200, 120)):
+        image = QImage(400, 200, QImage.Format.Format_ARGB32)
+        image.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(image)
+        painter.scale(zoom_x, zoom_y)
+        note.paint(painter, None)
+        painter.end()
+
+    assert all(font.bold() for font in fonts)
+    assert fonts[0].pixelSize() >= 12
+    assert fonts[0].pixelSize() < fonts[1].pixelSize() < fonts[2].pixelSize()
+    assert fonts[2].pixelSize() > 14
+    assert fonts[3].pixelSize() == fonts[2].pixelSize()
+
+
+def test_boundary_drag_changes_mapping_without_editing_raw(own_window, tmp_path) -> None:
+    _mapped_pair(own_window, tmp_path)
+    view, strip = own_window.view, own_window.sound_strip
+    raw = view.lyric_raw
+    ids = tuple(note.id for note in view.notes())
+    before = view.undo_stack.count()
+    sound_mouse(own_window, QEvent.Type.MouseButtonPress, strip._x(1.0))
+    sound_mouse(own_window, QEvent.Type.MouseMove, strip._x(1.8))
+    sound_mouse(own_window, QEvent.Type.MouseButtonRelease, strip._x(1.8))
+    wait_for_lyric_mapping(own_window)
+    assert view.lyric_operations == (Match(SoundRef(0, 0), ids, True), Drop(SoundRef(0, 1), True))
+    assert view.lyric_raw == raw
+    assert view.undo_stack.count() == before + 1
+    assert [note.lyric_text for note in view.notes()] == ["あ", "↳ あ"]
+    view.undo()
+    wait_for_lyric_mapping(own_window)
+    assert view.lyric_mapped == (((ids[0],), (ids[1],)),)
+    view.redo()
+    wait_for_lyric_mapping(own_window)
+    assert view.lyric_zero == ((False, True),)
+    operations = view.lyric_operations
+    assert own_window.save_project(own_window.project_path)
+    saved = project.load(own_window.project_path).lyrics
+    assert saved.raw == raw
+    assert saved.operations == operations
+
+
+def test_lyric_mapping_preview_is_cancelled_by_escape(own_window, tmp_path) -> None:
+    _mapped_pair(own_window, tmp_path)
+    view, strip = own_window.view, own_window.sound_strip
+    baseline = view.lyric_operations
+    before = view.undo_stack.count()
+    sound_mouse(own_window, QEvent.Type.MouseButtonPress, strip._x(1.0))
+    sound_mouse(own_window, QEvent.Type.MouseMove, strip._x(1.8))
+    QTest.keyClick(strip, Qt.Key.Key_Escape)
+    wait_for_lyric_mapping(own_window)
+    assert view.lyric_operations == baseline
+    assert view.undo_stack.count() == before
+    assert not view.gesture_active
+
+
+def test_lyric_drop_layer_drag_can_merge_or_displace(own_window, tmp_path) -> None:
+    _mapped_pair(own_window, tmp_path)
+    view, strip = own_window.view, own_window.sound_strip
+    view.lyric_operations = ()
+    view.set_notes(((60, 0.0, 2.0, 0),))
+    wait_for_lyric_mapping(own_window)
+    raw = view.lyric_raw
+    second = strip._blocks()[(0, 1)]
+    sound_mouse(own_window, QEvent.Type.MouseButtonPress, second.center().x(), second.center().y())
+    sound_mouse(own_window, QEvent.Type.MouseMove, second.center().x(), 55)
+    sound_mouse(own_window, QEvent.Type.MouseButtonRelease, second.center().x(), 55)
+    wait_for_lyric_mapping(own_window)
+    assert view.lyric_zero == ((False, True),)
+    dropped = strip._blocks()[(0, 1)]
+    sound_mouse(own_window, QEvent.Type.MouseButtonPress, dropped.center().x(), dropped.center().y())
+    sound_mouse(own_window, QEvent.Type.MouseMove, strip._x(1.0), 15)
+    sound_mouse(own_window, QEvent.Type.MouseButtonRelease, strip._x(1.0), 15)
+    wait_for_lyric_mapping(own_window)
+    assert isinstance(view.lyric_operations[0], Merge)
+    assert view.lyric_times == (((0.0, 1.0), (1.0, 2.0)),)
+    assert view.lyric_raw == raw
+    assert view.notes()[0].lyric_text == "あ い"
+    view.undo()
+    wait_for_lyric_mapping(own_window)
+    dropped = strip._blocks()[(0, 1)]
+    sound_mouse(own_window, QEvent.Type.MouseButtonPress, dropped.center().x(), dropped.center().y())
+    sound_mouse(own_window, QEvent.Type.MouseMove, strip._x(0.3), 15)
+    sound_mouse(own_window, QEvent.Type.MouseButtonRelease, strip._x(0.3), 15)
+    wait_for_lyric_mapping(own_window)
+    assert view.lyric_zero == ((True, False),)
+    assert view.lyric_raw == raw
+
+
+def test_invalid_lyric_drag_preserves_confirmed_neighbours(own_window, tmp_path) -> None:
+    _mapped_pair(own_window, tmp_path)
+    own_window._confirm_operation(0, 1)
+    wait_for_lyric_mapping(own_window)
+    view, strip = own_window.view, own_window.sound_strip
+    baseline = view.lyric_operations
+    before = view.undo_stack.count()
+    first = strip._blocks()[(0, 0)]
+    sound_mouse(own_window, QEvent.Type.MouseButtonPress, first.center().x(), first.center().y())
+    sound_mouse(own_window, QEvent.Type.MouseMove, first.center().x(), 55)
+    sound_mouse(own_window, QEvent.Type.MouseButtonRelease, first.center().x(), 55)
+    wait_for_lyric_mapping(own_window)
+    assert view.lyric_operations == baseline
+    assert view.undo_stack.count() == before
+    assert not view.gesture_active
+
+
+def test_middle_group_member_cannot_be_dropped_from_the_menu(own_window, tmp_path) -> None:
+    own_window.transport.bpm.setValue(60)
+    own_window.view.set_notes(((60, 0, 3, 0),))
+    own_window.project_path = tmp_path / "song.nto"
+    own_window._stored_lyrics = project.Lyrics(
+        text="あいう", key=text_key("あいう"), raw=(((0.0, 1.0), (1.0, 1.0), (2.0, 1.0)),)
+    )
+    own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
+    baseline = own_window.view.lyric_operations
+    assert isinstance(baseline[0], Merge)
+    before = own_window.view.undo_stack.count()
+    own_window._on_lyric_action("drop", 0, 1)
+    wait_for_lyric_mapping(own_window)
+    assert own_window.view.lyric_operations == baseline
+    assert own_window.view.undo_stack.count() == before
+
+
+def test_advanced_raw_drag_escape_restores_evidence(own_window, tmp_path) -> None:
+    _mapped_pair(own_window, tmp_path)
+    view, strip = own_window.view, own_window.sound_strip
+    raw, operations = view.lyric_raw, view.lyric_operations
+    before = view.undo_stack.count()
+    strip._toggle_raw(True)
+    sound_mouse(own_window, QEvent.Type.MouseButtonPress, strip._x(1.0))
+    sound_mouse(own_window, QEvent.Type.MouseMove, strip._x(1.3))
+    QTest.keyClick(strip, Qt.Key.Key_Escape)
+    wait_for_lyric_mapping(own_window)
+    assert view.lyric_raw == raw
+    assert view.lyric_operations == operations
+    assert view.undo_stack.count() == before
 
 
 def test_dropping_a_sound_marks_it_zero_and_keeps_the_rest(own_window, tmp_path) -> None:
@@ -5394,8 +5544,7 @@ def test_a_grouped_run_is_marked_on_the_strip(own_window, tmp_path) -> None:
     assert own_window.view.lyric_group == ((0, 0),)
 
 
-def test_the_overlapping_blocks_of_a_shared_note_draw_no_edge_between_them(window) -> None:
-    # あ and い share note 1-2; い's block begins inside あ's, so that edge must not read as a split
+def test_shared_sound_blocks_have_a_thin_internal_separator(window) -> None:
     text = "あい"
     window.transport.bpm.setValue(60.0)
     window.view.load_lyrics(
@@ -5418,7 +5567,7 @@ def test_the_overlapping_blocks_of_a_shared_note_draw_no_edge_between_them(windo
     image = strip.grab().toImage()
     mid = strip.height() // 2
     colors = [image.pixelColor(seam + dx, mid).name() for dx in (-1, 0, 1)]
-    assert colors == [body.name()] * 3, f"{colors} != {body.name()} at seam {seam}"
+    assert colors == [body.name(), QColor(theme.LYRIC_ZERO).name(), body.name()]
 
 
 def test_a_sound_that_covers_no_note_is_marked_grey(own_window, tmp_path) -> None:
@@ -5499,6 +5648,8 @@ def test_a_lyric_drag_is_kept_in_the_project(own_window, tmp_path) -> None:
     own_window.view.set_channels((Channel(channel=0),))
     own_window.view.set_notes(((60, 0.0, 2.0, 0),))
     own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
+    own_window.sound_strip._toggle_raw(True)
     own_window.sound_strip.setVisible(True)
     QApplication.processEvents()
 
@@ -5676,9 +5827,10 @@ def test_read_mode_draws_a_dot_n_sound_where_it_holds_off(own_window, tmp_path) 
     own_window.sound_strip.setVisible(True)
     QApplication.processEvents()
 
-    # the `.0` sound takes no note at all: it is marked zero and carries no block of its own
     assert own_window.view.lyric_zero == ((False, True, False),)
-    assert own_window.sound_strip._boundary_x(0, 1) is None
+    blocks = own_window.sound_strip._blocks()
+    assert blocks[(0, 1)].top() > blocks[(0, 0)].bottom()
+    assert own_window.sound_strip._boundary_x(0, 1) == pytest.approx(own_window.sound_strip._x(1.0))
 
 
 def test_read_mode_reads_a_ruby_part_by_part(own_window, tmp_path) -> None:
@@ -5785,7 +5937,7 @@ def test_read_mode_preserves_edit_evidence_and_uses_faithful_positions(own_windo
     own_window._set_lyric_mode("edit")
     wait_for_lyric_mapping(own_window)
     assert own_window.view.lyric_raw == before
-    assert strip._boundary_x(0, 1) == pytest.approx(strip._x(0.8))
+    assert strip._boundary_x(0, 1) == pytest.approx(strip._x(1.0))
 
 
 def test_the_aligned_times_are_kept_in_the_project(own_window, tmp_path) -> None:
