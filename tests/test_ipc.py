@@ -1,6 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""The remote-control interface without Qt: the endpoint, the run file, the dispatcher and the
-client, against a plain socket server this module runs itself."""
+"""Qt-free IPC discovery, protocol and client tests against a minimal local server."""
 
 from __future__ import annotations
 
@@ -16,18 +15,15 @@ from namioto import ipc
 
 
 class TinyServer:
-    """A minimal line-framed server over a unix socket, built from the same `Dispatcher`.
+    """A minimal Unix JSON-lines server for testing the Qt-free client."""
 
-    It exists to exercise the client without Qt: it speaks the protocol the Qt server does, and
-    nothing more.
-    """
-
-    def __init__(self, path: Path, token: str = ""):
-        self.token = token
+    def __init__(self):
+        self.endpoint = ipc.listen_endpoint()
+        Path(self.endpoint.address).parent.mkdir(parents=True, exist_ok=True)
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        self.sock.bind(str(path))
+        self.sock.bind(self.endpoint.address)
         self.sock.listen(4)
-        self.endpoint = ipc.Endpoint("unix", str(path), token)
+        ipc.write_run(self.endpoint)
         self.dispatcher = ipc.Dispatcher()
         self.dispatcher.register("ping", lambda params: {"pong": True})
         self.dispatcher.register("echo", lambda params: params)
@@ -51,86 +47,93 @@ class TinyServer:
     def _serve(self, connection: socket.socket) -> None:
         with connection, connection.makefile("rwb") as stream:
             for line in stream:
-                if not line.strip():
-                    continue
-                request = ipc.decode(line)
-                ident = request.get("id")
-                if self.token and request.get("token") != self.token:
-                    stream.write(ipc.encode(ipc.error_for(ident, "unauthorized", "no")))
+                if line.strip():
+                    stream.write(ipc.encode(self.dispatcher.handle(ipc.decode(line))))
                     stream.flush()
-                    continue
-                stream.write(ipc.encode(self.dispatcher.handle(request)))
-                stream.flush()
 
     def close(self) -> None:
         self._running = False
         self.sock.close()
+        ipc.remove_run(self.endpoint.instance)
+        Path(self.endpoint.address).unlink(missing_ok=True)
+
+
+@pytest.fixture(autouse=True)
+def discovery(tmp_path, monkeypatch):
+    monkeypatch.setattr(ipc, "runtime_dir", lambda *parts: tmp_path.joinpath(*parts))
 
 
 @pytest.fixture
-def server(tmp_path):
-    running = TinyServer(tmp_path / "control.sock")
+def server():
+    if os.name == "nt":
+        pytest.skip("the minimal server uses Unix sockets; Qt integration tests exercise Windows pipes")
+    running = TinyServer()
     yield running
     running.close()
 
 
-def test_parse_endpoint():
-    assert ipc.parse_endpoint("") == ipc.Endpoint("unix", str(ipc.default_socket_path()))
-    assert ipc.parse_endpoint("/tmp/song.sock") == ipc.Endpoint("unix", "/tmp/song.sock")
-    assert ipc.parse_endpoint("unix:///tmp/song.sock") == ipc.Endpoint("unix", "/tmp/song.sock")
-    assert ipc.parse_endpoint("tcp://127.0.0.1:9000") == ipc.Endpoint("tcp", "127.0.0.1:9000")
-    assert ipc.parse_endpoint("127.0.0.1:9000") == ipc.Endpoint("tcp", "127.0.0.1:9000")
-    named = ipc.parse_endpoint("second")
-    assert named.kind == "unix" and named.address.endswith(os.sep + "namioto" + os.sep + "second")
-    assert ipc.parse_endpoint("/tmp/x", token="secret").token == "secret"
+def test_endpoints_are_automatic_and_unique():
+    first, second = ipc.listen_endpoint(), ipc.listen_endpoint()
+    assert first.instance != second.instance
+    assert first.address != second.address
+    assert first.kind == ("pipe" if os.name == "nt" else "unix")
+    assert ipc.Endpoint.from_dict(first.to_dict()) == first
+    assert ipc.Endpoint.from_dict({"kind": "tcp", "address": "127.0.0.1:9000"}) is None
 
 
-def test_split_tcp():
-    assert ipc.split_tcp("127.0.0.1:9000") == ("127.0.0.1", 9000)
-    assert ipc.split_tcp(":9000") == (ipc.DEFAULT_HOST, 9000)
-    with pytest.raises(ipc.IpcError):
-        ipc.split_tcp("nonsense")
+def test_run_file_round_trip():
+    endpoint = ipc.listen_endpoint()
+    path = ipc.write_run(endpoint)
+    assert path == ipc.run_path(endpoint.instance)
+    assert ipc.resolve_endpoint() == endpoint
+    assert ipc.list_instances()[0].pid == os.getpid()
+    ipc.remove_run("other")
+    assert ipc.resolve_endpoint() == endpoint
+    ipc.remove_run(endpoint.instance)
+    assert ipc.list_instances() == []
 
 
-def test_run_file_round_trip(tmp_path, monkeypatch):
-    monkeypatch.setenv(ipc.ENV_RUN, str(tmp_path / "run.json"))
-    assert ipc.read_run() is None
-    endpoint = ipc.Endpoint("tcp", "127.0.0.1:9000", "token")
-    ipc.write_run(endpoint, pid=os.getpid())
-    found = ipc.read_run()
-    assert found == (endpoint, os.getpid())
-    ipc.remove_run(pid=os.getpid() + 1)  # another process's record is left alone
-    assert ipc.read_run() is not None
-    ipc.remove_run(pid=os.getpid())
-    assert ipc.read_run() is None
+def test_first_instance_is_default_and_explicit_selection_works(monkeypatch):
+    first, second = ipc.listen_endpoint(), ipc.listen_endpoint()
+    monkeypatch.setattr(ipc.time, "time_ns", lambda: 20)
+    ipc.write_run(second)
+    monkeypatch.setattr(ipc.time, "time_ns", lambda: 10)
+    ipc.write_run(first)
+    assert ipc.resolve_endpoint() == first
+    assert ipc.resolve_endpoint(second.instance) == second
+    ipc.remove_run(first.instance)
+    assert ipc.resolve_endpoint() == second
+    with pytest.raises(ipc.IpcError, match="no running editor with instance ID"):
+        ipc.resolve_endpoint(first.instance)
 
 
-def test_run_file_ignores_a_dead_process(tmp_path, monkeypatch):
-    monkeypatch.setenv(ipc.ENV_RUN, str(tmp_path / "run.json"))
-    # a pid that cannot be running: negative and far past any real process table
-    ipc.write_run(ipc.Endpoint("unix", "/tmp/gone.sock"), pid=2**30)
-    assert ipc.read_run() is None
+def test_discovery_removes_dead_instances_and_sockets(monkeypatch):
+    endpoint = ipc.listen_endpoint()
+    path = ipc.write_run(endpoint, pid=1234)
+    socket_path = ipc.runtime_dir("ipc", f"{endpoint.instance}.sock")
+    if endpoint.kind == "unix":
+        socket_path.touch()
+    monkeypatch.setattr(ipc, "_alive", lambda pid: False)
+    assert ipc.list_instances() == []
+    assert not path.exists()
+    assert not socket_path.exists()
 
 
-def test_resolve_endpoint_prefers_the_environment(tmp_path, monkeypatch):
-    monkeypatch.setenv(ipc.ENV_RUN, str(tmp_path / "run.json"))
-    ipc.write_run(ipc.Endpoint("unix", "/tmp/run.sock"), pid=os.getpid())
-    monkeypatch.setenv(ipc.ENV_ENDPOINT, "/tmp/env.sock")
-    assert ipc.resolve_endpoint().address == "/tmp/env.sock"
-    assert ipc.resolve_endpoint("/tmp/cli.sock").address == "/tmp/cli.sock"
-    monkeypatch.delenv(ipc.ENV_ENDPOINT)
-    assert ipc.resolve_endpoint().address == "/tmp/run.sock"
-    assert ipc.resolve_endpoint(discover=False) == ipc.default_endpoint()
+def test_discovery_ignores_invalid_records():
+    root = ipc.runtime_dir("ipc")
+    root.mkdir(parents=True)
+    (root / "broken.json").write_text("{")
+    (root / "array.json").write_text("[]")
+    (root / "old.json").write_text(json.dumps({"protocol": 0}))
+    assert ipc.list_instances() == []
 
 
-def test_listen_endpoint_generates_a_tcp_token(monkeypatch):
-    monkeypatch.delenv(ipc.ENV_TOKEN, raising=False)
-    unix = ipc.listen_endpoint("/tmp/x.sock")
-    assert unix.token == ""
-    tcp = ipc.listen_endpoint("tcp://127.0.0.1:0")
-    assert tcp.kind == "tcp" and len(tcp.token) == 32
-    explicit = ipc.listen_endpoint("tcp://127.0.0.1:0", token="given")
-    assert explicit.token == "given"
+def test_address_environment_variables_are_ignored(monkeypatch):
+    for name in ("NAMIOTO_IPC", "NAMIOTO_IPC_RUN", "NAMIOTO_IPC_TOKEN"):
+        monkeypatch.setenv(name, "/tmp/not-used")
+    endpoint = ipc.listen_endpoint()
+    ipc.write_run(endpoint)
+    assert ipc.resolve_endpoint() == endpoint
 
 
 def test_dispatcher_answers_every_failure():
@@ -144,8 +147,7 @@ def test_dispatcher_answers_every_failure():
     assert dispatcher.handle("not a request")["error"]["code"] == "bad_request"
     assert dispatcher.handle({"id": 2})["error"]["code"] == "bad_request"
     assert dispatcher.handle({"id": 3, "method": "echo", "params": []})["error"]["code"] == "bad_params"
-    unknown = dispatcher.handle({"id": 4, "method": "nope"})
-    assert unknown["error"]["code"] == "unknown_method"
+    assert dispatcher.handle({"id": 4, "method": "nope"})["error"]["code"] == "unknown_method"
     assert dispatcher.handle({"id": 5, "method": "boom"})["ok"] is False
     assert dispatcher.describe() == [{"method": "echo", "summary": "", "params": {}}]
 
@@ -157,19 +159,6 @@ def test_client_request_and_error(server):
         with pytest.raises(ipc.IpcError) as failure:
             client.request("boom")
         assert failure.value.code == "teapot"
-
-
-def test_client_rejects_a_wrong_token(tmp_path):
-    server = TinyServer(tmp_path / "control.sock", token="right")
-    try:
-        with ipc.Client(ipc.Endpoint("unix", server.endpoint.address, "wrong")) as client:
-            with pytest.raises(ipc.IpcError) as failure:
-                client.request("ping")
-            assert failure.value.code == "unauthorized"
-        with ipc.Client(ipc.Endpoint("unix", server.endpoint.address, "right")) as client:
-            assert client.request("ping") == {"pong": True}
-    finally:
-        server.close()
 
 
 def test_parse_params_and_aliases():
@@ -190,15 +179,25 @@ def test_parse_params_and_aliases():
 
 
 def test_cli_prints_the_result(server, capsys):
-    code = ipc.main(["--endpoint", server.endpoint.address, "ping"])
-    assert code == 0
+    assert ipc.main(["ping"]) == 0
     assert json.loads(capsys.readouterr().out) == {"pong": True}
-    code = ipc.main(["--endpoint", server.endpoint.address, "boom"])
-    assert code == 1
+    assert ipc.main(["--instance", server.endpoint.instance, "boom"]) == 1
     assert "teapot" in capsys.readouterr().err
 
 
-def test_cli_reports_an_unreachable_endpoint(tmp_path, capsys):
-    code = ipc.main(["--endpoint", str(tmp_path / "nothing.sock"), "ping"])
-    assert code == 2
-    assert "cannot reach" in capsys.readouterr().err
+def test_cli_lists_instances(capsys):
+    endpoint = ipc.listen_endpoint()
+    ipc.write_run(endpoint)
+    assert ipc.main(["--list"]) == 0
+    assert json.loads(capsys.readouterr().out)[0]["instance"] == endpoint.instance
+
+
+def test_cli_reports_no_editor(capsys):
+    assert ipc.main(["ping"]) == 1
+    assert "no running editor" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("flag", ["--endpoint", "--token", "--run"])
+def test_cli_rejects_custom_connection_options(flag):
+    with pytest.raises(SystemExit):
+        ipc.build_parser().parse_args([flag, "custom"])

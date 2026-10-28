@@ -23,7 +23,6 @@ and a modal dialog holds the focus trigger back so the save-on-close prompt neve
 from __future__ import annotations
 
 import argparse
-import os
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass, replace
@@ -230,7 +229,7 @@ class MainWindow(QMainWindow):
     transport_changed = Signal(bool)  # whether the transport is running, on every change
     subtitle_changed = Signal()
 
-    def __init__(self, settings=None, overrides: dict | None = None):
+    def __init__(self, settings=None, overrides: dict | None = None, *, ipc_enabled: bool | None = None):
         super().__init__()
         self.setWindowTitle("Namioto")
         self.resize(1200, 720)
@@ -457,7 +456,8 @@ class MainWindow(QMainWindow):
         self._watch_lyrics()
         self._update_status()
         self.view.setFocus()  # the roll holds the keyboard, so the bar opens without a focus ring on its first button
-        if self.settings.remote.enabled:
+        remote_enabled = self.settings.remote.enabled if ipc_enabled is None else ipc_enabled
+        if remote_enabled:
             self.start_ipc()
 
     def _make_player(self):
@@ -483,35 +483,23 @@ class MainWindow(QMainWindow):
             self._seeding = False
         self._on_spectrum_parameters()  # the seed was quiet, so show the roll what it landed on
 
-    def start_ipc(self, address: str | None = None) -> ipc.Endpoint | None:
-        """Listen for the remote-control interface and say where on the status bar.
-
-        `address` comes from the command line; without one the setting and the environment decide, and
-        an editor already listening keeps what it has. A port already taken is reported and leaves
-        the editor running without the interface.
-        """
+    def start_ipc(self) -> ipc.Endpoint | None:
+        """Start an automatically managed local interface without blocking editor startup on failure."""
         if self.ipc is not None:
             return self.ipc.endpoint
-        endpoint = ipc.listen_endpoint(address or self.settings.remote.address or None)
-        found = ipc.read_run()
-        if found is not None:
-            running, pid = found
-            if pid != os.getpid() and running.kind == endpoint.kind and running.address == endpoint.address:
-                # a unix socket is removed before the bind, so refusing here keeps a live editor's own
-                self.statusBar().showMessage(
-                    i18n.tr("Remote control is already listening on {address}", address=running.describe())
-                )
-                return None
-        server = IpcServer(endpoint, parent=self)
+        server = IpcServer(ipc.listen_endpoint(), parent=self)
         self._bridge = WindowBridge(self, server)
         try:
             bound = server.start()
+            ipc.write_run(bound)
         except OSError as error:
+            self._bridge.close()
+            server.stop()
+            server.deleteLater()
             self.statusBar().showMessage(i18n.tr("Remote control could not start: {error}", error=error))
             self._bridge = None
             return None
         self.ipc = server
-        ipc.write_run(bound)
         self.statusBar().showMessage(i18n.tr("Remote control listening on {address}", address=bound.describe()))
         return bound
 
@@ -521,7 +509,8 @@ class MainWindow(QMainWindow):
         if self._bridge is not None:
             self._bridge.close()
         self.ipc.stop()
-        ipc.remove_run(os.getpid())
+        ipc.remove_run(self.ipc.endpoint.instance)
+        self.ipc.deleteLater()
         self.ipc = None
         self._bridge = None
 
@@ -2544,13 +2533,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gain", type=float, help="spectrum gain for this run")
     parser.add_argument("--contrast", type=float, help="spectrum contrast for this run")
     parser.add_argument(
-        "--ipc",
-        nargs="?",
-        const="",
-        metavar="ADDRESS",
-        help="listen for remote control on ADDRESS (a socket path, tcp://host:port, or empty for the default)",
+        "--ipc", action=argparse.BooleanOptionalAction, default=None, help="enable local remote control"
     )
-    parser.add_argument("--no-ipc", action="store_true", help="do not listen for remote control")
     return parser.parse_args(argv)
 
 
@@ -2562,15 +2546,8 @@ def main() -> int:
         # Qt reads its plugin paths once, while the application is being built
         QCoreApplication.setLibraryPaths([*QCoreApplication.libraryPaths(), *(str(path) for path in added)])
     app = QApplication(sys.argv)
-    window = MainWindow(settings, overrides={"channels": args.channels, "t_num": args.t_num})
+    window = MainWindow(settings, overrides={"channels": args.channels, "t_num": args.t_num}, ipc_enabled=args.ipc)
     window.apply_overrides(gain=args.gain, contrast=args.contrast)
-    if args.no_ipc:
-        window.stop_ipc()
-    elif args.ipc:
-        window.stop_ipc()  # an address on the command line wins over the one already listening
-        window.start_ipc(args.ipc)
-    elif args.ipc is not None:
-        window.start_ipc()
     window.show()
     if args.audio is not None:
         # a file waits for the window. Naming a project opens the platform's file chooser, and on

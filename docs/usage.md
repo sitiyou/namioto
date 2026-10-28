@@ -116,7 +116,7 @@ The gear opens Settings. Changes to interface language take effect on the next r
 | Network | GitHub download mirror and HTTP proxy |
 | Lyrics | OpenAI-compatible endpoint and external KRC editor |
 | ASS subtitle | Font, colours, fades, lead time and guide dot |
-| Remote | Optional remote-control server |
+| Remote | Local remote control, enabled by default |
 
 Auto-save is off by default. When enabled, it saves the open project after editing stops and
 when the window loses focus. **Apply** applies settings without closing; **Restore defaults**

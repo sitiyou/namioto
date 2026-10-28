@@ -54,6 +54,7 @@ def isolated_directories(tmp_path_factory):
     root = tmp_path_factory.mktemp("xdg")
     os.environ["XDG_CONFIG_HOME"] = str(root / "config")
     os.environ["XDG_DATA_HOME"] = str(root / "data")
+    os.environ["XDG_RUNTIME_DIR"] = str(root / "runtime")
     return root
 
 

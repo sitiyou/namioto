@@ -108,7 +108,7 @@ uv run namioto-cli ass --session --out song.ass --save-krc song.krc --save-midi 
 ```
 
 File mode uses the mapping already in KRC. Session mode uses the editor's current mapping
-and requires an editor started with `uv run namioto --ipc`. Intermediate KRC/MIDI files are
+and connects automatically to the first running editor with remote control enabled. Intermediate KRC/MIDI files are
 written only when requested. Session CLI outputs are written on the CLI machine.
 
 `--watch` builds immediately and rebuilds after changes settle. Invalid inputs leave the
@@ -131,11 +131,15 @@ MIDI. Session mode follows the editor's compatibility setting.
 
 ## Remote control
 
-Remote control is off by default. Start with `uv run namioto --ipc`, or enable it in
-Settings → Remote. `--ipc ADDRESS` selects an endpoint; `--no-ipc` disables it for one run.
+Local remote control is enabled by default. Disable it in Settings → Remote, or use
+`--no-ipc` for one run. `--ipc` enables it for one run without changing saved preferences.
+Multiple editors may run at once; clients automatically select the first surviving instance
+in startup order. Use `--list` to see instance IDs and `--instance ID` to select another editor.
 
 ```bash
 uv run namioto-ctl status
+uv run namioto-ctl --list
+uv run namioto-ctl --instance INSTANCE_ID status
 uv run namioto-ctl play
 uv run namioto-ctl seek 12.5
 uv run namioto-ctl bpm 132
@@ -153,17 +157,20 @@ positional value. `seek` also accepts `beat=8` or `fraction=0.5`. Calls that wou
 unsaved notes fail with `dirty` unless passed `force=true`.
 
 `project.export_ass` writes on the editor's machine and accepts `save_krc=PATH` and
-`save_midi=PATH`. Session ASS commands accept `--endpoint`, `--token`, `--run` and `--timeout`
-like ctl.
+`save_midi=PATH`. Session ASS commands accept `--instance` and `--timeout` like ctl.
 
-### Endpoints and authentication
+### Local transport and discovery
 
-The default is `$XDG_RUNTIME_DIR/namioto/control.sock`, with mode 0600 inside a 0700 directory.
-The editor records discovery information in `$XDG_RUNTIME_DIR/namioto/ipc.json`.
-`$NAMIOTO_IPC` or `--endpoint` overrides discovery.
+Endpoint names and discovery files are managed automatically and cannot be customized.
+Unix systems use a separate domain socket per instance, with mode 0600 in a 0700 directory.
+Windows uses a separate named pipe per instance, restricted to the user running the editor.
+No TCP port is opened, and no token is needed.
 
-`--ipc tcp://host:port` uses TCP and requires a token. The server takes `$NAMIOTO_IPC_TOKEN`
-or generates one; clients supply it with `--token` or `$NAMIOTO_IPC_TOKEN`.
+Discovery records live under the app's runtime directory in `ipc/`, alongside Unix sockets.
+With `XDG_RUNTIME_DIR` set, this is `$XDG_RUNTIME_DIR/namioto/ipc/`; otherwise the app's
+platform-specific configuration directory is used. Normal exit removes the instance's endpoint
+and record; discovery removes stale records and Unix sockets left by exited processes.
+Clients do not need to know these paths. An absent editor or unknown instance ID produces an error.
 
 ### Protocol
 

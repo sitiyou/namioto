@@ -91,9 +91,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="read file input with WaveTone's leading bar removed (default: enabled)",
     )
-    parser.add_argument("-e", "--endpoint", help=f"session address; overrides ${ipc.ENV_ENDPOINT}")
-    parser.add_argument("--token", help=f"TCP session token; overrides ${ipc.ENV_TOKEN}")
-    parser.add_argument("--run", help=f"session run file; overrides ${ipc.ENV_RUN}")
+    parser.add_argument("--instance", help="editor instance ID (default: the first running editor)")
     parser.add_argument("-t", "--timeout", type=float, default=ipc.CONNECT_TIMEOUT, help="IPC timeout in seconds")
     for field in subtitle.ASS_FIELDS:
         convert = {"int": int, "float": float}.get(field.kind, str)
@@ -114,7 +112,7 @@ def main(argv: list[str] | None = None) -> int:
     else:
         if args.midi is None or args.krc is None:
             parser.error("provide both --midi and --krc, or use --session")
-        if args.save_krc or args.save_midi or args.endpoint or args.token or args.run:
+        if args.save_krc or args.save_midi or args.instance:
             parser.error("session connection and intermediate export options require --session")
     if not 0 < args.timeout < float("inf"):
         parser.error("--timeout must be a finite positive number")
@@ -123,9 +121,7 @@ def main(argv: list[str] | None = None) -> int:
         outputs = [target, *([args.save_krc] if args.save_krc else []), *([args.save_midi] if args.save_midi else [])]
         subtitle.check_paths(outputs, [] if args.session else [args.krc, args.midi])
         if args.session:
-            if args.run:
-                os.environ[ipc.ENV_RUN] = args.run
-            endpoint = ipc.resolve_endpoint(args.endpoint, token=args.token)
+            endpoint = ipc.resolve_endpoint(args.instance)
             with ipc.Client(endpoint, timeout=args.timeout, keep_events=False) as client:
 
                 def build():

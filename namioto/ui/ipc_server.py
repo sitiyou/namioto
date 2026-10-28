@@ -2,10 +2,8 @@
 """The editor side of the remote-control interface: a JSON-lines server on the Qt event loop.
 
 `namioto.ipc` owns the protocol, the endpoint and the client; this module only carries them over a
-socket. A unix endpoint listens through `QLocalServer`, a TCP one through `QTcpServer`, and both
-hand their accepted sockets to the same line-framed `_Connection`, so a method is served exactly
-the same way whichever way the caller arrived. The socket permissions are the unix endpoint's whole
-authentication (0700 directory, 0600 socket); a TCP one carries a token instead.
+local endpoint. `QLocalServer` provides Unix sockets and Windows named pipes, restricted to the
+current user. Unix endpoints also live in a private directory (0700, with a 0600 socket).
 
 Everything runs on the GUI thread, so a handler may touch the window directly. The editor starts
 one of these from `namioto.ui.app`, hands it a `WindowBridge` for the methods, and stops it when
@@ -19,10 +17,10 @@ import os
 from pathlib import Path
 
 from PySide6.QtCore import QObject
-from PySide6.QtNetwork import QHostAddress, QLocalServer, QLocalSocket, QTcpServer, QTcpSocket
+from PySide6.QtNetwork import QLocalServer, QLocalSocket
 
 from namioto import __version__
-from namioto.ipc import APP, LINE_LIMIT, PROTOCOL, Dispatcher, Endpoint, decode, encode, error_for, split_tcp
+from namioto.ipc import APP, LINE_LIMIT, PROTOCOL, Dispatcher, Endpoint, decode, encode, error_for
 
 
 def _chmod(path: str | Path, mode: int) -> None:
@@ -39,7 +37,7 @@ class _Connection(QObject):
     end.
     """
 
-    def __init__(self, socket: QLocalSocket | QTcpSocket, server: IpcServer):
+    def __init__(self, socket: QLocalSocket, server: IpcServer):
         super().__init__(socket)
         self.socket = socket
         self.server = server
@@ -80,14 +78,6 @@ class _Connection(QObject):
         except (ValueError, UnicodeDecodeError):
             self.send(error_for(None, "bad_request", "a request must be one line of JSON"))
             return
-        ident = request.get("id") if isinstance(request, dict) else None
-        authorized = not self.server.endpoint.token or (
-            isinstance(request, dict) and request.get("token") == self.server.endpoint.token
-        )
-        if not authorized:
-            self.send(error_for(ident, "unauthorized", "the endpoint's token is missing or wrong"))
-            self.close()
-            return
         self.send(self.server.dispatcher.handle(request))
 
     def _close(self) -> None:
@@ -107,50 +97,31 @@ class IpcServer(QObject):
         self.dispatcher = Dispatcher()
         self._connections: list[_Connection] = []
         self._local: QLocalServer | None = None
-        self._tcp: QTcpServer | None = None
 
     @property
     def listening(self) -> bool:
-        return self._local is not None or self._tcp is not None
+        return self._local is not None
 
     def start(self) -> Endpoint:
-        """Open the socket, filling in the address actually bound; raises OSError when it cannot."""
+        """Open the local endpoint; raises OSError when it cannot listen."""
         if self.requested.kind == "unix":
-            self._start_unix(Path(self.requested.address))
-        else:
-            self._start_tcp(self.requested.address)
-        return self.endpoint
-
-    def _start_unix(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        _chmod(path.parent, 0o700)
-        QLocalServer.removeServer(str(path))  # a socket left by a dead editor is not a live one
+            path = Path(self.requested.address)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            _chmod(path.parent, 0o700)
         server = QLocalServer(self)
-        if not server.listen(str(path)):
-            raise OSError(f"cannot listen on {path}: {server.errorString()}")
-        _chmod(path, 0o600)
+        server.setSocketOptions(QLocalServer.SocketOption.UserAccessOption)
+        if not server.listen(self.requested.address):
+            message = server.errorString()
+            server.deleteLater()
+            raise OSError(f"cannot listen on {self.requested.address}: {message}")
+        if self.requested.kind == "unix":
+            _chmod(self.requested.address, 0o600)
         server.newConnection.connect(self._accept)
         self._local = server
-        self.endpoint = Endpoint("unix", str(path), self.requested.token)
-
-    def _start_tcp(self, address: str) -> None:
-        host, port = split_tcp(address)
-        target = QHostAddress(QHostAddress.SpecialAddress.LocalHost) if host == "localhost" else QHostAddress(host)
-        if target.isNull():
-            raise OSError(f"{host!r} is not a local address to listen on")
-        server = QTcpServer(self)
-        if not server.listen(target, port):
-            raise OSError(f"cannot listen on {host}:{port}: {server.errorString()}")
-        server.newConnection.connect(self._accept)
-        self._tcp = server
-        self.endpoint = Endpoint(
-            "tcp",
-            f"{server.serverAddress().toString()}:{server.serverPort()}",
-            self.requested.token,
-        )
+        return self.endpoint
 
     def _accept(self) -> None:
-        source = self._local if self._local is not None else self._tcp
+        source = self._local
         if source is None:
             return
         while source.hasPendingConnections():
@@ -193,7 +164,5 @@ class IpcServer(QObject):
             name = self._local.serverName()
             self._local.close()
             QLocalServer.removeServer(name)
+            self._local.deleteLater()
             self._local = None
-        if self._tcp is not None:
-            self._tcp.close()
-            self._tcp = None

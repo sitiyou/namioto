@@ -321,16 +321,9 @@ SECTIONS: tuple[Section, ...] = (
             Field(
                 "enabled",
                 "bool",
-                False,
+                True,
                 "Remote control",
-                "Listen for the namioto-ctl remote control interface; off unless it is asked for",
-            ),
-            Field(
-                "address",
-                "text",
-                "",
-                "Address",
-                "Where to listen: a socket path, tcp://host:port, or empty for a per-user socket",
+                "Allow namioto-ctl to control this editor through a local connection",
             ),
         ),
     ),

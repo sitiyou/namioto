@@ -1,6 +1,6 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""The remote-control interface end to end: a real `MainWindow`, a real `IpcServer` on a unix
-socket, and the Qt-free client driving both.
+"""The remote-control interface end to end: a real `MainWindow`, a real local `IpcServer`,
+and the Qt-free client driving both on Unix sockets or Windows named pipes.
 
 The server runs on the GUI thread, so the client is asked from a worker thread while this one keeps
 pumping `processEvents`; `call` and `failure` below wrap that so a test reads as one line.
@@ -37,9 +37,9 @@ def window(qt_app, tmp_path_factory):
     """One window for the module, reset between tests: a fresh one per test would leave the closed
     ones to be collected, and a headless run cannot afford a pile of live top-level widgets."""
     root = tmp_path_factory.mktemp("ipc")
-    previous = os.environ.get(ipc.ENV_RUN)
+    patcher = pytest.MonkeyPatch()
+    patcher.setattr(ipc, "runtime_dir", lambda *parts: root.joinpath(*parts))
     previous_state = os.environ.get("NAMIOTO_STATE")
-    os.environ[ipc.ENV_RUN] = str(root / "run.json")
     os.environ["NAMIOTO_STATE"] = str(root / "state.json")
     built = MainWindow()
     built.resize(1000, 640)
@@ -51,10 +51,7 @@ def window(qt_app, tmp_path_factory):
     built.close()
     built.deleteLater()
     qt_app.processEvents()
-    if previous is None:
-        os.environ.pop(ipc.ENV_RUN, None)
-    else:
-        os.environ[ipc.ENV_RUN] = previous
+    patcher.undo()
     if previous_state is None:
         os.environ.pop("NAMIOTO_STATE", None)
     else:
@@ -70,8 +67,8 @@ def clean_window(window):
 
 
 @pytest.fixture
-def endpoint(window, tmp_path):
-    bound = window.start_ipc(str(tmp_path / "control.sock"))
+def endpoint(window):
+    bound = window.start_ipc()
     assert bound is not None
     return bound
 
@@ -158,10 +155,11 @@ def watcher(endpoint):
 def test_ipc_command_line_flags():
     from namioto.ui.app import parse_args
 
-    assert parse_args([]).ipc is None and parse_args([]).no_ipc is False
-    assert parse_args(["--ipc"]).ipc == ""
-    assert parse_args(["--ipc", "/tmp/x.sock"]).ipc == "/tmp/x.sock"
-    assert parse_args(["--no-ipc"]).no_ipc is True
+    assert parse_args([]).ipc is None
+    assert parse_args(["--ipc"]).ipc is True
+    assert parse_args(["--no-ipc"]).ipc is False
+    with pytest.raises(SystemExit):
+        parse_args(["--ipc", "--endpoint", "/tmp/x.sock"])
 
 
 def test_ping_version_and_commands(qt_app, endpoint):
@@ -321,28 +319,85 @@ def test_status_messages_are_broadcast(qt_app, endpoint, watcher, tmp_path):
     assert "song.nto" in message["data"]["text"]
 
 
-def test_tcp_endpoint_needs_its_token(qt_app, window, tmp_path, monkeypatch):
-    monkeypatch.setenv(ipc.ENV_TOKEN, "s3cret")
-    endpoint = window.start_ipc("tcp://127.0.0.1:0")
-    assert endpoint.kind == "tcp" and endpoint.token == "s3cret"
-    assert failure(qt_app, ipc.Endpoint("tcp", endpoint.address, ""), "ping").code == "unauthorized"
-    assert call(qt_app, endpoint, "ping") == {"pong": True}
+def test_local_endpoint_is_restricted_to_current_user(window, endpoint):
+    from pathlib import Path
+
+    from PySide6.QtNetwork import QLocalServer
+
+    assert window.ipc._local.socketOptions() == QLocalServer.SocketOption.UserAccessOption
+    if os.name == "nt":
+        assert endpoint.kind == "pipe"
+        assert endpoint.address.startswith("\\\\.\\pipe\\")
+    else:
+        path = Path(endpoint.address)
+        assert path.stat().st_mode & 0o777 == 0o600
+        assert path.parent.stat().st_mode & 0o777 == 0o700
 
 
-def test_stop_removes_the_run_file(window, tmp_path, monkeypatch):
-    run = tmp_path / "run.json"
-    monkeypatch.setenv(ipc.ENV_RUN, str(run))
-    window.reset_document()
-    assert window.start_ipc(str(tmp_path / "control.sock")) is not None
+def test_stop_removes_only_its_own_run_file(window, endpoint):
+    other = ipc.listen_endpoint()
+    ipc.write_run(other)
+    run = ipc.run_path(endpoint.instance)
     assert run.exists()
     window.stop_ipc()
     assert not run.exists()
+    assert ipc.resolve_endpoint() == other
+    ipc.remove_run(other.instance)
+
+
+def test_multiple_servers_default_to_first(qt_app, window, endpoint):
+    from namioto.ui.ipc_server import IpcServer
+
+    other = IpcServer(ipc.listen_endpoint())
+    other.dispatcher.register("ping", lambda params: {"second": True})
+    bound = other.start()
+    ipc.write_run(bound)
+    try:
+        assert ipc.resolve_endpoint() == endpoint
+        assert call(qt_app, ipc.resolve_endpoint(), "ping") == {"pong": True}
+        assert call(qt_app, ipc.resolve_endpoint(bound.instance), "ping") == {"second": True}
+        window.stop_ipc()
+        assert ipc.resolve_endpoint() == bound
+    finally:
+        other.stop()
+        other.deleteLater()
+        ipc.remove_run(bound.instance)
+
+
+def test_default_settings_enable_ipc():
+    assert store.Settings().remote.enabled is True
+    assert not hasattr(store.Settings().remote, "address")
+
+
+@pytest.mark.parametrize(
+    "preference, override, expected", [(True, None, True), (True, False, False), (False, True, True)]
+)
+def test_startup_and_run_overrides(qt_app, preference, override, expected):
+    settings = store.Settings()
+    settings.remote.enabled = preference
+    built = MainWindow(settings, ipc_enabled=override)
+    try:
+        assert (built.ipc is not None) is expected
+        assert built.settings.remote.enabled is preference
+    finally:
+        built.close()
+        built.deleteLater()
+        qt_app.processEvents()
+
+
+def test_discovery_write_failure_does_not_leave_a_listener(window, monkeypatch):
+    def fail(endpoint):
+        raise OSError("cannot write discovery record")
+
+    monkeypatch.setattr(ipc, "write_run", fail)
+    assert window.start_ipc() is None
+    assert window.ipc is None
+    assert "could not start" in window.statusBar().currentMessage()
 
 
 def test_a_settings_change_starts_and_stops_the_interface(window):
     enabled = store.clone(window.settings)
     enabled.remote.enabled = True
-    enabled.remote.address = ""
     window.settings_store.apply(enabled)
     assert window.ipc is not None
     disabled = store.clone(enabled)
@@ -450,8 +505,8 @@ def test_session_cli_matches_file_cli_with_saved_exports(qt_app, window, endpoin
             lambda: ass_cli.main(
                 [
                     "--session",
-                    "--endpoint",
-                    endpoint.address,
+                    "--instance",
+                    endpoint.instance,
                     "--out",
                     str(session_ass),
                     "--save-krc",
@@ -513,8 +568,8 @@ def test_session_watch_rebuilds_after_an_edit_and_exits_on_disconnect(qt_app, wi
         lambda: ass_cli.main(
             [
                 "--session",
-                "--endpoint",
-                endpoint.address,
+                "--instance",
+                endpoint.instance,
                 "--out",
                 str(target),
                 "--watch",
@@ -524,6 +579,25 @@ def test_session_watch_rebuilds_after_an_edit_and_exits_on_disconnect(qt_app, wi
     assert result == 1
     assert len(seen) == 2
     assert target.read_bytes() == seen[1]
+
+
+def test_large_messages_round_trip(qt_app, window, endpoint):
+    window.ipc.dispatcher.register("test.echo", lambda params: params)
+    payload = {"text": "lyrics 日本語" * 20000}
+    assert call(qt_app, endpoint, "test.echo", payload) == payload
+
+
+def test_event_wait_recovers_after_timeout(qt_app, window, endpoint):
+    with ipc.Client(endpoint, keep_events=False) as client:
+        assert _run(qt_app, lambda: client.request("ping")) == {"pong": True}
+        events = client.events(timeout=0.02)
+        try:
+            assert _run(qt_app, lambda: next(events)) is None
+            assert _run(qt_app, lambda: next(events)) is None
+            window.ipc.broadcast("test.event", {"ready": True})
+            assert _run(qt_app, lambda: next(events)) == {"event": "test.event", "data": {"ready": True}}
+        finally:
+            events.close()
 
 
 @pytest.mark.parametrize("keep_events", [True, False])

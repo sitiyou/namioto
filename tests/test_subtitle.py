@@ -168,7 +168,7 @@ def test_session_cli_builds_locally_and_saves_exact_intermediate_exports(exports
 
     class Client:
         def __init__(self, endpoint, **kwargs):
-            assert endpoint.address == "/tmp/explicit.sock"
+            assert endpoint.instance == "explicit"
             assert kwargs["keep_events"] is False
 
         def __enter__(self):
@@ -187,14 +187,15 @@ def test_session_cli_builds_locally_and_saves_exact_intermediate_exports(exports
             }
 
     monkeypatch.setattr(ipc, "Client", Client)
+    monkeypatch.setattr(ipc, "resolve_endpoint", lambda instance: ipc.Endpoint("unix", "internal", instance))
     monkeypatch.setenv("NAMIOTO_ASS_SPACING", "7")
     target, saved_krc, saved_midi = (tmp_path / name for name in ("out.ass", "out.krc", "out.mid"))
     assert (
         ass_cli.main(
             [
                 "--session",
-                "--endpoint",
-                "/tmp/explicit.sock",
+                "--instance",
+                "explicit",
                 "--out",
                 str(target),
                 "--save-krc",
@@ -275,6 +276,7 @@ def test_session_watch_stops_on_disconnect_without_rediscovery(monkeypatch, tmp_
             raise ipc.IpcError("closed", "the server closed the connection")
 
     monkeypatch.setattr(ipc, "Client", Client)
+    monkeypatch.setattr(ipc, "resolve_endpoint", lambda instance: ipc.Endpoint("unix", "internal", "first"))
     assert ass_cli.main(["--session", "--watch", "--out", str(tmp_path / "out.ass")]) == 1
     assert len(connected) == 1
     assert "closed" in capsys.readouterr().err
