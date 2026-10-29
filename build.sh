@@ -44,6 +44,7 @@ freeze() {
     # tree, which holds no compiled extension.
     local name="$1" module="$2" launcher="build/$1-entry.py"
     shift 2
+    mkdir -p build
     printf 'from %s import main\n\nraise SystemExit(main())\n' "$module" > "$launcher"
     uv run --no-editable --with pyinstaller pyinstaller "${pyinstaller_common[@]}" \
         --name "$name" \
