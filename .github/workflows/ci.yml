@@ -65,14 +65,21 @@ jobs:
         run: |
           gh release download 1.9.1 --repo AppImage/appimagetool --pattern appimagetool-x86_64.AppImage --dir build
           chmod +x build/appimagetool-x86_64.AppImage
-          python scripts/package_release.py --appimagetool build/appimagetool-x86_64.AppImage
-      - name: Package Windows portable application
-        if: runner.os == 'Windows'
-        run: python scripts/package_release.py
-      - uses: actions/upload-artifact@v4
+          python scripts/package_release.py appimage --appimagetool build/appimagetool-x86_64.AppImage
+      - name: Upload Linux package
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
         with:
-          name: namioto-${{ runner.os }}-x86_64
-          path: dist/release/*
+          name: namioto-Linux-x86_64
+          path: dist/release/namioto-linux-x86_64.AppImage
+          if-no-files-found: error
+          retention-days: 14
+      - name: Upload Windows application
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v4
+        with:
+          name: namioto-Windows-x86_64
+          path: dist/namioto
           if-no-files-found: error
           retention-days: 14
 
@@ -83,11 +90,16 @@ jobs:
     permissions:
       contents: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           pattern: namioto-*-x86_64
-          path: release
-          merge-multiple: true
+          path: artifacts
+      - name: Assemble release assets
+        run: |
+          mkdir -p release
+          cp artifacts/namioto-Linux-x86_64/namioto-linux-x86_64.AppImage release/
+          python scripts/package_release.py windows --app artifacts/namioto-Windows-x86_64 --output release
       - name: Create draft release
         env:
           GH_TOKEN: ${{ github.token }}

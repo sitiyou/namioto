@@ -58,8 +58,9 @@ The CI workflow runs lint and the default headless tests on Ubuntu 24.04 for pul
 main-branch commits, version tags and manual runs. Slow tests are excluded.
 
 Every run builds the CPU-only GUI on Ubuntu 24.04 x86_64 and Windows x64 after checks pass,
-and uploads both packages as Actions artifacts. Only a `v*` tag push creates a GitHub Release
-**draft** containing:
+and uploads it as an Actions artifact: the AppImage for Linux, the frozen application directory
+for Windows (extract the downloaded artifact and run `namioto.exe`). Only a `v*` tag push creates
+a GitHub Release **draft** containing:
 
 - `namioto-linux-x86_64.AppImage`
 - `namioto-windows-x86_64.zip` (extract the entire archive and run `namioto/namioto.exe`)
@@ -79,9 +80,9 @@ To package locally, first run `bash build.sh app`, then:
 
 ```bash
 # Linux: download appimagetool 1.9.1 for x86_64 and make it executable first
-python scripts/package_release.py --appimagetool /path/to/appimagetool-x86_64.AppImage
-# Windows (with a C++ compiler environment available)
-python scripts/package_release.py
+python scripts/package_release.py appimage --appimagetool /path/to/appimagetool-x86_64.AppImage
+# Windows: zip the frozen application, which needs no compiler environment
+python scripts/package_release.py windows
 ```
 
 Packages are written to `dist/release/`.

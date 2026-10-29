@@ -22,7 +22,6 @@ EOF
 pyinstaller_common=(
     --noconfirm
     --clean
-    --paths .
     --specpath build
     --additional-hooks-dir scripts/pyinstaller-hooks
 )
@@ -33,20 +32,24 @@ build_wheel() {
 
 build_cli() {
     uv sync --extra cpu
-    freeze_cli namioto/cli.py namioto-cli \
+    freeze namioto-cli namioto.cli \
         --collect-submodules namioto.analysis \
         --hidden-import namioto.ass_cli \
         --collect-all janome
 }
 
-freeze_cli() {
-    local entry="$1" name="$2"
+freeze() {
+    # The entry script lives outside the package: PyInstaller puts the directory it infers from the
+    # script ahead of site-packages, so a script inside `namioto/` would be answered by the source
+    # tree, which holds no compiled extension.
+    local name="$1" module="$2" launcher="build/$1-entry.py"
     shift 2
+    printf 'from %s import main\n\nraise SystemExit(main())\n' "$module" > "$launcher"
     uv run --no-editable --with pyinstaller pyinstaller "${pyinstaller_common[@]}" \
         --name "$name" \
         --onedir \
         "$@" \
-        "$entry"
+        "$launcher"
     copy_licenses "dist/$name"
 }
 
@@ -54,14 +57,10 @@ build_app() {
     # a frozen app needs the compiled extension inside the package, so the project is installed as
     # a wheel rather than in the editable layout, which keeps it under build/
     uv sync --locked --extra cpu --no-editable --reinstall-package namioto
-    uv run --no-editable --with pyinstaller pyinstaller "${pyinstaller_common[@]}" \
-        --name namioto \
-        --onedir \
+    freeze namioto namioto.ui.app \
         --windowed \
         --collect-data qtawesome \
-        --collect-all janome \
-        namioto/ui/app.py
-    copy_licenses dist/namioto
+        --collect-all janome
 }
 
 copy_licenses() {
@@ -71,12 +70,12 @@ copy_licenses() {
 case "${1:-}" in
     wheel) build_wheel ;;
     cli) build_cli ;;
-    ctl) freeze_cli namioto/ipc.py namioto-ctl ;;
+    ctl) freeze namioto-ctl namioto.ipc ;;
     app) build_app ;;
     all)
         build_wheel
         build_cli
-        freeze_cli namioto/ipc.py namioto-ctl
+        freeze namioto-ctl namioto.ipc
         build_app
         ;;
     clean) rm -rf build dist ;;
