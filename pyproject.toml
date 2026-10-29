@@ -3,7 +3,7 @@ name = "namioto"
 version = "0.1.0"
 description = "A WaveTone-style MIDI editor with spectrum assisted transcription"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.14,<3.15"
 license = "AGPL-3.0-only"
 license-files = ["LICENSE", "NOTICE"]
 authors = [{ name = "sitiyou" }]
@@ -61,6 +61,11 @@ conflicts = [[{ extra = "cpu" }, { extra = "cuda" }], [{ extra = "cuda" }, { ext
 name = "pytorch-cpu"
 url = "https://mirror.sjtu.edu.cn/pytorch-wheels/cpu"
 explicit = true
+
+[[tool.uv.index]]
+name = "pypi"
+url = "https://pypi.org/simple"
+default = true
 
 [tool.uv.sources]
 torch = { index = "pytorch-cpu" }

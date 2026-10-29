@@ -47,7 +47,7 @@ See the [lyrics guide](docs/lyrics.md) for the editing and export workflow.
 
 ## Install and launch
 
-You need [uv](https://docs.astral.sh/uv/), Python 3.12 or newer, and a C++17 compiler.
+You need [uv](https://docs.astral.sh/uv/), Python 3.14, and a C++17 compiler.
 For a source checkout, first follow the [source setup prerequisites](docs/development.md#source-setup).
 From the cloned repository directory, run:
 

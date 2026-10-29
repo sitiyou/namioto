@@ -4,9 +4,12 @@
 
 ## Source setup
 
-Install uv, Python 3.12+ and a C++17 compiler. `kara-templater==0.2.1` is installed from
+Install uv, Python 3.14 and a C++17 compiler. `kara-templater==0.2.1` is installed from
 the package index; no sibling checkout is required. Platforms without a compatible wheel also
-need its native font/shaping build dependencies. Then run from the repository root:
+need its native font/shaping build dependencies. Development and CI both read Python 3.14 from
+`.python-version`; patch releases can update within that series. The project explicitly uses
+PyPI as its default package index so the lockfile does not depend on a developer's global mirror
+configuration. Then run from the repository root:
 
 ```bash
 uv sync --extra cpu
