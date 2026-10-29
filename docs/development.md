@@ -57,8 +57,9 @@ Frozen CLI/GUI builds collect `kara-templater`'s native text metrics and package
 The CI workflow runs lint and the default headless tests on Ubuntu 24.04 for pull requests,
 main-branch commits, version tags and manual runs. Slow tests are excluded.
 
-A `v*` tag builds the CPU-only GUI on Ubuntu 24.04 x86_64 and Windows x64, then creates a
-GitHub Release **draft** containing:
+Every run builds the CPU-only GUI on Ubuntu 24.04 x86_64 and Windows x64 after checks pass,
+and uploads both packages as Actions artifacts. Only a `v*` tag push creates a GitHub Release
+**draft** containing:
 
 - `namioto-linux-x86_64.AppImage`
 - `namioto-windows-x86_64.zip` (extract the entire archive and run `namioto/namioto.exe`)
@@ -71,7 +72,6 @@ newer compatible systems; older glibc distributions such as Ubuntu 22.04 are not
 AppImage execution normally requires FUSE; where unavailable, use its
 `--appimage-extract-and-run` option.
 
-Manual workflow runs upload the two packages as Actions artifacts without creating a Release.
 No wheel, sdist or separate CLI package is published by this workflow. Both applications keep
 settings and downloaded models in the normal user directories, not beside the executable.
 
