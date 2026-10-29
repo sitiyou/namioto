@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from PySide6.QtGui import QFont, QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 from namioto import project
@@ -33,6 +34,18 @@ def qt_app():
     app.setStyle("Fusion")
     theme.apply(app)
     return app
+
+
+@pytest.fixture
+def cjk_font(qt_app):
+    family = "Noto Sans CJK JP"
+    assert family in QFontDatabase.families(), "Install Noto CJK fonts to run lyric rendering tests"
+    original = qt_app.font()
+    qt_app.setFont(QFont(family, 10))
+    try:
+        yield
+    finally:
+        qt_app.setFont(original)
 
 
 @pytest.fixture(autouse=True)

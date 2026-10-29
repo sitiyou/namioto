@@ -447,8 +447,14 @@ class MainWindow(QMainWindow):
             (QKeySequence.StandardKey.Undo, self.view.undo),
             (QKeySequence.StandardKey.Redo, self.view.redo),
         ):
-            QShortcut(QKeySequence(standard), self).activated.connect(slot)
-        QShortcut(QKeySequence("Ctrl+Y"), self).activated.connect(self.view.redo)
+            keys = QKeySequence.keyBindings(standard)
+            if standard == QKeySequence.StandardKey.Redo:
+                for sequence in (QKeySequence("Ctrl+Shift+Z"), QKeySequence("Ctrl+Y")):
+                    if sequence not in keys:
+                        keys.append(sequence)
+            shortcut = QShortcut(self)
+            shortcut.setKeys(keys)
+            shortcut.activated.connect(slot)
         self.cursor_note = QLabel()
         self.statusBar().addPermanentWidget(self.cursor_note)
         self._restore_session()

@@ -32,6 +32,9 @@ uvx ruff format namioto tests
 uv run scripts/bench_spectrum.py
 ```
 
+The lyric pixel-rendering test requires Noto CJK fonts (`fonts-noto-cjk` on Ubuntu) and uses
+Noto Sans CJK JP explicitly so glyph rendering does not depend on the desktop's default font.
+
 The default test run excludes slow beat-tracker tests. Tests must not require a display,
 a synthesiser or an audio device. See `tests/conftest.py` and `tests/test_ui.py`
 for the enforced boundaries.

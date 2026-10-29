@@ -222,7 +222,7 @@ def test_a_merge_lights_the_whole_run(own_window) -> None:
     assert view.highlight_sounds == ((0, 0), (0, 1))
 
 
-def test_the_strip_paints_the_lyric_highlight(own_window) -> None:
+def test_the_strip_paints_the_lyric_highlight(cjk_font, own_window) -> None:
     own_window.transport.bpm.setValue(60.0)
     view = own_window.view
     view.set_notes(((60, 0.0, 1.0, 0),))

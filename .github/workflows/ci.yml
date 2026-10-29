@@ -23,7 +23,7 @@ jobs:
       - name: Install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libasound2-dev libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0
+          sudo apt-get install -y libasound2-dev libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 fonts-noto-cjk
       - run: uv sync --locked --extra cpu
       - run: uvx ruff check namioto tests scripts/package_release.py
       - run: uv run --no-sync pytest
