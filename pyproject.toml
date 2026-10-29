@@ -63,7 +63,6 @@ url = "https://mirror.sjtu.edu.cn/pytorch-wheels/cpu"
 explicit = true
 
 [tool.uv.sources]
-kara-templater = { path = "../kara-templater", editable = true }
 torch = { index = "pytorch-cpu" }
 torchaudio = { index = "pytorch-cpu" }
 

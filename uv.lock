@@ -464,7 +464,16 @@ wheels = [
 [[package]]
 name = "kara-templater"
 version = "0.2.1"
-source = { editable = "../kara-templater" }
+source = { registry = "https://pypi.tuna.tsinghua.edu.cn/simple" }
+sdist = { url = "https://pypi.tuna.tsinghua.edu.cn/packages/d2/66/d93406a9b0d67553328448b73491edbea01c4b663c9adae96d134f814564/kara_templater-0.2.1.tar.gz", hash = "sha256:df84a856f14072128fc2b19e7864a3be1c5f37805c784089887ddee73d865f0d", size = 399233, upload-time = "2026-10-28T12:26:43.824Z" }
+wheels = [
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/eb/3d/32e38c30b62cee0a8e24cd42159b97ecd979356a6ed90c3111893f1faece/kara_templater-0.2.1-cp312-cp312-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:9b7710e76a6551ac0a07e14cd1f07ec4933dbda41282321c8d0605b5728ab53b", size = 700601, upload-time = "2026-10-28T12:26:32.655Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/26/5b/3e77b4c3944d988dcfbe4302873e9778473dd069515e080499919337f8af/kara_templater-0.2.1-cp312-cp312-win_amd64.whl", hash = "sha256:9620804fc36318c44aba14646b4364f491499822146c470ab3c84072cd684430", size = 5310870, upload-time = "2026-10-28T12:26:34.655Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/9a/ba/89fec1498ade801ec01904b3032b8383ae105d514846054082d7127cac4e/kara_templater-0.2.1-cp313-cp313-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:0a070ec1354d3ea78c0cbb15a636f60eda8afc0bc5363cbfa23a139596ce8cdc", size = 700802, upload-time = "2026-10-28T12:26:36.255Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/44/5f/fa7be7629a4f65c66d659b693be8536e05d9cdddd6ba0bb36333b0dd7c81/kara_templater-0.2.1-cp313-cp313-win_amd64.whl", hash = "sha256:1bcae5fbdcbb858730d85debf3be03dd2dcdb648c74b0f0a14b658ec9e3733e4", size = 5310853, upload-time = "2026-10-28T12:26:38.113Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/eb/a7/9b263b1a443ab9d628d32bf9ef827cd59eec384bb7c6562faa45b06d852c/kara_templater-0.2.1-cp314-cp314-manylinux_2_24_x86_64.manylinux_2_28_x86_64.whl", hash = "sha256:b23058860ba5cf16f2d072cbcbb2a65fca223c0fadc69923adb55d31c28811a5", size = 700854, upload-time = "2026-10-28T12:26:39.775Z" },
+    { url = "https://pypi.tuna.tsinghua.edu.cn/packages/f5/9a/0f5dbe1be659986a010282257bb304d0c974d512a4c9169df5c35b2be4e2/kara_templater-0.2.1-cp314-cp314-win_amd64.whl", hash = "sha256:09ebce0df05ab1596bbd19bb19063aec2febd9a8d3549c3f09b466bd8da1e9a8", size = 5473654, upload-time = "2026-10-28T12:26:41.776Z" },
+]
 
 [[package]]
 name = "lark"
@@ -825,7 +834,7 @@ export = [
 [package.metadata]
 requires-dist = [
     { name = "janome", specifier = ">=0.5.0" },
-    { name = "kara-templater", editable = "../kara-templater" },
+    { name = "kara-templater", specifier = "==0.2.1" },
     { name = "lark", specifier = ">=1.3.1" },
     { name = "librosa", specifier = ">=1.0" },
     { name = "mido", specifier = ">=1.3.3" },
