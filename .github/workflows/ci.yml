@@ -1,0 +1,96 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  checks:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0
+      - run: uv sync --locked --extra cpu
+      - run: uvx ruff check namioto tests scripts/package_release.py
+      - run: uv run --no-sync pytest
+
+  build:
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-2022]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: '3.12'
+          enable-cache: true
+      - uses: ilammy/msvc-dev-cmd@v1
+        if: runner.os == 'Windows'
+      - name: Install Linux system dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libasound2-dev libegl1 libopengl0 libxkbcommon-x11-0 libxcb-cursor0 desktop-file-utils
+      - name: Build frozen application
+        run: bash build.sh app
+      - name: Package Linux AppImage
+        if: runner.os == 'Linux'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download 1.9.1 --repo AppImage/appimagetool --pattern appimagetool-x86_64.AppImage --dir build
+          chmod +x build/appimagetool-x86_64.AppImage
+          python scripts/package_release.py --appimagetool build/appimagetool-x86_64.AppImage
+      - name: Package Windows portable application
+        if: runner.os == 'Windows'
+        run: python scripts/package_release.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: namioto-${{ runner.os }}-x86_64
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: namioto-*-x86_64
+          path: release
+          merge-multiple: true
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          cd release
+          sha256sum ./*.AppImage ./*.zip > SHA256SUMS
+          gh release create "$RELEASE_TAG" ./* --verify-tag --draft --generate-notes --title "$RELEASE_TAG"

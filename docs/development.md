@@ -4,10 +4,9 @@
 
 ## Source setup
 
-Install uv, Python 3.12+ and a C++17 compiler. Place a `kara-templater` 0.2.1 source
-checkout beside this repository (`../kara-templater`); uv uses it as an editable dependency.
-Its native text metrics also need the font/shaping build dependencies listed in that project's
-installation guide. Then run from the repository root:
+Install uv, Python 3.12+ and a C++17 compiler. `kara-templater==0.2.1` is installed from
+the package index; no sibling checkout is required. Platforms without a compatible wheel also
+need its native font/shaping build dependencies. Then run from the repository root:
 
 ```bash
 uv sync --extra cpu
@@ -45,9 +44,41 @@ for the enforced boundaries.
 ./build.sh clean
 ```
 
-Publish `kara-templater` 0.2.1 before distributing Namioto: its wheel metadata pins that version
-from the package index, not the editable source path. Frozen CLI/GUI builds collect the library's
-native text metrics and package license metadata.
+Frozen CLI/GUI builds collect `kara-templater`'s native text metrics and package license metadata.
+
+### GitHub Actions and releases
+
+The CI workflow runs lint and the default headless tests on Ubuntu 24.04 for pull requests,
+main-branch commits, version tags and manual runs. Slow tests are excluded.
+
+A `v*` tag builds the CPU-only GUI on Ubuntu 24.04 x86_64 and Windows x64, then creates a
+GitHub Release **draft** containing:
+
+- `namioto-linux-x86_64.AppImage`
+- `namioto-windows-x86_64.zip` (extract the entire archive and run `namioto/namioto.exe`)
+- `SHA256SUMS`
+
+Review the draft and manually test the applications before publishing. The workflow verifies
+build/package success, not application startup, desktop interaction or audio-device operation.
+Windows builds are unsigned and may trigger SmartScreen. Linux builds target Ubuntu 24.04 and
+newer compatible systems; older glibc distributions such as Ubuntu 22.04 are not supported.
+AppImage execution normally requires FUSE; where unavailable, use its
+`--appimage-extract-and-run` option.
+
+Manual workflow runs upload the two packages as Actions artifacts without creating a Release.
+No wheel, sdist or separate CLI package is published by this workflow. Both applications keep
+settings and downloaded models in the normal user directories, not beside the executable.
+
+To package locally, first run `bash build.sh app`, then:
+
+```bash
+# Linux: download appimagetool 1.9.1 for x86_64 and make it executable first
+python scripts/package_release.py --appimagetool /path/to/appimagetool-x86_64.AppImage
+# Windows (with a C++ compiler environment available)
+python scripts/package_release.py
+```
+
+Packages are written to `dist/release/`.
 
 Published wheels include the native extension; source distributions require compilation.
 Neither wheels nor frozen builds bundle analysis models. Model publishing uses
