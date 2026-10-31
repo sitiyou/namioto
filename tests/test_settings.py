@@ -4,6 +4,8 @@
 from __future__ import annotations
 
 import json
+import runpy
+import sys
 from pathlib import Path
 
 import platformdirs
@@ -60,6 +62,18 @@ def test_missing_file_gives_the_defaults(settings_file) -> None:
     assert store.to_dict(loaded) == store.to_dict(store.Settings())
     assert store.get_value(loaded, "editor", "auto_page") is False
     assert store.get_value(loaded, "midi", "wavetone") is True
+
+
+@pytest.mark.parametrize("platform, expected", [("win32", "Fusion"), ("linux", ""), ("darwin", "")])
+def test_the_default_style_is_fusion_only_on_windows(monkeypatch, platform, expected) -> None:
+    with monkeypatch.context() as patch:
+        patch.setattr(sys, "platform", platform)
+        settings_module = runpy.run_path(store.__file__)
+    assert settings_module["Settings"]().general.style == expected
+    assert settings_module["from_dict"]({"general": {}}).general.style == expected
+    for saved_style in ("", "Windows", "Fusion"):
+        loaded = settings_module["from_dict"]({"general": {"style": saved_style}})
+        assert loaded.general.style == saved_style
 
 
 def test_the_default_path_is_the_config_directory(monkeypatch) -> None:

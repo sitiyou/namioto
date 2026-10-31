@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import warnings
 from pathlib import Path
 
@@ -51,7 +52,7 @@ SECTIONS: tuple[Section, ...] = (
             Field(
                 "style",
                 "style",
-                "",
+                "Fusion" if sys.platform == "win32" else "",
                 "Style",
                 "Which widget style draws the window; the desktop's own unless another one is picked",
             ),
