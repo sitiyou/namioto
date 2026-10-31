@@ -53,6 +53,7 @@ class NotePlayer(QObject):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.gain = 1.0
+        self.delay_ms = 0
 
     def set_program(self, notes, speed, channels=()) -> None:
         """Prepare the notes to play: `(pitch, start, duration[, channel])` in seconds, the
@@ -139,11 +140,14 @@ class MidiPortOut(NotePlayer):
         self.velocity = velocity
         self._notes: tuple[tuple[int, float, float, int], ...] = ()
         self._speed = 1.0
+        self._delay = 0.0
         self._start = 0.0
         self._started: float | None = None
         self._stopping = False
         self._sounding: dict[tuple[int, int], int] = {}  # (channel, pitch) -> note-ons still owed an off
         self._previews: dict[int, threading.Timer] = {}
+        self._preview_sounding: set[int] = set()
+        self._lock = threading.RLock()
         self._thread: threading.Thread | None = None
 
     @property
@@ -184,7 +188,7 @@ class MidiPortOut(NotePlayer):
     def position(self) -> float:
         if self._started is None:
             return self._start
-        return self._start + (time.monotonic() - self._started) * self._speed
+        return min(self.duration, self._start + (time.monotonic() - self._started) * self._speed)
 
     @property
     def is_playing(self) -> bool:
@@ -195,6 +199,7 @@ class MidiPortOut(NotePlayer):
         if not self._notes:
             return
         self._start = max(0.0, min(seconds, self.duration))
+        self._delay = self.delay_ms / 1000.0
         self._started = time.monotonic()
         self._stopping = False
         self._thread = threading.Thread(target=self._schedule, daemon=True)
@@ -209,6 +214,7 @@ class MidiPortOut(NotePlayer):
         if self.is_playing:
             self.play(seconds)
         else:
+            self.stop()
             # the end of the program is not the end of the timeline: play() clamps when the sound starts
             self._start = max(0.0, seconds)
 
@@ -217,52 +223,75 @@ class MidiPortOut(NotePlayer):
         if self._thread is not None:
             self._thread.join(timeout=0.5)
             self._thread = None
-        for timer in self._previews.values():
-            timer.cancel()
-        self._previews.clear()
-        for (channel, pitch), count in tuple(self._sounding.items()):  # a synth keeps sounding until it is told to stop
-            for _ in range(count):
-                self._send(NOTE_OFF, pitch, 0, channel)
-        self._sounding.clear()
-        for channel in tuple(self._programs):  # catches a voice the bookkeeping lost, which an exact sweep cannot
-            self.port.send_message([CHANNEL_VOLUME[0] | channel, ALL_NOTES_OFF, 0])
+        with self._lock:
+            for timer in self._previews.values():
+                timer.cancel()
+            self._previews.clear()
+            self._preview_sounding.clear()
+            for (channel, pitch), count in tuple(self._sounding.items()):
+                for _ in range(count):
+                    self._send(NOTE_OFF, pitch, 0, channel)
+            self._sounding.clear()
+            for channel in tuple(self._programs):  # catches a voice the bookkeeping lost, which an exact sweep cannot
+                self.port.send_message([CHANNEL_VOLUME[0] | channel, ALL_NOTES_OFF, 0])
         self._started = None
         self._start = 0.0
 
     def preview(self, pitch: int, seconds: float = PREVIEW_SECONDS) -> None:
         """Audition one note; clicking it again restarts it, which needs the old note released first."""
-        pending = self._previews.pop(pitch, None)
-        if pending is not None:
-            pending.cancel()
-            self._send(NOTE_OFF, pitch, 0)  # a synth still holding the note only layers a second one
-        self._send(NOTE_ON, pitch, self.velocity)
-
-        def release() -> None:
-            if self._previews.get(pitch) is timer:  # a newer click owns the note by now
-                self._previews.pop(pitch, None)
+        with self._lock:
+            pending = self._previews.pop(pitch, None)
+            if pending is not None:
+                pending.cancel()
+            if pitch in self._preview_sounding:
+                self._preview_sounding.remove(pitch)
                 self._send(NOTE_OFF, pitch, 0)
 
-        timer = threading.Timer(seconds, release)
-        timer.daemon = True
-        self._previews[pitch] = timer
-        timer.start()
+            def release() -> None:
+                with self._lock:
+                    if self._previews.get(pitch) is timer:
+                        self._previews.pop(pitch)
+                        self._preview_sounding.remove(pitch)
+                        self._send(NOTE_OFF, pitch, 0)
+
+            def begin() -> None:
+                nonlocal timer
+                with self._lock:
+                    if self._previews.get(pitch) is not timer:
+                        return
+                    self._send(NOTE_ON, pitch, self.velocity)
+                    self._preview_sounding.add(pitch)
+                    timer = threading.Timer(seconds, release)
+                    timer.daemon = True
+                    self._previews[pitch] = timer
+                    timer.start()
+
+            delay = max(0.0, self.delay_ms / 1000.0)
+            timer = threading.Timer(delay, begin)
+            timer.daemon = True
+            self._previews[pitch] = timer
+            if delay:
+                timer.start()
+            else:
+                begin()
 
     def _schedule(self) -> None:
         started = self._started
         events: list[tuple[float, int, int, int]] = []
         for pitch, start, duration, channel in self._notes:
-            if start + duration <= self._start:
+            end = (start + duration - self._start) / self._speed + self._delay
+            if start < self._start or end <= 0:
                 continue
-            begin = max(start, self._start)
-            events.append(((begin - self._start) / self._speed, NOTE_ON, pitch, channel))
-            events.append(((start + duration - self._start) / self._speed, NOTE_OFF, pitch, channel))
+            begin = max(0.0, (start - self._start) / self._speed + self._delay)
+            events.append((begin, NOTE_ON, pitch, channel))
+            events.append((end, NOTE_OFF, pitch, channel))
         # at one tick the previous note's off goes before the next note's on; rounding to the
         # microsecond makes a start+duration that lost a bit against the next start count as one tick
         for offset, kind, pitch, channel in sorted(events, key=lambda event: (round(event[0], 6), event[1])):
             if not self._wait_until(started + offset):
                 return
             self._send(kind, pitch, self.velocity if kind == NOTE_ON else 0, channel)
-        if self._wait_until(started + (self.duration - self._start) / self._speed):
+        if self._wait_until(started + (self.duration - self._start) / self._speed + max(0.0, self._delay)):
             self._started = None
             self._start = self.duration
             self.finished.emit()
@@ -276,14 +305,15 @@ class MidiPortOut(NotePlayer):
         return False
 
     def _send(self, status: int, pitch: int, velocity: int, channel: int = 0) -> None:
-        self.port.send_message([status | channel, pitch, velocity])
-        key = (channel, pitch)
-        if status == NOTE_ON:  # a synth voices every note-on of a pitch, so each is owed its own note-off
-            self._sounding[key] = self._sounding.get(key, 0) + 1
-        elif self._sounding.get(key):
-            self._sounding[key] -= 1
-            if not self._sounding[key]:
-                del self._sounding[key]
+        with self._lock:
+            self.port.send_message([status | channel, pitch, velocity])
+            key = (channel, pitch)
+            if status == NOTE_ON:  # a synth voices every note-on of a pitch, so each is owed its own note-off
+                self._sounding[key] = self._sounding.get(key, 0) + 1
+            elif self._sounding.get(key):
+                self._sounding[key] -= 1
+                if not self._sounding[key]:
+                    del self._sounding[key]
 
 
 def open_player(

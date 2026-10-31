@@ -467,7 +467,9 @@ class MainWindow(QMainWindow):
             self.start_ipc()
 
     def _make_player(self):
-        return open_player(self)
+        player, name = open_player(self)
+        player.delay_ms = self.settings.midi.playback_delay_ms
+        return player, name
 
     def _player_key(self) -> tuple:
         """What a player is built from: a change to any of it means building a new one."""
@@ -747,6 +749,7 @@ class MainWindow(QMainWindow):
     def _on_settings_changed(self, settings) -> None:
         """The settings window applied: the program's own preferences take over at once."""
         self.settings = settings
+        self.player.delay_ms = settings.midi.playback_delay_ms
         self.subtitle_changed.emit()
         self._seed_bindings(lambda binding: binding.model is None)
         self._apply_theme()
@@ -832,6 +835,7 @@ class MainWindow(QMainWindow):
     def _send_program(self) -> None:
         """Hand the current notes and their channels to the player, as playback speed leaves them."""
         notes, programs = self._program()
+        self.player.delay_ms = self.settings.midi.playback_delay_ms
         self.player.set_program(notes, self.transport.speed.value(), programs)
 
     def _remember_configuration(self) -> None:
@@ -2191,6 +2195,7 @@ class MainWindow(QMainWindow):
         self._save_state()
         self.stop_ipc()
         self._release_lyrics_copy()
+        self.player.stop()
         self.song.close()  # the engine owns the audio device, so it leaves before the window does
         super().closeEvent(event)
 
@@ -2379,10 +2384,10 @@ class MainWindow(QMainWindow):
         if seconds >= self._duration() - 1e-3:
             seconds = 0.0
         speed = self.transport.speed.value()
+        self._send_program()
         if self.song.is_loaded:
             self.song.speed = speed
             self.song.play(seconds)
-        self._send_program()
         self.player.play(seconds)
         self._show_position()
         if self._is_playing():

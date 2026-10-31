@@ -62,6 +62,20 @@ def test_missing_file_gives_the_defaults(settings_file) -> None:
     assert store.to_dict(loaded) == store.to_dict(store.Settings())
     assert store.get_value(loaded, "editor", "auto_page") is False
     assert store.get_value(loaded, "midi", "wavetone") is True
+    assert loaded.midi.playback_delay_ms == 0
+
+
+@pytest.mark.parametrize("delay_ms", [-1000, -125, 0, 125, 1000])
+def test_midi_playback_delay_round_trips(settings_file, delay_ms) -> None:
+    settings = store.Settings()
+    settings.midi.playback_delay_ms = delay_ms
+    store.save(settings)
+    assert store.load().midi.playback_delay_ms == delay_ms
+
+
+@pytest.mark.parametrize("value, expected", [(-2000, -1000), (2000, 1000), (True, 0), ("100", 0), (None, 0)])
+def test_midi_playback_delay_is_checked(value, expected) -> None:
+    assert store.from_dict({"midi": {"playback_delay_ms": value}}).midi.playback_delay_ms == expected
 
 
 @pytest.mark.parametrize("platform, expected", [("win32", "Fusion"), ("linux", ""), ("darwin", "")])

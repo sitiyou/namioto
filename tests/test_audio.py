@@ -4,11 +4,13 @@
 from __future__ import annotations
 
 import sys
+import threading
 import time
 import types
 
 import pytest
 
+from namioto.ui import audio
 from namioto.ui.audio import (
     NOTE_OFF,
     NOTE_ON,
@@ -174,3 +176,239 @@ def test_without_midi_output_playback_and_preview_stay_silent(monkeypatch, unava
     assert player.position == 0.5
     player.stop()
     assert player.position == 0.0
+
+
+@pytest.fixture
+def scheduled_player(monkeypatch):
+    class Clock:
+        now = 100.0
+
+        def monotonic(self):
+            return self.now
+
+        def sleep(self, seconds):
+            self.now += seconds
+
+    clock = Clock()
+    timers = []
+
+    class DeferredThread:
+        def __init__(self, target, daemon):
+            self.target = target
+
+        def start(self):
+            pass
+
+        def join(self, timeout):
+            pass
+
+    class ManualTimer:
+        def __init__(self, interval, function):
+            self.interval = interval
+            self.function = function
+            self.cancelled = False
+
+        def start(self):
+            timers.append(self)
+
+        def cancel(self):
+            self.cancelled = True
+
+        def fire(self):
+            clock.now += self.interval
+            self.function()
+
+    class TimedPort(FakePort):
+        def __init__(self):
+            super().__init__()
+            self.events = []
+
+        def send_message(self, message):
+            super().send_message(message)
+            if message[0] & 0xF0 in (NOTE_ON, NOTE_OFF):
+                self.events.append((clock.now, list(message)))
+
+    monkeypatch.setattr(audio, "time", clock)
+    monkeypatch.setattr(
+        audio, "threading", types.SimpleNamespace(Thread=DeferredThread, Timer=ManualTimer, RLock=threading.RLock)
+    )
+    port = TimedPort()
+    player = MidiPortOut(port)
+    yield types.SimpleNamespace(clock=clock, timers=timers, port=port, player=player)
+    player.stop()
+
+
+@pytest.mark.parametrize("delay_ms", [-500, 0, 500])
+@pytest.mark.parametrize("speed", [0.5, 1.0, 2.0])
+def test_playback_delay_moves_both_events_in_wall_time(scheduled_player, delay_ms, speed) -> None:
+    clock, player, port = scheduled_player.clock, scheduled_player.player, scheduled_player.port
+    player.set_program([(60, 6.0, 0.4, 3)], speed)
+    player.delay_ms = delay_ms
+    finished = []
+    player.finished.connect(lambda: finished.append(clock.now))
+
+    player.play(5.0)
+    player._schedule()
+
+    assert [message for _at, message in port.events] == [[NOTE_ON | 3, 60, VELOCITY], [NOTE_OFF | 3, 60, 0]]
+    assert [at for at, _message in port.events] == pytest.approx(
+        [100.0 + 1.0 / speed + delay_ms / 1000.0, 100.0 + 1.4 / speed + delay_ms / 1000.0]
+    )
+    assert finished == pytest.approx([100.0 + 1.4 / speed + max(0, delay_ms) / 1000.0])
+    assert player.position == pytest.approx(6.4)
+    assert not player.is_playing
+
+
+@pytest.mark.parametrize("operation", ["play", "seek", "resume"])
+def test_negative_delay_starts_only_notes_covering_the_advanced_cursor(scheduled_player, operation) -> None:
+    clock, player, port = scheduled_player.clock, scheduled_player.player, scheduled_player.port
+    player.set_program(
+        [
+            (59, 9.9, 2.0),
+            (60, 10.1, 0.1),
+            (61, 10.3, 0.1),
+            (62, 10.4, 0.1),
+            (63, 10.45, 0.25),
+            (64, 10.5, 0.25, 3),
+            (65, 10.9, 0.1),
+        ],
+        1.0,
+    )
+    player.delay_ms = -500
+    if operation == "play":
+        player.play(10.0)
+    else:
+        player.play(9.0)
+        if operation == "seek":
+            player.seek(10.0)
+        else:
+            clock.now += 1.0
+            player.pause()
+            player.play(player.position)
+    started = clock.now
+    player._schedule()
+
+    assert [message for _at, message in port.events] == [
+        [NOTE_ON, 63, VELOCITY],
+        [NOTE_ON | 3, 64, VELOCITY],
+        [NOTE_OFF, 63, 0],
+        [NOTE_OFF | 3, 64, 0],
+        [NOTE_ON, 65, VELOCITY],
+        [NOTE_OFF, 65, 0],
+    ]
+    assert [at - started for at, _message in port.events] == pytest.approx([0, 0, 0.2, 0.25, 0.4, 0.5])
+
+
+@pytest.mark.parametrize("delay_ms", [-500, 0, 500])
+def test_playback_does_not_retrigger_notes_starting_left_of_the_cursor(scheduled_player, delay_ms) -> None:
+    player, port = scheduled_player.player, scheduled_player.port
+    player.set_program([(60, 0.0, 3.0), (62, 1.0, 2.0)], 1.0)
+    player.delay_ms = delay_ms
+    player.play(1.0)
+    player._schedule()
+    assert [message[1] for _at, message in port.events] == [62, 62]
+
+
+def test_negative_delay_in_a_gap_waits_for_the_next_onset(scheduled_player) -> None:
+    player, port = scheduled_player.player, scheduled_player.port
+    player.set_program([(60, 0.1, 0.1), (62, 0.8, 0.2)], 1.0)
+    player.delay_ms = -500
+    player.play()
+    player._schedule()
+    assert [message for _at, message in port.events] == [[NOTE_ON, 62, VELOCITY], [NOTE_OFF, 62, 0]]
+    assert [at for at, _message in port.events] == pytest.approx([100.3, 100.5])
+
+
+@pytest.mark.parametrize("delay_ms", [-500, 500])
+def test_playback_delay_does_not_shift_the_transport_position(scheduled_player, delay_ms) -> None:
+    player, clock = scheduled_player.player, scheduled_player.clock
+    player.set_program([(60, 1.0, 1.0)], 0.5)
+    player.delay_ms = delay_ms
+    player.play(0.5)
+    clock.now += 0.2
+    assert player.position == pytest.approx(0.6)
+    clock.now = 103.25
+    assert player.position == pytest.approx(2.0)
+
+
+def test_a_delay_change_waits_until_the_next_playback(scheduled_player) -> None:
+    player, port = scheduled_player.player, scheduled_player.port
+    player.set_program([(60, 1.0, 1.0)], 1.0)
+    player.delay_ms = -100
+    player.play()
+    player.delay_ms = 200
+    player._schedule()
+    assert [at for at, _message in port.events] == pytest.approx([100.9, 101.9])
+
+    port.events.clear()
+    started = scheduled_player.clock.now
+    player.play()
+    player._schedule()
+    assert [at - started for at, _message in port.events] == pytest.approx([1.2, 2.2])
+
+
+@pytest.mark.parametrize("delay_ms", [-1000, 0])
+def test_previews_with_nonpositive_delay_still_start_immediately(scheduled_player, delay_ms) -> None:
+    player, port = scheduled_player.player, scheduled_player.port
+    player.delay_ms = delay_ms
+    player.preview(60, 0.2)
+    assert port.events == [(100.0, [NOTE_ON, 60, VELOCITY])]
+    assert len(scheduled_player.timers) == 1
+    scheduled_player.timers[-1].fire()
+    assert port.events[-1][0] == pytest.approx(100.2)
+    assert port.events[-1][1] == [NOTE_OFF, 60, 0]
+
+
+def test_positive_preview_delay_keeps_the_full_audition_duration(scheduled_player) -> None:
+    player, port = scheduled_player.player, scheduled_player.port
+    player.delay_ms = 150
+    player.preview(60, 0.2)
+    assert not port.events
+    scheduled_player.timers[-1].fire()
+    assert port.events == [(100.15, [NOTE_ON, 60, VELOCITY])]
+    scheduled_player.timers[-1].fire()
+    assert port.events[-1][0] == pytest.approx(100.35)
+    assert port.events[-1][1] == [NOTE_OFF, 60, 0]
+
+
+@pytest.mark.parametrize("operation", ["stop", "pause", "seek"])
+def test_transport_changes_cancel_pending_delayed_previews(scheduled_player, operation) -> None:
+    player, port = scheduled_player.player, scheduled_player.port
+    player.delay_ms = 500
+    player.preview(60)
+    pending = scheduled_player.timers[-1]
+    if operation == "seek":
+        player.seek(1.0)
+    else:
+        getattr(player, operation)()
+    assert pending.cancelled
+    pending.fire()
+    assert not port.events
+
+
+def test_repeating_a_delayed_preview_cancels_its_pending_onset(scheduled_player) -> None:
+    player, port = scheduled_player.player, scheduled_player.port
+    player.delay_ms = 500
+    player.preview(60)
+    old = scheduled_player.timers[-1]
+    player.preview(60)
+    latest = scheduled_player.timers[-1]
+    assert old.cancelled
+    old.fire()
+    assert not port.events
+    latest.fire()
+    assert [message for _at, message in port.events] == [[NOTE_ON, 60, VELOCITY]]
+
+
+def test_repeating_a_sounding_preview_releases_it_before_the_next_delayed_onset(scheduled_player) -> None:
+    player, port = scheduled_player.player, scheduled_player.port
+    player.preview(60)
+    old_release = scheduled_player.timers[-1]
+    player.delay_ms = 500
+    player.preview(60)
+    assert old_release.cancelled
+    assert [message for _at, message in port.events] == [[NOTE_ON, 60, VELOCITY], [NOTE_OFF, 60, 0]]
+    old_release.fire()
+    assert len(port.events) == 2
+    scheduled_player.timers[-1].fire()
+    assert port.events[-1][1] == [NOTE_ON, 60, VELOCITY]

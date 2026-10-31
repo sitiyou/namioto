@@ -192,6 +192,10 @@ class FakeSong:
         self.position = seconds
         self.calls.append("seek")
 
+    def close(self) -> None:
+        self.is_playing = False
+        self.calls.append("close")
+
 
 def test_a_speed_change_reaches_the_notes_while_they_play(window, monkeypatch) -> None:
     song, notes = FakeSong(), FakeOutput()
@@ -359,6 +363,62 @@ def test_the_audio_file_plays_alongside_the_notes(window, monkeypatch) -> None:
     assert song.calls == ["play", "stop"] and song.position == 0.0 and not song.is_playing
     window.transport.speed.set_value(1.0)
     window.view.clear_notes()
+
+
+def test_midi_is_prepared_before_starting_the_audio(own_window, monkeypatch) -> None:
+    song, notes = FakeSong(), FakeOutput()
+    monkeypatch.setattr(own_window, "song", song)
+    monkeypatch.setattr(own_window, "player", notes)
+    own_window.settings.midi.playback_delay_ms = -125
+    own_window.view.add_note(69, 0.0, 1.0)
+    calls = []
+    prepare, play_audio, play_notes = notes.set_program, song.play, notes.play
+
+    def prepare_notes(*args):
+        calls.append("prepare")
+        prepare(*args)
+
+    def start_audio(seconds):
+        calls.append("audio")
+        play_audio(seconds)
+
+    def start_notes(seconds):
+        calls.append("midi")
+        play_notes(seconds)
+
+    monkeypatch.setattr(notes, "set_program", prepare_notes)
+    monkeypatch.setattr(song, "play", start_audio)
+    monkeypatch.setattr(notes, "play", start_notes)
+    own_window._play()
+    assert calls == ["prepare", "audio", "midi"]
+    assert notes.delay_ms == -125
+    assert song.position == notes.position == 0.0
+    own_window._stop()
+
+
+def test_midi_can_finish_its_delayed_tail_after_the_audio(own_window, monkeypatch) -> None:
+    song, notes = FakeSong(), FakeOutput()
+    monkeypatch.setattr(own_window, "song", song)
+    monkeypatch.setattr(own_window, "player", notes)
+    notes.is_playing = True
+    own_window.position_timer.start()
+    own_window._on_playback_finished()
+    assert own_window.position_timer.isActive()
+    assert not notes.calls
+    notes.is_playing = False
+    own_window._on_playback_finished()
+    assert not own_window.position_timer.isActive()
+
+
+def test_closing_the_window_cancels_pending_previews(own_window) -> None:
+    player = own_window.player
+    player.delay_ms = 1000
+    player.preview(60)
+    pending = player._previews[60]
+    own_window.close()
+    assert pending.finished.is_set()
+    assert not player._previews
+    assert not player._sounding
 
 
 def test_the_audio_file_keeps_playing_when_the_notes_end(window, monkeypatch) -> None:
