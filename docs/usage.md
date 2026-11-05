@@ -127,5 +127,5 @@ live in `~/.config/namioto/settings.json`; window state and new-project habits l
 `~/.config/namioto/state.json`. `$NAMIOTO_SETTINGS` and `$NAMIOTO_STATE` override those paths.
 Opening a project does not overwrite new-project habits.
 
-The GUI options `--channels`, `--t-num`, `--gain` and `--contrast` override values for one run
-without updating preferences. For automated workflows, see the [CLI guide](cli.md).
+For automated workflows, see the [CLI guide](cli.md). New project analysis options are chosen
+in the audio import dialog; display and analysis preferences can be changed in Settings.

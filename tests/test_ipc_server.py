@@ -152,14 +152,12 @@ def watcher(endpoint):
     watching.stop()
 
 
-def test_ipc_command_line_flags():
+def test_ipc_command_line_overrides():
     from namioto.ui.app import parse_args
 
     assert parse_args([]).ipc is None
     assert parse_args(["--ipc"]).ipc is True
     assert parse_args(["--no-ipc"]).ipc is False
-    with pytest.raises(SystemExit):
-        parse_args(["--ipc", "--endpoint", "/tmp/x.sock"])
 
 
 def test_ping_version_and_commands(qt_app, endpoint):

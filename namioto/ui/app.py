@@ -61,7 +61,7 @@ from namioto import i18n, ipc, lyrics, midi, params, project, qtplugins, subtitl
 from namioto import settings as store
 from namioto import state as window_state
 from namioto.analysis import align, bpm
-from namioto.analysis.spectrum import CHANNEL_MODES, NoteSpectrum
+from namioto.analysis.spectrum import NoteSpectrum
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
 from namioto.channels import set_field as channel_set_field
@@ -230,7 +230,7 @@ class MainWindow(QMainWindow):
     transport_changed = Signal(bool)  # whether the transport is running, on every change
     subtitle_changed = Signal()
 
-    def __init__(self, settings=None, overrides: dict | None = None, *, ipc_enabled: bool | None = None):
+    def __init__(self, settings=None, *, ipc_enabled: bool | None = None):
         super().__init__()
         self.setWindowTitle("Namioto")
         self.resize(1200, 720)
@@ -246,7 +246,6 @@ class MainWindow(QMainWindow):
         self._startup_style = self.settings.general.style
         self._startup_plugins = self.settings.general.system_qt_plugins
         theme.hints().colorSchemeChanged.connect(self._on_color_scheme)
-        self.overrides = dict(overrides or {})  # values this run was asked for, never written back
         self._display_overrides: dict[str, float] = {}
         self._seeding = False
         self._loading = False
@@ -966,33 +965,18 @@ class MainWindow(QMainWindow):
         beside = Path(path).with_suffix(project.SUFFIX)
         if beside.exists():
             return self.load_project(beside)
-        document = self._seed_analysis()
+        document = project.default_settings(self.state.project)
         dialog = OpenAudioDialog(path, document, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
         chosen = dialog.document()
         if project.remember_changes(self.state.project, document, chosen):
             self._save_state()
-        self._consume_analysis()
         self.reset_document()
         self.project_settings = chosen
         self._apply_project_settings()
         self.load_audio(path)
         return self.save_project(dialog.target())
-
-    def _seed_analysis(self) -> project.ProjectSettings:
-        """What a new document starts from, with the analysis values the command line asked for."""
-        document = project.default_settings(self.state.project)
-        for name, value in self.overrides.items():
-            if value is not None and ("analysis", name) in project.FIELD_SPECS:
-                params.set_value(document, "analysis", name, value)
-        return document
-
-    def _consume_analysis(self) -> None:
-        """The dialog took the command line's analysis values over: they are the document's now."""
-        for name in tuple(self.overrides):
-            if ("analysis", name) in project.FIELD_SPECS:
-                del self.overrides[name]
 
     def _on_save(self) -> bool:
         if self.project_path is None:
@@ -2291,7 +2275,7 @@ class MainWindow(QMainWindow):
         super().closeEvent(event)
 
     def _analysis_options(self) -> dict:
-        """What the analysis runs with: the document's values, then whatever this run was told to use."""
+        """What the analysis runs with from the current document and preferences."""
         analysis = self.project_settings.analysis
         chosen = {
             "backend": self.settings.devices.spectrum_backend,
@@ -2300,9 +2284,6 @@ class MainWindow(QMainWindow):
             "fft_points": analysis.fft_points,
             "a4": analysis.a4,
         }
-        for name, value in self.overrides.items():
-            if value is not None and name in chosen:
-                chosen[name] = value
         return chosen
 
     def _start_loader(self, attribute: str, worker: QThread) -> None:
@@ -2633,13 +2614,9 @@ class MainWindow(QMainWindow):
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(prog="namioto", description="Namioto piano-roll MIDI editor")
-    parser.add_argument("audio", nargs="?", help="audio file to analyse, or a .nto project or a .mid file to open")
-    parser.add_argument("--channels", choices=CHANNEL_MODES, help="which channels to analyse, over the settings")
-    parser.add_argument("--t-num", type=float, help="spectrum frames per second, over the settings")
-    parser.add_argument("--gain", type=float, help="spectrum gain for this run")
-    parser.add_argument("--contrast", type=float, help="spectrum contrast for this run")
+    parser.add_argument("audio", nargs="?", help="audio file, project, or MIDI file to open")
     parser.add_argument(
-        "--ipc", action=argparse.BooleanOptionalAction, default=None, help="enable local remote control"
+        "--ipc", action=argparse.BooleanOptionalAction, default=None, help="enable or disable local remote control"
     )
     return parser.parse_args(argv)
 
@@ -2652,8 +2629,7 @@ def main() -> int:
         # Qt reads its plugin paths once, while the application is being built
         QCoreApplication.setLibraryPaths([*QCoreApplication.libraryPaths(), *(str(path) for path in added)])
     app = QApplication(sys.argv)
-    window = MainWindow(settings, overrides={"channels": args.channels, "t_num": args.t_num}, ipc_enabled=args.ipc)
-    window.apply_overrides(gain=args.gain, contrast=args.contrast)
+    window = MainWindow(settings, ipc_enabled=args.ipc)
     window.show()
     if args.audio is not None:
         # a file waits for the window. Naming a project opens the platform's file chooser, and on
