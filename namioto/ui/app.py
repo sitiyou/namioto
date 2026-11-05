@@ -2294,6 +2294,7 @@ class MainWindow(QMainWindow):
         """What the analysis runs with: the document's values, then whatever this run was told to use."""
         analysis = self.project_settings.analysis
         chosen = {
+            "backend": self.settings.devices.spectrum_backend,
             "channels": analysis.channels,
             "t_num": analysis.t_num,
             "fft_points": analysis.fft_points,

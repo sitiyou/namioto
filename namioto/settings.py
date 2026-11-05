@@ -21,7 +21,7 @@ from pathlib import Path
 
 from namioto import params
 from namioto.analysis import devices
-from namioto.analysis.choices import ALGORITHMS
+from namioto.analysis.choices import ALGORITHMS, SPECTRUM_BACKENDS
 from namioto.i18n import LANGUAGE_CODES, LANGUAGE_LABELS, SYSTEM
 from namioto.params import Field, Section
 from namioto.utils import config_dir, write_json
@@ -89,6 +89,15 @@ SECTIONS: tuple[Section, ...] = (
                 "integrated one to save power",
                 choices=devices.POWER_PREFERENCES,
                 labels=devices.POWER_LABELS,
+            ),
+            Field(
+                "spectrum_backend",
+                "choice",
+                SPECTRUM_BACKENDS[0],
+                "Spectrum backend",
+                "Which algorithm analyses the audio spectrum",
+                choices=SPECTRUM_BACKENDS,
+                labels=("WaveTone", "noteDigger"),
             ),
         ),
     ),

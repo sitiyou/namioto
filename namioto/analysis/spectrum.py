@@ -240,7 +240,7 @@ def wave_notes(
     timings: dict | None = None,
 ) -> NoteSpectrum:
     """Analyse variable-length frequency windows with WaveTone-style multirate correlation."""
-    from namioto.analysis.wave_spectrum import amplitudes
+    from namioto.analysis.spectrum_backends.wavetone import amplitudes
 
     if sample_rate <= 0 or not math.isfinite(t_num) or t_num <= 0 or not math.isfinite(a4) or a4 <= 0:
         raise ValueError("Sample rate, frame rate and A4 must be positive and finite")

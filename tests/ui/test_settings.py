@@ -243,12 +243,13 @@ def test_loading_a_file_hands_the_document_to_the_analysers(own_window, monkeypa
     own_window.project_settings.analysis.fft_points = 4096
     own_window.project_settings.analysis.a4 = 441.0
     store.set_value(own_window.settings, "tempo", "window_seconds", 8.0)
+    store.set_value(own_window.settings, "devices", "spectrum_backend", "notedigger")
     own_window.overrides["channels"] = "left"
 
     own_window.load_audio("/tmp/song.wav")
 
     analysis, _song, tempo = captured
-    assert analysis == {"channels": "left", "t_num": 40.0, "fft_points": 4096, "a4": 441.0}
+    assert analysis == {"backend": "notedigger", "channels": "left", "t_num": 40.0, "fft_points": 4096, "a4": 441.0}
     assert tempo == {"algorithm": "wavetone", "window_seconds": 8.0, "window_hop_seconds": 6.0}
     assert own_window.state.last_audio_dir == "/tmp"
     assert own_window.edit.transcribe.isEnabled()

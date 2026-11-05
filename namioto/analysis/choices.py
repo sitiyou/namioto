@@ -11,3 +11,4 @@ from __future__ import annotations
 
 ALGORITHMS = ("wavetone", "librosa", "tempocnn")
 CHANNEL_MODES = ("mono", "left", "right", "sum", "side", "both")
+SPECTRUM_BACKENDS = ("wavetone", "notedigger")

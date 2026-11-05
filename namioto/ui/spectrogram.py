@@ -80,6 +80,7 @@ class SpectrumLoader(LoadingThread):
         t_num: float = 40.0,
         fft_points: int = 8192,
         a4: float = 440.0,
+        backend: str = "wavetone",
         parent=None,
     ):
         super().__init__(path, parent)
@@ -87,6 +88,7 @@ class SpectrumLoader(LoadingThread):
         self.t_num = t_num
         self.fft_points = fft_points
         self.a4 = a4
+        self.backend = backend
 
     def load(self) -> None:
         self.loaded.emit(
@@ -96,6 +98,7 @@ class SpectrumLoader(LoadingThread):
                 t_num=self.t_num,
                 fft_points=self.fft_points,
                 a4=self.a4,
+                backend=self.backend,
                 progress=lambda done, total: self.progress.emit(done, total),
             )
         )
