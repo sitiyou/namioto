@@ -49,7 +49,7 @@ def test_the_align_dialog_hands_the_times_over(own_window) -> None:
     dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append((times, model, scores)))
     dialog._done(([[(0.0, 1.0), (1.0, 2.0)]], "mms", [], [], [[0.8, 0.6]]))
     assert got == [([[(0.0, 1.0), (1.0, 1.0)]], "mms", [[0.8, 0.6]])]
-    assert dialog.run.isEnabled()
+    assert dialog.rebuild.isEnabled()
 
 
 def test_a_missing_runtime_stops_the_alignment(own_window, monkeypatch) -> None:
@@ -60,7 +60,7 @@ def test_a_missing_runtime_stops_the_alignment(own_window, monkeypatch) -> None:
     dialog._start()
 
     assert devices.MISSING_RUNTIME in dialog.log.toPlainText()
-    assert dialog.run.isEnabled()
+    assert dialog.rebuild.isEnabled()
 
 
 def test_the_align_dialog_snaps_to_the_beat_grid_when_asked(own_window) -> None:
@@ -153,7 +153,7 @@ def test_the_align_dialog_remembers_what_was_chosen(own_window) -> None:
         "device": "cpu",
         "quantize": 4,
         "chunk": "off",
-        "use_constraints": True,
+        "use_constraints": False,
     }
 
 
@@ -174,7 +174,7 @@ def test_the_align_dialog_shows_a_failure(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あい\n", 120.0, parent=own_window)
     dialog._fail("FileNotFoundError: no mms aligner")
     assert "FileNotFoundError" in dialog.log.toPlainText()
-    assert dialog.run.isEnabled()
+    assert dialog.rebuild.isEnabled()
 
 
 def test_the_align_dialog_ignores_legacy_diagnostics(own_window) -> None:

@@ -306,13 +306,13 @@ def test_channel_alignment_preserves_an_unmapped_other_channel(own_window, tmp_p
     assert "Channel 2" in own_window._lyric_error
 
 
-def test_align_dialog_exposes_auto_map_and_rebuild_as_distinct_actions(own_window, monkeypatch):
+def test_align_dialog_exposes_rebuild_mapping_without_constraints(own_window, monkeypatch):
     dialog = AlignDialog("vocal.wav", "あい", 120.0, own_window)
     calls = []
-    monkeypatch.setattr(dialog, "_start", calls.append)
-    dialog.run.click()
+    monkeypatch.setattr(dialog, "_start", lambda: calls.append(dialog.parameters()["use_constraints"]))
     dialog.rebuild.click()
-    assert calls == [True, False]
+    assert calls == [False]
+    assert not hasattr(dialog, "run")
     assert all(field.name != "use_constraints" for field, _read, _write in dialog._fields)
 
 
