@@ -79,6 +79,20 @@ def test_a_match_holds_more_than_one_note():
     assert rows[0] == [Match(SoundRef(0, 0), (1, 2))]
 
 
+def test_a_long_note_does_not_take_the_next_lines_note_across_a_rest():
+    lines = natural_sounds("い\nあ")
+    raw = [[Raw(60.55, 1.43)], [Raw(61.95, 0.07)]]
+    notes = [
+        Note(69, 60.5486, 0.4762, id=111),
+        Note(62, 61.9771, 0.2381, id=112),
+    ]
+
+    assert solve(lines, raw, notes) == [
+        Match(SoundRef(0, 0), (111,)),
+        Match(SoundRef(1, 0), (112,)),
+    ]
+
+
 def test_a_merge_takes_the_note_the_sounds_evenly_share():
     lines, _operations, rows = _solve("あい", [[Raw(0.0, 0.5), Raw(0.5, 0.5)]], _notes((0.0, 1.0)))
     assert rows[0] == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
@@ -277,6 +291,16 @@ def test_posterior_weighted_match_cost_keeps_the_fast_dp_at_the_true_minimum():
     assert _cost(_context(lines, raw, notes), operations) == pytest.approx(
         _minimum(_context(lines, raw, notes))
     )
+
+
+def test_fast_dp_and_full_match_cost_agree_across_note_rests():
+    lines = natural_sounds("あいう")
+    raw = [[Raw(0.0, 0.1, 0.8), Raw(0.3, 0.1, 0.1), Raw(1.1, 0.1, 0.5)]]
+    notes = _notes((0.0, 0.2), (0.2, 0.4), (0.8, 1.0), (1.0, 1.2))
+    operations = solve(lines, raw, notes)
+    context = _context(lines, raw, notes)
+
+    assert _cost(context, operations) == pytest.approx(_minimum(context))
 
 
 def test_a_broad_ctc_onset_interval_downweights_timing_error():

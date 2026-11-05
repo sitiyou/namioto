@@ -5,13 +5,13 @@ Every Sound is exactly one `match`, `merge` or `drop`, and every note is consume
 the cost compares each operation's raw onset against its predicted onset, plus the line's last
 Sound against its onset plus reference duration. A CTC-frame deadband reflects the uncertainty of
 short spans and low posterior scores; implausibly long corrected line tails are capped as mapping
-evidence. Low-confidence Sounds pay a confidence-scaled cost for each extra matched note. An
-unconstrained sokuon maps to at most one note and never shares a note with another Sound; a zero-length
+evidence. Low-confidence Sounds pay a confidence-scaled cost for each extra matched note. A line
+cannot consume notes starting at or after the next line's first raw onset. An unconstrained sokuon
+maps to at most one note and never shares a note with another Sound; a zero-length
 sokuon has a small soft matching cost. Full solves
 settle this over the whole song rather
 than line by line. Each operation's whole cost takes its pattern weight. A line
-boundary does not cut the note stream, so a line's last Sound may run over
-the rest between lines;
+boundary limits the notes a line may consume;
 a `merge` stays within one line but may cross ruby containers. Confirmed operations
 are hard anchors: the DP solves the stretches between them and never moves them.
 
@@ -27,6 +27,7 @@ before falling back to the whole song. Qt-free.
 
 from __future__ import annotations
 
+from bisect import bisect_left
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -83,6 +84,7 @@ class _Context:
     readings: list[str]
     typical_gap: list[float]
     line_end: list[float]
+    line_note_end: list[int]
     is_last: list[bool]
     maxm: list[int]
     merge_weights: list[tuple[float, ...]]
@@ -238,6 +240,14 @@ def _context(lines: Sequence[SoundLine], rows: Sequence[Sequence[Raw]], notes: l
             raw_onset_bounds.append(evidence.onset_bounds)
             readings.append(sound.reading)
             typical_gaps.append(typical_gap)
+    note_starts = [note.start for note in notes]
+    line_note_end = []
+    for line_index in range(len(lines)):
+        next_line = next((at for at in range(line_index + 1, len(lines)) if lines[at].sounds), None)
+        if next_line is None:
+            line_note_end.append(len(notes))
+        else:
+            line_note_end.append(bisect_left(note_starts, rows[next_line][0].onset))
     total = len(info)
     is_last = [index == line_start[info[index][0]] + line_count[info[index][0]] - 1 for index in range(total)]
     maxm = [1] * total
@@ -255,6 +265,7 @@ def _context(lines: Sequence[SoundLine], rows: Sequence[Sequence[Raw]], notes: l
         readings,
         typical_gaps,
         line_end,
+        line_note_end,
         is_last,
         maxm,
         weights,
@@ -367,9 +378,15 @@ def _anchors(anchors: Sequence[Operation], context: _Context) -> tuple[list[tupl
                 raise MappingError("invalid_anchor", "a confirmed merge crosses a line")
         if isinstance(operation, Match):
             notes = _note_indices(operation.notes, context)
+            line = context.info[sounds[0]][0]
+            if notes[-1] + 1 > context.line_note_end[line]:
+                raise MappingError("invalid_anchor", "a confirmed match crosses a lyric line")
             pinned.append((sounds[0], sounds[0] + 1, notes[0], notes[-1] + 1, operation))
         elif isinstance(operation, Merge):
             notes = _note_indices((operation.note,), context)
+            line = context.info[sounds[0]][0]
+            if notes[0] >= context.line_note_end[line]:
+                raise MappingError("invalid_anchor", "a confirmed merge crosses a lyric line")
             pinned.append((sounds[0], sounds[-1] + 1, notes[0], notes[0] + 1, operation))
         else:
             forced[sounds[0]] = operation
@@ -425,6 +442,9 @@ def _segment(context: _Context, sa: int, sb: int, na: int, nb: int, forced: set[
                 run, slots = constraint
                 if run == 0 or step + run > size or have + slots > count or (forced_here and slots):
                     continue
+                line = context.info[index][0]
+                if slots and na + have + slots > context.line_note_end[line]:
+                    continue
                 if slots == 0:
                     base, complexity, rank, pointer = _drop_base(context, index, na + have), 1, 2 * weight[step], ("d",)
                 elif run == 1:
@@ -445,7 +465,7 @@ def _segment(context: _Context, sa: int, sb: int, na: int, nb: int, forced: set[
             )
             if forced_here:
                 continue
-            if have < count:
+            if have < count and na + have < context.line_note_end[context.info[index][0]]:
                 top = min(context.maxm[index], next_forced[step] - step)
                 for run in range(2, top + 1):
                     # MMS often collapses an unvoiced geminate into a weak frame. Do not let an
@@ -475,6 +495,8 @@ def _match_run(context, best, back, step, index, na, count, weight) -> None:
     """Relax every match from the running cheapest earlier note, in one pass over the notes."""
     if context.readings[index] in ("っ", "ッ"):
         for have in range(1, count + 1):
+            if na + have > context.line_note_end[context.info[index][0]]:
+                break
             before = best[step][have - 1]
             if before is None:
                 continue
@@ -491,6 +513,8 @@ def _match_run(context, best, back, step, index, na, count, weight) -> None:
     notes = context.notes
     extra_note_penalty = _extra_note_penalty(context, index, 2)
     for have in range(1, count + 1):
+        if na + have > context.line_note_end[context.info[index][0]]:
+            break
         before = best[step][have - 1]
         if before is not None:
             candidate = (

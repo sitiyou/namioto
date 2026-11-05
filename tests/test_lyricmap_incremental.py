@@ -113,23 +113,11 @@ def test_releasing_a_changed_sound_anchor_is_local(monkeypatch):
     assert operations[0] is state.operations[0]
 
 
-def test_an_anchor_outside_the_old_note_boundary_expands_to_a_full_solve(monkeypatch):
+def test_a_confirmed_match_cannot_cross_a_lyric_line_boundary():
     lines, raw, notes, state = _song()
     anchor = Match(SoundRef(4, 0), tuple(range(9, 19)), confirmed=True)
-    calls = []
-    original = solver._solve_range
-
-    def record(context, pinned, forced, sa, sb, na, nb):
-        calls.append((sa, sb, na, nb))
-        return original(context, pinned, forced, sa, sb, na, nb)
-
-    monkeypatch.setattr(solver, "_solve_range", record)
-    operations = solve(lines, raw, notes, (anchor,), state)
-    assert calls[0] == (6, 12, 6, 12)
-    assert calls[-1] == (0, 18, 0, 18)
-    assert len(calls) == 4
-    assert anchor in operations
-    assert sum(op.slots for op in operations) == len(notes)
+    with pytest.raises(MappingError, match="crosses a lyric line"):
+        solve(lines, raw, notes, (anchor,), state)
 
 
 def test_invalid_anchors_are_not_hidden_by_the_cache():
