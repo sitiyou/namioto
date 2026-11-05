@@ -335,19 +335,6 @@ SECTIONS: tuple[Section, ...] = (
             Field("clip_size", "int", 24, "Sweep range", high=2147483647),
         ),
     ),
-    Section(
-        "remote",
-        "Remote",
-        (
-            Field(
-                "enabled",
-                "bool",
-                True,
-                "Remote control",
-                "Allow namioto-ctl to control this editor through a local connection",
-            ),
-        ),
-    ),
 )
 
 Settings = params.build(SECTIONS)

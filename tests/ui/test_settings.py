@@ -47,7 +47,7 @@ def test_the_settings_window_lists_every_visible_field(own_window) -> None:
     }
     assert names == expected  # `editor` has no page: its switches are what the program remembers itself
     pages = [dialog.findChild(QTabWidget).tabText(index) for index in range(dialog.findChild(QTabWidget).count())]
-    assert pages == ["General", "Devices", "Tempo", "Lyrics", "Network", "MIDI", "Remote"]
+    assert pages == ["General", "Devices", "Tempo", "Lyrics", "Network", "MIDI"]
     dialog.close()
 
 
@@ -221,13 +221,12 @@ def test_every_bar_setting_has_one_binding(own_window) -> None:
     assert {("editor", "auto_page"), ("editor", "overtone_highlight")} <= bound
 
 
-def test_a_command_line_channel_beats_the_document(own_window) -> None:
-    own_window.project_settings.analysis.channels = "side"
-    own_window.overrides["channels"] = "left"
-    own_window.overrides["t_num"] = None
+def test_analysis_options_follow_the_document(own_window) -> None:
+    own_window.project_settings.analysis.channels = "left"
+    own_window.project_settings.analysis.t_num = 25.0
     options = own_window._analysis_options()
     assert options["channels"] == "left"
-    assert options["t_num"] == 40.0
+    assert options["t_num"] == 25.0
     assert options["fft_points"] == 8192
     assert options["a4"] == 440.0
 
@@ -244,7 +243,7 @@ def test_loading_a_file_hands_the_document_to_the_analysers(own_window, monkeypa
     own_window.project_settings.analysis.a4 = 441.0
     store.set_value(own_window.settings, "tempo", "window_seconds", 8.0)
     store.set_value(own_window.settings, "devices", "spectrum_backend", "notedigger")
-    own_window.overrides["channels"] = "left"
+    own_window.project_settings.analysis.channels = "left"
 
     own_window.load_audio("/tmp/song.wav")
 

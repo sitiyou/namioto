@@ -362,21 +362,21 @@ def test_multiple_servers_default_to_first(qt_app, window, endpoint):
         ipc.remove_run(bound.instance)
 
 
-def test_default_settings_enable_ipc():
-    assert store.Settings().remote.enabled is True
-    assert not hasattr(store.Settings().remote, "address")
+def test_legacy_remote_setting_is_ignored(tmp_path):
+    settings_file = tmp_path / "settings.json"
+    settings_file.write_text('{"remote":{"enabled":false}}')
+    settings = store.load(settings_file)
+    assert not hasattr(settings, "remote")
 
 
 @pytest.mark.parametrize(
-    "preference, override, expected", [(True, None, True), (True, False, False), (False, True, True)]
+    "override, expected", [(None, True), (False, False), (True, True)]
 )
-def test_startup_and_run_overrides(qt_app, preference, override, expected):
+def test_startup_and_run_overrides(qt_app, override, expected):
     settings = store.Settings()
-    settings.remote.enabled = preference
     built = MainWindow(settings, ipc_enabled=override)
     try:
         assert (built.ipc is not None) is expected
-        assert built.settings.remote.enabled is preference
     finally:
         built.close()
         built.deleteLater()
@@ -391,17 +391,6 @@ def test_discovery_write_failure_does_not_leave_a_listener(window, monkeypatch):
     assert window.start_ipc() is None
     assert window.ipc is None
     assert "could not start" in window.statusBar().currentMessage()
-
-
-def test_a_settings_change_starts_and_stops_the_interface(window):
-    enabled = store.clone(window.settings)
-    enabled.remote.enabled = True
-    window.settings_store.apply(enabled)
-    assert window.ipc is not None
-    disabled = store.clone(enabled)
-    disabled.remote.enabled = False
-    window.settings_store.apply(disabled)
-    assert window.ipc is None
 
 
 def test_import_midi_replaces_the_roll(qt_app, window, endpoint, tmp_path):

@@ -131,9 +131,8 @@ MIDI. Session mode follows the editor's compatibility setting.
 
 ## Remote control
 
-Local remote control is enabled by default for new settings. Change it in Settings → Remote;
-the editor uses that saved preference on startup. `--ipc` and `--no-ipc` override the preference
-for one run.
+Local remote control starts by default. `--no-ipc` disables it for one run; `--ipc` explicitly
+enables it. The old Remote settings value is ignored.
 Multiple editors may run at once; clients automatically select the first surviving instance
 in startup order. Use `--list` to see instance IDs and `--instance ID` to select another editor.
 

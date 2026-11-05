@@ -462,7 +462,7 @@ class MainWindow(QMainWindow):
         self._watch_lyrics()
         self._update_status()
         self.view.setFocus()  # the roll holds the keyboard, so the bar opens without a focus ring on its first button
-        remote_enabled = self.settings.remote.enabled if ipc_enabled is None else ipc_enabled
+        remote_enabled = True if ipc_enabled is None else ipc_enabled
         if remote_enabled:
             self.start_ipc()
 
@@ -754,10 +754,6 @@ class MainWindow(QMainWindow):
         self._seed_bindings(lambda binding: binding.model is None)
         self._apply_theme()
         self._update_status()
-        if settings.remote.enabled and self.ipc is None:
-            self.start_ipc()  # a switch flipped on reaches a running editor at once
-        elif not settings.remote.enabled and self.ipc is not None:
-            self.stop_ipc()
         self._advise_restart()
 
     def _advise_restart(self) -> None:
