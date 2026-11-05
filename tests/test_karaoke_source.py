@@ -18,7 +18,6 @@ from namioto.karaoke.transforms import merge_words
         "@2{\n# comment\nあ\nい\n}\n",
         "あ\f\xa0い\n",
         "あ# no final newline",
-        "(Turn).1",
         "@0{@c02{あ}}",
     ],
 )
@@ -28,6 +27,10 @@ def test_unchanged_source_is_exact(text):
     assert dumps(model, dotted=True) == text
     assert dumps(deepcopy(model)) == text
     assert dumps(merge_words(model)) == text
+
+
+def test_a_redundant_source_override_is_normalized():
+    assert dumps(parse("(Turn).1")) == "Turn"
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"])

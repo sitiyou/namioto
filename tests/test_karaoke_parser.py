@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from namioto.karaoke import Group, Lyrics, Unit, Word, flatten_ruby, merge_words, parse
@@ -73,9 +75,13 @@ def test_a_malformed_file_is_rejected():
         parse("見[み")
 
 
-def test_overriding_a_ruby_to_the_same_mora_warns():
-    with pytest.warns(UserWarning):
-        parse("(幾千)[いくせん].4")
+def test_overriding_a_ruby_to_the_same_mora_does_not_warn():
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        word = parse("(幾千)[いくせん].4").chapters[0].lines[0].words[0]
+    assert word.mora == 4
+    assert word.override == 4
+    assert not caught
 
 
 def test_flatten_ruby_gives_one_word_per_mora():

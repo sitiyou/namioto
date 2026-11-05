@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 
 from namioto.karaoke import Ruby, Unit, Word, dumps, parse
+from namioto.karaoke.sounds import note_groups, sound_lines
 
 SAMPLE = """@2{春[はる]の(風)[かぜ]が吹[ふ]く}
 hello.3 world
@@ -17,32 +18,18 @@ hello.3 world
 """
 
 
-def _shape(lyrics):
-    return [
-        [
-            (
-                line.track,
-                [
-                    (
-                        word.text,
-                        word.mora,
-                        word.grouped,
-                        None
-                        if word.ruby is None
-                        else [[(inner.text, inner.mora) for inner in part] for part in word.ruby.parts],
-                    )
-                    for word in line.words
-                ],
-            )
-            for line in chapter.lines
-        ]
-        for chapter in lyrics.chapters
-    ]
-
-
 def test_a_parsed_file_comes_back():
     lyrics = parse(SAMPLE)
-    assert _shape(parse(dumps(lyrics))) == _shape(lyrics)
+    restored = parse(dumps(lyrics))
+    original_sounds, restored_sounds = sound_lines(lyrics), sound_lines(restored)
+    original_lines = [line for chapter in lyrics.chapters for line in chapter.lines]
+    restored_lines = [line for chapter in restored.chapters for line in chapter.lines]
+    assert [sound.token for row in original_sounds for sound in row.sounds] == [
+        sound.token for row in restored_sounds for sound in row.sounds
+    ]
+    assert [note_groups(line, row) for line, row in zip(original_lines, original_sounds, strict=True)] == [
+        note_groups(line, row) for line, row in zip(restored_lines, restored_sounds, strict=True)
+    ]
 
 
 def test_dumping_is_idempotent():
@@ -60,13 +47,22 @@ def test_a_bare_latin_run_gains_no_dot():
 
 
 def test_a_group_keeps_its_parentheses():
-    assert dumps(parse("(F)(LO)(WER)")) == "(F)(LO)(WER)"
-    assert dumps(parse("(Turn).1")) == "(Turn).1"
+    assert dumps(parse("(F)(LO)(WER)")) == "FLOWER"
+    assert dumps(parse("(Turn).1")) == "Turn"
 
 
 def test_a_ruby_keeps_its_parts_and_dot():
     assert dumps(parse("何度目[なん,ど,め]")) == "何度目[なん,ど,め]"
     assert dumps(parse("(幾千)[いくせん].1")) == "(幾千)[いくせん].1"
+
+
+def test_a_redundant_mora_override_is_removed_from_parsed_source():
+    assert dumps(parse("(幾千)[いくせん].4")) == "(幾千)[いくせん]"
+    assert dumps(parse("(おも).2")) == "おも"
+
+
+def test_redundant_ruby_override_and_continuation_are_removed_together():
+    assert dumps(parse("手[て.2]を.+")) == "手[て]を"
 
 
 def test_an_override_and_a_ruby_show_up():

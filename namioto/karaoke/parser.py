@@ -179,5 +179,5 @@ def parse(text: str, merge: bool = True) -> Lyrics:
     ]
     starts.extend(match.start() + match[0].index("-") for match in re.finditer(r"\n+-{3,}\n*", unwrapped))
     line_numbers = tuple(text.count("\n", 0, positions[start]) for start in sorted(starts))
-    lyrics.source = Source(text, _canonical(lyrics, dotted=True), line_numbers)
+    lyrics.source = Source(text, _canonical(lyrics, dotted=True, simplify=False), line_numbers)
     return lyrics

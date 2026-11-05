@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import re
 import unicodedata
-import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -139,8 +138,6 @@ class Unit:
     def override_mora(self, mora: int) -> None:
         if self.ruby is not None and self.base_mora != self.mora:
             raise KrcError("a ruby's mora may not be overridden twice")
-        if self.base_mora == mora:
-            warnings.warn(f"overriding mora to the same value {mora} for word '{self.text}'", stacklevel=2)
         self.override = mora
 
     def __str__(self) -> str:
