@@ -1,11 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Tempo (BPM) estimation with WaveTone's own static analysis.
-
-The absolute volume change from one frame to the next is read as a periodic signal: for each
-candidate tempo its first two harmonics are summed, and the strongest is refined to a hundredth of
-a BPM. Reversed from WaveTone 2.73's `awlib.dll` (`dfttempo_awd`); unlike the beat trackers it does
-not pick a metrical relative of the beat.
-"""
+"""Tempo (BPM) estimation using the dfttempo_awd logic in WaveTone 2.73's awlib.dll."""
 
 from __future__ import annotations
 
@@ -21,7 +15,13 @@ FRAME = 1024
 COARSE_BPM = np.arange(60, 240)
 FINE_SPAN = 0.5
 FINE_STEP = 0.01
-SECOND_HARMONIC = 0.5
+PHASE_BITS = 12
+PHASE_SIZE = 1 << PHASE_BITS
+PHASE_MASK = PHASE_SIZE - 1
+SCORE_CHUNK = 16
+_PHASE = np.arange(PHASE_SIZE, dtype=np.float64) * (2.0 * np.pi / PHASE_SIZE)
+_SIN = np.sin(_PHASE)
+_COS = np.cos(_PHASE)
 
 
 def volume_change(mono: np.ndarray, sample_rate: int, frame: int = FRAME) -> tuple[np.ndarray, float]:
@@ -34,14 +34,25 @@ def volume_change(mono: np.ndarray, sample_rate: int, frame: int = FRAME) -> tup
 
 
 def score(envelope: np.ndarray, rate: float, bpms: np.ndarray) -> np.ndarray:
-    """How strongly `envelope` repeats at each tempo: |DFT at f| + 0.5 |DFT at 2f|."""
-    index = np.arange(len(envelope))
+    """Match WaveTone's 4096-step phase DFT at BPM and 2x BPM, with equal weights."""
+    values = np.asarray(envelope, dtype=np.float64)
+    samples = np.arange(len(values), dtype=np.float64)
     out = np.empty(len(bpms))
-    for position, bpm in enumerate(bpms):
-        phase = 2.0 * np.pi * (bpm / 60.0) * index / rate
-        first = np.hypot((envelope * np.cos(phase)).sum(), (envelope * np.sin(phase)).sum())
-        second = np.hypot((envelope * np.cos(2.0 * phase)).sum(), (envelope * np.sin(2.0 * phase)).sum())
-        out[position] = first + SECOND_HARMONIC * second
+    for start in range(0, len(bpms), SCORE_CHUNK):
+        candidates = np.asarray(bpms[start : start + SCORE_CHUNK], dtype=np.float64)
+        phase = samples[None, :] * (PHASE_SIZE * candidates[:, None] / (30.0 * rate))
+        phase_index = phase.astype(np.int64) & PHASE_MASK
+        half_index = (phase.astype(np.int64) >> 1) & PHASE_MASK
+
+        # awlib accumulates the complex DFT components from a 4096-entry trig table.
+        fundamental_real = _COS[half_index] @ values
+        fundamental_imag = _SIN[half_index] @ values
+        harmonic_real = _COS[phase_index] @ values
+        harmonic_imag = _SIN[phase_index] @ values
+        out[start : start + len(candidates)] = (
+            np.hypot(fundamental_real, fundamental_imag)
+            + np.hypot(harmonic_real, harmonic_imag)
+        )
     return out
 
 

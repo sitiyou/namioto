@@ -8,7 +8,7 @@ import pytest
 import soundfile
 
 from namioto.analysis.beats import SAMPLE_RATE
-from namioto.analysis.wavetone import FRAME, estimate_array, main, volume_change
+from namioto.analysis.wavetone import FRAME, estimate_array, main, score, volume_change
 
 
 def click_track(bpm: float, seconds: float = 90.0, jitter: float = 0.0, missing: float = 0.0, seed: int = 1):
@@ -32,6 +32,14 @@ def test_a_click_track_is_measured_to_the_beat(bpm: float) -> None:
 
 def test_loose_and_incomplete_beats_are_still_measured() -> None:
     assert estimate_array(click_track(93.0, jitter=0.02, missing=0.1), SAMPLE_RATE) == pytest.approx(93.0, abs=0.5)
+
+
+def test_second_harmonic_has_the_same_weight_as_the_fundamental() -> None:
+    rate = 1000.0
+    samples = np.arange(int(rate * 12))
+    envelope = (1000 * np.cos(2 * np.pi * 126 / 60 * samples / rate)).astype(np.float64)
+    candidates = np.array([126.0, 189.0])
+    assert score(envelope, rate, candidates)[0] > score(envelope, rate, candidates)[1] * 1.5
 
 
 def test_the_envelope_rate_follows_the_sample_rate() -> None:
