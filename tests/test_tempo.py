@@ -11,7 +11,7 @@ import pytest
 import soundfile
 
 from namioto.analysis import model_store
-from namioto.analysis.tempo import (
+from namioto.analysis.bpm.tempo import (
     N_MELS,
     LocalTempo,
     TempoEstimate,

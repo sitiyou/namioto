@@ -7,8 +7,8 @@ import numpy as np
 import pytest
 import soundfile
 
-from namioto.analysis.beats import SAMPLE_RATE
-from namioto.analysis.wavetone import FRAME, estimate_array, main, score, volume_change
+from namioto.analysis.bpm.beats import SAMPLE_RATE
+from namioto.analysis.bpm.wavetone import FRAME, analyze_array, estimate_array, main, score, volume_change
 
 
 def click_track(bpm: float, seconds: float = 90.0, jitter: float = 0.0, missing: float = 0.0, seed: int = 1):
@@ -32,6 +32,17 @@ def test_a_click_track_is_measured_to_the_beat(bpm: float) -> None:
 
 def test_loose_and_incomplete_beats_are_still_measured() -> None:
     assert estimate_array(click_track(93.0, jitter=0.02, missing=0.1), SAMPLE_RATE) == pytest.approx(93.0, abs=0.5)
+
+
+def test_analysis_reports_relative_scores_for_separated_candidates() -> None:
+    audio = click_track(126.0)
+    best, candidates = analyze_array(audio, SAMPLE_RATE)
+    assert best == pytest.approx(126.0, abs=0.1)
+    assert candidates[0][0] == best
+    assert candidates[0][1] == pytest.approx(1.0)
+    assert len(candidates) > 1
+    assert all(0.0 < relative <= 1.0 for _bpm, relative in candidates)
+    assert all(abs(left[0] - right[0]) >= 3.0 for left, right in zip(candidates, candidates[1:], strict=False))
 
 
 def test_second_harmonic_has_the_same_weight_as_the_fundamental() -> None:

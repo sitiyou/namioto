@@ -465,18 +465,10 @@ def test_a_tempo_of_its_own_keeps_the_suggestion_away(window) -> None:
     window.transport.bpm.setValue(120.0)
 
 
-def test_a_manual_detect_offers_its_tempo_over_a_tempo_of_its_own(window, monkeypatch) -> None:
-    window.transport.bpm.setValue(96.0)
-    window.audio_path = "song.wav"
-    window.transport.detect.setEnabled(True)
-    monkeypatch.setattr(TempoLoader, "start", lambda self: None)
-
-    window.transport.detect.click()
-    assert window._tempo_manual
-    window._on_tempo_loaded(window._audio_generation, fake_estimate(bpm=140.0))
-    assert window.transport.suggestion.isVisible()
-    assert window.transport.bpm.value() == 96.0  # still a suggestion
-    window.transport.bpm.setValue(120.0)
+def test_backend_comparison_replaces_the_old_single_estimate_button(window) -> None:
+    assert not hasattr(window.transport, "detect")
+    assert window.transport.bpm_analysis is not None
+    assert not window.transport.bpm_analysis.isEnabled()
 
 
 def test_tempo_suggestion_can_be_dismissed_without_applying(window) -> None:
@@ -538,7 +530,7 @@ def drawn_pixels(window, image: QImage, button: QToolButton) -> list[QColor]:
 
 
 def test_a_button_that_cannot_be_clicked_reads_as_off(window) -> None:
-    button = window.transport.detect
+    button = window.transport.bpm_analysis
     button.setEnabled(True)
     lit = drawn_pixels(window, window.grab().toImage(), button)
     button.setEnabled(False)

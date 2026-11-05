@@ -34,6 +34,7 @@ GLYPHS = {
     "gear": "mdi.cog",
     "palette": "mdi.palette",
     "refresh": "mdi.refresh",
+    "chart": "mdi.chart-line",
     "restore": "mdi.restore",
     "open": "mdi.folder-open",
     "save": "mdi.content-save",

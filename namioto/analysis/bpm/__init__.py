@@ -12,9 +12,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from namioto.analysis import beats, wavetone
-from namioto.analysis.beats import WINDOW_HOP_SECONDS, WINDOW_SECONDS
 from namioto.analysis.choices import ALGORITHMS
+
+WINDOW_SECONDS = 12.0
+WINDOW_HOP_SECONDS = 6.0
 
 SOURCES = {
     "wavetone": "WaveTone volume-envelope DFT",
@@ -34,6 +35,8 @@ class BpmEstimate:
     windows: int = 0
     agreement: float = 0.0
     residual: float | None = None
+    candidates: tuple[tuple[float, float], ...] = ()
+    distribution: tuple[tuple[float, float], ...] = ()
 
     @property
     def source(self) -> str:
@@ -48,8 +51,13 @@ def estimate(
     window_hop_seconds: float = WINDOW_HOP_SECONDS,
 ) -> BpmEstimate:
     if algorithm == "wavetone":
-        return BpmEstimate(wavetone.estimate(path), algorithm)
+        from namioto.analysis.bpm import wavetone
+
+        value, candidates, distribution = wavetone.analyze_distribution(path)
+        return BpmEstimate(value, algorithm, candidates=candidates, distribution=distribution)
     if algorithm == "librosa":
+        from namioto.analysis.bpm import beats
+
         result = beats.estimate(path, window_seconds=window_seconds, window_hop_seconds=window_hop_seconds)
         return BpmEstimate(
             result.bpm,
@@ -59,7 +67,8 @@ def estimate(
             residual=result.residual,
         )
     if algorithm == "tempocnn":
-        from namioto.analysis import devices, tempo
+        from namioto.analysis import devices
+        from namioto.analysis.bpm import tempo
 
         problem = devices.validate()
         if problem is not None:

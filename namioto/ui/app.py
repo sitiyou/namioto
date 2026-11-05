@@ -84,6 +84,7 @@ from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog
 from namioto.ui.ass_dialog import AssDialog
 from namioto.ui.audio import open_player
+from namioto.ui.bpm_dialog import BpmAnalysisDialog
 from namioto.ui.channel_panel import ChannelPanel
 from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
 from namioto.ui.ipc_commands import WindowBridge
@@ -277,7 +278,6 @@ class MainWindow(QMainWindow):
         self.statusBar().addPermanentWidget(self._lyric_map_status)
         self.loader: SpectrumLoader | None = None
         self.tempo_loader: TempoLoader | None = None
-        self._tempo_manual = False
         self.song_loader: SongLoader | None = None
         # the audio a result belongs to: a loader the window replaced may still report its own
         self._audio_generation = 0
@@ -375,7 +375,7 @@ class MainWindow(QMainWindow):
             binding.signal.connect(partial(self._binding_changed, binding))
         self.edit.interaction_changed.connect(self.view.apply_interaction)
         self.view.zoom_changed.connect(self._on_zoom_changed)
-        self.transport.detect.clicked.connect(lambda: self._start_tempo(manual=True))
+        self.transport.bpm_analysis.clicked.connect(self._open_bpm_analysis)
         self.transport.suggestion.applied.connect(self._apply_tempo)
         self.transport.suggestion.dismissed.connect(self.transport.suggestion.hide)
         self.transport.rewind_requested.connect(lambda: self._seek(0.0))
@@ -2257,7 +2257,7 @@ class MainWindow(QMainWindow):
         self.view.set_spectrum(None)
         self.song.unload()
         self.player.stop()
-        self.transport.detect.setEnabled(False)
+        self.transport.bpm_analysis.setEnabled(False)
         self.edit.transcribe.setEnabled(False)
         self.transport.suggestion.hide()
         self._show_position()
@@ -2344,6 +2344,7 @@ class MainWindow(QMainWindow):
         self._audio_generation += 1
         generation = self._audio_generation
         self.edit.transcribe.setEnabled(True)
+        self.transport.bpm_analysis.setEnabled(True)
         self._mark_dirty()
         self.state.last_audio_dir = str(Path(path).parent)
         self._save_state()
@@ -2416,18 +2417,15 @@ class MainWindow(QMainWindow):
         channel = next(channel for channel in self.view.channels if channel.channel == number)
         self.statusBar().showMessage(i18n.tr("Drawing into {channel}", channel=channel.label), 2000)
 
-    def _start_tempo(self, manual: bool = False) -> None:
+    def _start_tempo(self) -> None:
         """Estimate the tempo of the loaded audio in the background, as a suggestion only.
 
-        A run the user asked for offers its result whatever the BPM field holds; one that follows an
-        audio load stays quiet over a tempo of the user's own.
+        The result stays quiet over a tempo the user has already set.
         """
         if self.audio_path is None:
             return
         generation = self._audio_generation
-        self._tempo_manual = manual
         self.transport.suggestion.hide()
-        self.transport.detect.setEnabled(False)
         tempo = self.settings.tempo
         tempo_loader = TempoLoader(
             self.audio_path,
@@ -2440,15 +2438,20 @@ class MainWindow(QMainWindow):
         tempo_loader.failed.connect(partial(self._on_tempo_failed, generation))
         self._start_loader("tempo_loader", tempo_loader)
 
+    def _open_bpm_analysis(self) -> None:
+        if self.audio_path is None:
+            return
+        dialog = BpmAnalysisDialog(self.audio_path, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted and dialog.selected_bpm is not None:
+            self._apply_tempo(dialog.selected_bpm)
+
     def _on_tempo_loaded(self, generation: int, result) -> None:
         """Offer what was estimated as a candidate, unless the field already holds that tempo."""
         if generation != self._audio_generation:
             return
-        self.transport.detect.setEnabled(True)
-        manual, self._tempo_manual = self._tempo_manual, False
         if not result.bpm:
             return
-        if not manual and self.transport.bpm.value() != project.FIELD_SPECS[("tempo", "bpm")].default:
+        if self.transport.bpm.value() != project.FIELD_SPECS[("tempo", "bpm")].default:
             return  # a tempo the user set, or took from an estimate, is not one to suggest over
         if round(result.bpm) == round(self.transport.bpm.value()):
             return  # the balloon would read what the field already says
@@ -2458,7 +2461,6 @@ class MainWindow(QMainWindow):
     def _on_tempo_failed(self, generation: int, message: str) -> None:
         if generation != self._audio_generation:
             return
-        self.transport.detect.setEnabled(self.audio_path is not None)
         self.statusBar().showMessage(i18n.tr("Tempo estimation failed: {error}", error=message))
 
     def _apply_tempo(self, bpm: float) -> None:

@@ -24,7 +24,7 @@ itself. Therefore, the caller's exact signal preparation is a separate part of W
 
 ## Python implementation
 
-`namioto.analysis.wavetone.score` mirrors the phase-table DFT using NumPy. It processes candidates
+`namioto.analysis.bpm.wavetone.score` mirrors the phase-table DFT using NumPy. It processes candidates
 in small blocks to bound temporary memory, uses the same 4096 phase quantization, and gives the BPM
 and 2x BPM correlations equal weight. The coarse and fine scans match the recovered ranges.
 

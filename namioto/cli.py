@@ -7,9 +7,9 @@ import argparse
 import importlib
 
 COMMANDS = {
-    "tempo": "namioto.analysis.beats",
-    "wavetone": "namioto.analysis.wavetone",
-    "tempocnn": "namioto.analysis.tempo",
+    "tempo": "namioto.analysis.bpm.beats",
+    "wavetone": "namioto.analysis.bpm.wavetone",
+    "tempocnn": "namioto.analysis.bpm.tempo",
     "spectrum": "namioto.analysis.spectrum",
     "game": "namioto.analysis.game",
     "align": "namioto.analysis.align",
