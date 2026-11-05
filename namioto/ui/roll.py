@@ -113,7 +113,7 @@ class _RollState:
     lyric_raw: tuple = ()
     lyric_operations: tuple = ()
     lyric_text: str = ""
-    lyric_evidence: tuple = ("", (), (), ())
+    lyric_evidence: tuple = ("", (), (), (), ())
 
 
 def _state_data(state: _RollState) -> tuple:
@@ -396,7 +396,7 @@ class PianoRollView(QGraphicsView):
         self._lyric_raw: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
         self._lyric_mapped: tuple[tuple[tuple[int, ...], ...], ...] = ()
         self._lyric_operations: tuple = ()
-        self.lyric_evidence: tuple = ("", (), (), ())
+        self.lyric_evidence: tuple = ("", (), (), (), ())
         self._lyric_editable = True
         self.lyric_text = ""
         self.lyric_mapping_pending = False

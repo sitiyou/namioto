@@ -13,7 +13,15 @@ from namioto.karaoke.operations import Drop, Match, Merge, SoundRef, partition
 from namioto.karaoke.sounds import natural_sounds
 from namioto.lyricmap.problems import MappingError
 from namioto.lyricmap.raw import Raw
-from namioto.lyricmap.solver import _context, _drop_base, _match_base, _merge_base, solve
+from namioto.lyricmap.solver import (
+    SOKUON,
+    _context,
+    _drop_base,
+    _match_base,
+    _merge_base,
+    _onset_error,
+    solve,
+)
 
 
 def _notes(*spans):
@@ -45,6 +53,8 @@ def _minimum(context):
             costs.append(_match_base(context, sound, note, count) + visit(sound + 1, note + count))
         if note < len(context.notes):
             for run in range(2, context.maxm[sound] + 1):
+                if any(reading in SOKUON for reading in context.readings[sound : sound + run]):
+                    continue
                 costs.append(_merge_base(context, sound, run, note) + visit(sound + run, note + 1))
         return min(costs)
 
@@ -97,7 +107,7 @@ def test_a_line_end_drop_does_not_pay_for_the_following_rest(rest):
     lines, operations, rows = _solve("ぱい\nあ", raw, notes)
     assert rows == [[Match(SoundRef(0, 0), (1,)), Drop(SoundRef(0, 1))], [Match(SoundRef(1, 0), (2,))]]
     assert rebuild("ぱい\nあ", operations) == "ぱい.0\nあ"
-    assert _cost(_context(lines, raw, notes), operations) == pytest.approx(0.1882)
+    assert _cost(_context(lines, raw, notes), operations) == pytest.approx(0.1682)
 
 
 def test_a_drop_consumes_no_note():
@@ -149,14 +159,18 @@ def test_edit_mapping_ignores_input_continuations():
     assert rebuild("泣[な]い.+", operations) == "泣[な]い"
 
 
-def test_no_character_is_banned_from_a_merge():
-    # a sokuon, a long vowel and a moraic n may all be merged when the times have them share a note
-    lines, _operations, rows = _solve(
+def test_sokuon_is_not_auto_grouped():
+    # A sokuon remains an independent Sound in automatic mapping, even when all timings collapse.
+    _lines, operations, _rows = _solve(
         "がっこう",
         [[Raw(0.0, 0.25), Raw(0.25, 0.25), Raw(0.5, 0.25), Raw(0.75, 0.25)]],
         _notes((0.0, 1.0)),
     )
-    assert rows[0] == [Merge(tuple(SoundRef(0, index) for index in range(4)), 1)]
+    assert not any(
+        isinstance(operation, Merge)
+        and any(ref.index == 1 for ref in operation.sounds)
+        for operation in operations
+    )
 
 
 def test_an_exact_tie_prefers_the_earlier_match():
@@ -170,7 +184,6 @@ def test_an_empirical_pair_can_outweigh_match_and_drop():
     raw = [[Raw(0.0, 0.76), Raw(0.76, 0.24)]]
     notes = _notes((0.0, 1.0))
     assert _solve("ない", raw, notes)[1] == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
-    assert _solve("なか", raw, notes)[1] == [Match(SoundRef(0, 0), (1,)), Drop(SoundRef(0, 1))]
 
 
 def test_an_empirical_weight_resolves_an_unweighted_tie():
@@ -193,6 +206,26 @@ def test_an_edge_sokuon_weight_can_prefer_match_and_drop():
     assert _solve("きか", raw, notes)[1] == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
 
 
+def test_an_unconstrained_sokuon_never_takes_multiple_notes():
+    lines, operations, _rows = _solve(
+        "きっ",
+        [[Raw(0.0, 0.2), Raw(0.2, 0.02)]],
+        _notes((0.0, 0.2), (0.2, 0.4), (0.4, 0.6)),
+    )
+    assert all(
+        operation.slots == 1
+        for operation in operations
+        if isinstance(operation, Match) and operation.sound == SoundRef(0, 1)
+    )
+
+
+@pytest.mark.parametrize("text", ["きっ", "っか"])
+def test_an_automatic_mapping_never_merges_a_sokuon(text):
+    _lines, operations, _rows = _solve(text, [[Raw(0.0, 0.5), Raw(0.5, 0.5)]], _notes((0.0, 1.0)))
+
+    assert not any(isinstance(operation, Merge) for operation in operations)
+
+
 def test_a_confirmed_merge_is_not_overridden_by_pattern_weights():
     anchor = Merge((SoundRef(0, 0), SoundRef(0, 1)), 1, confirmed=True)
     assert _solve("きっ", [[Raw(0.0, 0.72), Raw(0.72, 0.28)]], _notes((0.0, 1.0)), [anchor])[1] == [anchor]
@@ -207,16 +240,66 @@ def test_a_leading_sokuon_can_still_drop_before_a_match():
 
 def test_multiplicative_weights_preserve_a_zero_cost_merge():
     lines, operations, _rows = _solve("あっ", [[Raw(0.0, 0.5), Raw(0.5, 0.5)]], _notes((0.0, 1.0)))
-    assert operations == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
-    assert _cost(_context(lines, [[Raw(0.0, 0.5), Raw(0.5, 0.5)]], _notes((0.0, 1.0))), operations) == 0.0
+    assert operations == [Match(SoundRef(0, 0), (1,)), Drop(SoundRef(0, 1))]
 
 
 def test_the_whole_merge_cost_including_first_onset_and_line_end_is_weighted():
     lines = natural_sounds("ない")
     context = _context(lines, [[Raw(0.1, 0.5), Raw(0.6, 0.6)]], _notes((0.0, 1.0)))
-    assert _merge_base(context, 0, 2, 0) == pytest.approx(0.32)
-    assert _match_base(context, 0, 0, 1) == pytest.approx(0.1)
-    assert _drop_base(context, 1, 1) == pytest.approx(0.6)
+    assert _merge_base(context, 0, 2, 0) == pytest.approx(0.304)
+    assert _match_base(context, 0, 0, 1) == pytest.approx(0.09)
+    assert _drop_base(context, 1, 1) == pytest.approx(0.59)
+
+
+def test_low_posterior_scores_widen_the_ctc_boundary_deadband():
+    lines = natural_sounds("あ")
+    high = _context(lines, [[Raw(0.0, 0.1, 1.0)]], _notes((0.05, 0.1)))
+    low = _context(lines, [[Raw(0.0, 0.1, 0.0)]], _notes((0.05, 0.1)))
+    assert _onset_error(high, 0, 0.05) == pytest.approx(0.04)
+    assert _onset_error(low, 0, 0.05) == pytest.approx(0.02)
+
+
+def test_low_confidence_sounds_pay_more_for_extra_notes_than_clear_sounds():
+    lines = natural_sounds("あいう")
+    raw = [[Raw(0.0, 0.1, 0.1), Raw(0.3, 0.1, 0.9), Raw(0.6, 0.1, 0.9)]]
+    context = _context(lines, raw, _notes((0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8)))
+    low_penalty = _match_base(context, 0, 0, 2) - _match_base(context, 0, 0, 1)
+    high_penalty = _match_base(context, 1, 1, 2) - _match_base(context, 1, 1, 1)
+    assert low_penalty == pytest.approx(0.135)
+    assert high_penalty == pytest.approx(0.015)
+
+
+def test_posterior_weighted_match_cost_keeps_the_fast_dp_at_the_true_minimum():
+    lines = natural_sounds("あいう")
+    raw = [[Raw(0.0, 0.1, 0.8), Raw(0.3, 0.1, 0.1), Raw(0.6, 0.1, 0.5)]]
+    notes = _notes((0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8))
+    operations = solve(lines, raw, notes)
+    assert _cost(_context(lines, raw, notes), operations) == pytest.approx(
+        _minimum(_context(lines, raw, notes))
+    )
+
+
+def test_a_broad_ctc_onset_interval_downweights_timing_error():
+    lines = natural_sounds("あっい")
+    raw = [[Raw(0.0, 0.08, 0.9), Raw(0.1, 0.02, 0.01, (0.25, 0.55)), Raw(0.8, 0.1, 0.9)]]
+    context = _context(lines, raw, _notes((0.0, 0.2), (0.2, 0.4), (0.4, 0.6)))
+    assert _onset_error(context, 1, 0.4) == pytest.approx(0.0)
+    assert _onset_error(context, 1, 0.8) == pytest.approx(0.25)
+
+
+def test_an_onset_interval_spanning_multiple_mora_gaps_falls_back_to_viterbi_evidence():
+    lines = natural_sounds("Call my love")
+    notes = _notes((0.0, 0.5), (0.7, 1.0), (1.2, 1.5))
+    raw = [[Raw(0.0, 0.5, 0.006, (0.0, 6.16)), Raw(0.7, 0.3), Raw(1.2, 0.3)]]
+    context = _context(lines, raw, notes)
+    without_interval = _context(lines, [[raw[0][0]._replace(onset_bounds=None), *raw[0][1:]]], notes)
+    assert _onset_error(context, 0, 0.5) == pytest.approx(_onset_error(without_interval, 0, 0.5))
+
+
+def test_an_outlier_line_tail_is_not_used_as_a_ten_second_duration_prior():
+    lines = natural_sounds("あい")
+    context = _context(lines, [[Raw(0.0, 0.1), Raw(0.5, 10.0)]], _notes((0.0, 0.5), (0.5, 1.0)))
+    assert context.line_end == [2.5]
 
 
 @pytest.mark.parametrize("text", ["ない", "きっ", "きっちく", "もーす"])

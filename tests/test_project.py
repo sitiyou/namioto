@@ -339,6 +339,7 @@ def test_the_mapping_survives_a_round_trip(tmp_path) -> None:
         key="abc",
         raw=(((0.0, 0.9), (1.0, 0.4), (2.0, 0.0)),),
         scores=((0.9, None, 0.8),),
+        onset_bounds=(((0.0, 0.02), None, (1.98, 2.02)),),
         flagged=(True,),
         problems=(("a problem",),),
         operations=(

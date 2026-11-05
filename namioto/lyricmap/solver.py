@@ -3,9 +3,15 @@
 
 Every Sound is exactly one `match`, `merge` or `drop`, and every note is consumed exactly once, so
 the cost compares each operation's raw onset against its predicted onset, plus the line's last
-Sound against its onset plus reference duration. Full solves settle this over the whole song rather
-than line by line. Each operation's whole cost takes its pattern weight; no fixed penalty is added. A line
-boundary does not cut the note stream, so a line's last Sound may run over the rest between lines;
+Sound against its onset plus reference duration. A CTC-frame deadband reflects the uncertainty of
+short spans and low posterior scores; implausibly long corrected line tails are capped as mapping
+evidence. Low-confidence Sounds pay a confidence-scaled cost for each extra matched note. An
+unconstrained sokuon maps to at most one note and never shares a note with another Sound; a zero-length
+sokuon has a small soft matching cost. Full solves
+settle this over the whole song rather
+than line by line. Each operation's whole cost takes its pattern weight. A line
+boundary does not cut the note stream, so a line's last Sound may run over
+the rest between lines;
 a `merge` stays within one line but may cross ruby containers. Confirmed operations
 are hard anchors: the DP solves the stretches between them and never moves them.
 
@@ -30,6 +36,18 @@ from namioto.lyricmap.notes import Note, TimedNote
 from namioto.lyricmap.problems import MappingError
 from namioto.lyricmap.raw import Raw, validate
 from namioto.lyricmap.weights import merge_weights
+
+CTC_FRAME_SECONDS = 0.02
+EXTRA_NOTE_PENALTY_SECONDS = 0.15
+# A zero-length CTC span is usually MMS swallowing the unvoiced geminate. Keep a small soft cost
+# for assigning it a NOTE; a hard drop would reject the minority of sung sokuon that has no frame.
+SOKUON_MATCH_PENALTY_SECONDS = 0.05
+
+LINE_END_MAX_MORA_MULTIPLE = 4.0
+LINE_END_OUTLIER_SECONDS = 2.0
+LINE_END_MIN_REFERENCE_SECONDS = 0.5
+SOKUON = frozenset(("っ", "ッ"))
+UNLOCALIZED_ONSET_MAX_GAP_MULTIPLE = 2.0
 
 
 @dataclass(frozen=True)
@@ -59,6 +77,11 @@ class _Context:
     line_start: list[int]
     line_count: list[int]
     raw_start: list[float]
+    raw_length: list[float]
+    raw_score: list[float | None]
+    raw_onset_bounds: list[tuple[float, float] | None]
+    readings: list[str]
+    typical_gap: list[float]
     line_end: list[float]
     is_last: list[bool]
     maxm: list[int]
@@ -181,22 +204,85 @@ def _context(lines: Sequence[SoundLine], rows: Sequence[Sequence[Raw]], notes: l
     line_start: list[int] = []
     line_count: list[int] = []
     raw_start: list[float] = []
+    raw_length: list[float] = []
+    raw_score: list[float | None] = []
+    raw_onset_bounds: list[tuple[float, float] | None] = []
+    readings: list[str] = []
+    typical_gaps: list[float] = []
     line_end: list[float] = []
     for line_index, line in enumerate(lines):
         weights.extend(merge_weights(line))
         line_start.append(len(info))
         line_count.append(len(line.sounds))
-        line_end.append(rows[line_index][-1].reference_end if line.sounds else 0.0)
-        for index in range(len(line.sounds)):
+        row = rows[line_index]
+        if line.sounds:
+            last = row[-1]
+            length = last.raw_length
+            gaps = sorted(
+                later.onset - earlier.onset
+                for earlier, later in zip(row[:-1], row[1:], strict=True)
+                if later.onset > earlier.onset
+            )
+            typical_gap = gaps[len(gaps) // 2] if gaps else LINE_END_MIN_REFERENCE_SECONDS
+            if length > max(LINE_END_OUTLIER_SECONDS, typical_gap * LINE_END_MAX_MORA_MULTIPLE * 2):
+                length = min(length, max(LINE_END_MIN_REFERENCE_SECONDS, typical_gap * LINE_END_MAX_MORA_MULTIPLE))
+            line_end.append(last.onset + length)
+        else:
+            line_end.append(0.0)
+        for index, sound in enumerate(line.sounds):
             info.append((line_index, index))
-            raw_start.append(rows[line_index][index].onset)
+            evidence = row[index]
+            raw_start.append(evidence.onset)
+            raw_length.append(evidence.raw_length)
+            raw_score.append(evidence.score)
+            raw_onset_bounds.append(evidence.onset_bounds)
+            readings.append(sound.reading)
+            typical_gaps.append(typical_gap)
     total = len(info)
     is_last = [index == line_start[info[index][0]] + line_count[info[index][0]] - 1 for index in range(total)]
     maxm = [1] * total
     for index in range(total - 2, -1, -1):
         if info[index][0] == info[index + 1][0]:
             maxm[index] = maxm[index + 1] + 1
-    return _Context(info, line_start, line_count, raw_start, line_end, is_last, maxm, weights, notes, total, {})
+    return _Context(
+        info,
+        line_start,
+        line_count,
+        raw_start,
+        raw_length,
+        raw_score,
+        raw_onset_bounds,
+        readings,
+        typical_gaps,
+        line_end,
+        is_last,
+        maxm,
+        weights,
+        notes,
+        total,
+        {},
+    )
+
+
+def _onset_error(context: _Context, index: int, point: float) -> float:
+    """Compare a candidate onset with CTC evidence, respecting a credible onset interval.
+
+    Inside a credible interval the posterior does not distinguish candidate frames reliably, so
+    the timing cost is zero. Outside it, only the distance to the interval is charged. Intervals
+    spanning several mora gaps are too weak to localise and fall back to the Viterbi score.
+    """
+    bounds = context.raw_onset_bounds[index]
+    if bounds is not None:
+        low, high = bounds
+        width = high - low
+        if width <= context.typical_gap[index] * UNLOCALIZED_ONSET_MAX_GAP_MULTIPLE:
+            return max(low - point, 0.0, point - high)
+    score = context.raw_score[index]
+    uncertainty = CTC_FRAME_SECONDS if context.raw_length[index] <= CTC_FRAME_SECONDS else CTC_FRAME_SECONDS / 2
+    if score is not None:
+        uncertainty += CTC_FRAME_SECONDS * (1.0 - min(max(score, 0.0), 1.0))
+    reference = context.raw_start[index]
+    return max(0.0, abs(reference - point) - uncertainty)
 
 
 def _boundary(context: _Context, note_at: int) -> float:
@@ -223,22 +309,31 @@ def _drop_point(context: _Context, index: int, note_at: int) -> float:
 
 def _drop_base(context: _Context, index: int, note_at: int) -> float:
     point = _drop_point(context, index, note_at)
-    cost = abs(context.raw_start[index] - point)
+    cost = _onset_error(context, index, point)
     if context.is_last[index]:
         cost += abs(_line_end(context, index) - point)
     return cost
 
 
 def _match_base(context: _Context, index: int, note_at: int, count: int) -> float:
-    cost = abs(context.raw_start[index] - context.notes[note_at].start)
+    cost = _onset_error(context, index, context.notes[note_at].start)
     if context.is_last[index]:
         cost += abs(_line_end(context, index) - context.notes[note_at + count - 1].end)
-    return cost
+    return cost + _extra_note_penalty(context, index, count)
+
+
+def _extra_note_penalty(context: _Context, index: int, count: int) -> float:
+    """Prefer one note per uncertain Sound unless its timing strongly supports a melisma."""
+    score = context.raw_score[index]
+    if count <= 1 or score is None:
+        return 0.0
+    confidence = min(max(score, 0.0), 1.0)
+    return (count - 1) * EXTRA_NOTE_PENALTY_SECONDS * (1.0 - confidence)
 
 
 def _merge_base(context: _Context, index: int, run: int, note_at: int) -> float:
     start, end = context.notes[note_at].start, context.notes[note_at].end
-    cost = sum(abs(context.raw_start[index + p] - (start + p * (end - start) / run)) for p in range(run))
+    cost = sum(_onset_error(context, index + p, start + p * (end - start) / run) for p in range(run))
     last = index + run - 1
     if context.is_last[last]:
         cost += abs(_line_end(context, last) - end)
@@ -353,6 +448,10 @@ def _segment(context: _Context, sa: int, sb: int, na: int, nb: int, forced: set[
             if have < count:
                 top = min(context.maxm[index], next_forced[step] - step)
                 for run in range(2, top + 1):
+                    # MMS often collapses an unvoiced geminate into a weak frame. Do not let an
+                    # automatic group make the neighbouring mora consume that same note.
+                    if any(reading in SOKUON for reading in context.readings[index : index + run]):
+                        continue
                     _relax(
                         best,
                         back,
@@ -374,13 +473,30 @@ def _segment(context: _Context, sa: int, sb: int, na: int, nb: int, forced: set[
 
 def _match_run(context, best, back, step, index, na, count, weight) -> None:
     """Relax every match from the running cheapest earlier note, in one pass over the notes."""
+    if context.readings[index] in ("っ", "ッ"):
+        for have in range(1, count + 1):
+            before = best[step][have - 1]
+            if before is None:
+                continue
+            note = context.notes[na + have - 1]
+            base = before[0] + _onset_error(context, index, note.start)
+            if context.raw_length[index] <= CTC_FRAME_SECONDS:
+                base += SOKUON_MATCH_PENALTY_SECONDS
+            if context.is_last[index]:
+                base += abs(_line_end(context, index) - note.end)
+            _relax(best, back, step + 1, have, (base, before[1], before[2]), ("m", have - 1))
+        return
+
     run: tuple[float, int, int, int] | None = None
     notes = context.notes
+    extra_note_penalty = _extra_note_penalty(context, index, 2)
     for have in range(1, count + 1):
         before = best[step][have - 1]
         if before is not None:
             candidate = (
-                before[0] + abs(context.raw_start[index] - notes[na + have - 1].start),
+                before[0]
+                + _onset_error(context, index, notes[na + have - 1].start)
+                - (have - 1) * extra_note_penalty,
                 before[1] - (have - 1),
                 before[2],
                 have - 1,
@@ -390,7 +506,8 @@ def _match_run(context, best, back, step, index, na, count, weight) -> None:
         if run is None:
             continue
         end_time = notes[na + have - 1].end
-        base = run[0] + (abs(_line_end(context, index) - end_time) if context.is_last[index] else 0.0)
+        base = run[0] + (have - 1) * extra_note_penalty
+        base += abs(_line_end(context, index) - end_time) if context.is_last[index] else 0.0
         _relax(best, back, step + 1, have, (base, run[1] + (have - 1), run[2]), ("m", run[3]))
 
 

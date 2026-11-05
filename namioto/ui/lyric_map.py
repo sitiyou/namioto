@@ -57,6 +57,7 @@ def map_lyrics(
     use_constraints: bool = False,
     notes_by_channel: dict | None = None,
     solve_channels: tuple[int, ...] | None = None,
+    onset_bounds: Sequence[Sequence[tuple[float, float] | None]] = (),
 ) -> LyricResult:
     """Read faithful KRC slots, or solve an explicit automatic mapping request.
 
@@ -80,6 +81,7 @@ def map_lyrics(
             previous,
             use_constraints,
             solve_channels,
+            onset_bounds,
         )
     lines = list(lines)
     raw = [[(span[0], span[1]) for span in row] for row in raw]
@@ -102,7 +104,9 @@ def map_lyrics(
         except (MappingError, ValueError) as error:
             return _failed(lines, raw, str(error))
     try:
-        return _edit_result(text, lines, raw, scores, flagged, notes, anchors, previous, use_constraints)
+        return _edit_result(
+            text, lines, raw, scores, flagged, notes, anchors, previous, use_constraints, onset_bounds=onset_bounds
+        )
     except (MappingError, ValueError) as error:
         return _failed(lines, raw, str(error))
     except Exception as error:  # noqa: BLE001 - the worker reports whatever the mapping raised
@@ -121,6 +125,7 @@ def _channel_result(
     previous,
     use_constraints,
     solve_channels,
+    onset_bounds,
 ):
     try:
         parts = split(text)
@@ -154,6 +159,7 @@ def _channel_result(
                 part.flags(flagged),
                 notes=notes.get(channel, ()),
                 mode="read",
+                onset_bounds=part.rows(onset_bounds),
                 previous=previous_results.get(channel),
             )
         else:
@@ -169,6 +175,7 @@ def _channel_result(
                     previous_results.get(channel),
                     use_constraints,
                     local_shapes,
+                    part.rows(onset_bounds),
                 )
             except (MappingError, ValueError) as error:
                 result = _failed(part.lines, part.rows(raw), str(error))
@@ -232,9 +239,16 @@ def _read_result(text, lines, raw, notes) -> LyricResult:
 
 
 def _edit_result(
-    text, lines, raw, scores, flagged, notes, anchors, previous, use_constraints, shapes=None
+    text, lines, raw, scores, flagged, notes, anchors, previous, use_constraints, shapes=None, onset_bounds=()
 ) -> LyricResult:
-    rows = [_raw_row(raw[index], scores[index] if index < len(scores) else ()) for index in range(len(lines))]
+    rows = [
+        _raw_row(
+            raw[index],
+            scores[index] if index < len(scores) else (),
+            onset_bounds[index] if index < len(onset_bounds) else (),
+        )
+        for index in range(len(lines))
+    ]
     resolved = resolve([TimedNote(*note) for note in notes], include_branches=False)
     state = previous.state if previous is not None and previous.filtered == resolved.filtered else None
     shapes = (constraints.read(text) if use_constraints else {}) if shapes is None else shapes
@@ -280,9 +294,18 @@ def _pairs(rows) -> tuple:
     return tuple(tuple((None, None) if span is None else (span[0], span[1]) for span in row) for row in rows)
 
 
-def _raw_row(spans: Sequence[tuple], scores: Sequence[float | None]) -> list[Raw]:
+def _raw_row(
+    spans: Sequence[tuple],
+    scores: Sequence[float | None],
+    onset_bounds: Sequence[tuple[float, float] | None] = (),
+) -> list[Raw]:
     return [
-        Raw(onset, length, scores[index] if index < len(scores) else None)
+        Raw(
+            onset,
+            length,
+            scores[index] if index < len(scores) else None,
+            onset_bounds[index] if index < len(onset_bounds) else None,
+        )
         for index, (onset, length) in enumerate(spans)
     ]
 

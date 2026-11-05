@@ -16,7 +16,7 @@ from dataclasses import dataclass, replace
 from namioto.karaoke.model import KrcError
 
 # the version of the mapping algorithm whose suggested operations a project may trust
-MAPPING_VERSION = 8
+MAPPING_VERSION = 10
 
 
 @dataclass(frozen=True)

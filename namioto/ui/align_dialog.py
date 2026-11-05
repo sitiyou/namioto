@@ -3,8 +3,9 @@
 
 The run is a `LoadingThread` of its own (`Aligner`), because the model is an ONNX graph and the
 audio is read once; the window only starts it, shows the progress, and shows the failures
-`namioto.analysis.align` reports. The whole stream is aligned in one pass, the way FA-Kara does it. Its
-choices are `align.PARAMETERS`, remembered between runs in the file `align.parameter_path()` names.
+`namioto.analysis.align` reports. Encoder inference may be chunked; its concatenated emissions are
+aligned as one global CTC path because KRC lines have no timestamps. Its choices are
+`align.PARAMETERS`, remembered between runs in the file `align.parameter_path()` names.
 Its Quantize choice (Off / 1/4 / 1/8 / ..., GAME's list) snaps onsets onto the drawn beat grid
 before mapping, preserving the reference durations captured from the alignment.
 """
@@ -57,10 +58,12 @@ class Aligner(LoadingThread):
         parent=None,
         *,
         channel: int | None = None,
+        onset_priors=(),
     ):
         super().__init__(audio, parent)
         self.text = text
         self.channel = channel
+        self.onset_priors = onset_priors
         self.cache_text = text if channel is None else f"# Align channel {channel}\n{text}"
         self.model = model
         self.provider = provider
@@ -93,14 +96,54 @@ class Aligner(LoadingThread):
         else:
             self.message.emit(tr("Reusing the model's pass over the audio\u2026"))
         dictionary, blank_id = align.load_dictionary(directory / align.VOCAB_FILE)
+        # Chunked inference yields one emission stream; KRC supplies no line-time windows.
         segment = align.Segment(0.0, seconds, tuple(natural_tokens(lines)))
-        found = align.align_whole(segment, emission, dictionary, blank_id=blank_id)
+        flattened_priors = [center for row in self.onset_priors for center in row]
+        if len(flattened_priors) != len(segment.tokens):
+            flattened_priors = [None] * len(segment.tokens)
+        ctc_priors = [
+            None if center is None else center - align.onset_offset(self.model, token.text)
+            for token, center in zip(segment.tokens, flattened_priors, strict=True)
+        ]
+        found = align.align_whole(
+            segment, emission, dictionary, blank_id=blank_id, onset_priors=ctc_priors
+        )
         self.message.emit(tr("Fitting the sounds to the voice\u2026"))
         rows = align.correct_times(split_tokens(found.tokens, lines), audio)
+        rows = align.calibrate_times(rows, found.tokens, self.model)
+        score_rows = []
+        onset_rows = []
+        at = 0
+        for line_index, line in enumerate(lines):
+            line_tokens = found.tokens[at : at + len(line.sounds)]
+            score_rows.append([token.score for token in line_tokens])
+            onset_row = []
+            for sound_index, token in enumerate(line_tokens):
+                corrected_start = rows[line_index][sound_index][0]
+                if token.onset_interval is None or token.start is None or corrected_start is None:
+                    onset_row.append(None)
+                else:
+                    shift = corrected_start - token.start
+                    low, high = token.onset_interval
+                    onset_row.append((round(low + shift, 3), round(high + shift, 3)))
+            onset_rows.append(onset_row)
+            at += len(line.sounds)
         with suppress(OSError):  # the cache is disposable, and the alignment itself already came back
-            align.save_alignment(self.path, self.model, self.provider, self.cache_text, rows, [], [], self.chunk)
+            align.save_alignment(
+                self.path,
+                self.model,
+                self.provider,
+                self.cache_text,
+                rows,
+                [],
+                [],
+                self.chunk,
+                scores=score_rows,
+                onset_bounds=onset_rows,
+                onset_priors=self.onset_priors,
+            )
         self.message.emit(tr("Alignment took {seconds:.1f}s", seconds=time.monotonic() - started))
-        self.aligned.emit((rows, self.model, [], []))
+        self.aligned.emit((rows, self.model, [], [], score_rows, onset_rows))
 
     def _downloading(self, done: int, total: int) -> None:
         """A download of a model that was not installed, logged a tenth at a time."""
@@ -117,16 +160,25 @@ class Aligner(LoadingThread):
 class AlignDialog(QDialog):
     """The model choice, the run, and what it found. The result is handed over as it arrives."""
 
-    aligned = Signal(object, str, object)
+    aligned = Signal(object, str, object, object, object)
 
     def __init__(
-        self, audio: str, text: str, tempo: float, parent=None, offset: float = 0.0, *, channel: int | None = None
+        self,
+        audio: str,
+        text: str,
+        tempo: float,
+        parent=None,
+        offset: float = 0.0,
+        *,
+        channel: int | None = None,
+        onset_priors=(),
     ):
         super().__init__(parent)
         self.setWindowTitle(tr("Align lyrics"))
         self.audio = audio
         self.text = text
         self.channel = channel
+        self.onset_priors = onset_priors
         self.cache_text = text if channel is None else f"# Align channel {channel}\n{text}"
         self.tempo = tempo
         self.offset = offset
@@ -204,15 +256,26 @@ class AlignDialog(QDialog):
         if self._parameters["device"] == "gpu" and provider == "cpu":
             self.log.appendPlainText(tr("No GPU backend is available; running on the CPU"))
         chunk = self._parameters["chunk"]
-        cached = align.find_alignment(self.audio, model, provider, self.cache_text, chunk)
+        cached = align.find_alignment(
+            self.audio, model, provider, self.cache_text, chunk, onset_priors=self.onset_priors
+        )
         if cached is not None:
-            rows, _problems, _flagged = cached
-            self._done((rows, model, [], []))
+            rows, _problems, _flagged, scores, onset_bounds = cached
+            self._done((rows, model, [], [], scores, onset_bounds))
             self.log.setPlainText(tr("saved alignment reused"))
             return
         self.progress.setRange(0, 0)  # busy until the first chunk of the model's pass comes back
         self.status.setText(tr("Aligning…"))
-        self._thread = Aligner(self.audio, self.text, model, provider, chunk, self, channel=self.channel)
+        self._thread = Aligner(
+            self.audio,
+            self.text,
+            model,
+            provider,
+            chunk,
+            self,
+            channel=self.channel,
+            onset_priors=self.onset_priors,
+        )
         self._thread.progress.connect(self._show_progress)
         self._thread.message.connect(self.log.appendPlainText)
         self._thread.aligned.connect(self._done)
@@ -225,18 +288,34 @@ class AlignDialog(QDialog):
         self.progress.setValue(done)
 
     def _done(self, result) -> None:
-        spans, model, _problems, _flagged = result
+        spans, model, _problems, _flagged, *optional = result
+        scores = optional[0] if optional else []
+        onset_bounds = optional[1] if len(optional) > 1 else []
         times = from_spans(spans)
         cells = self.parameters()["quantize"]  # read now, so a change made while the run went counts
         if cells:
-            times = snap_to_beats(times, self.tempo, 1.0 / cells, self.offset)
+            quantized = snap_to_beats(times, self.tempo, 1.0 / cells, self.offset)
+            if onset_bounds:
+                onset_bounds = [
+                    [
+                        None
+                        if bounds is None or before is None or after is None
+                        else (
+                            round(bounds[0] + after[0] - before[0], 3),
+                            round(bounds[1] + after[0] - before[0], 3),
+                        )
+                        for before, after, bounds in zip(old_row, new_row, bound_row, strict=False)
+                    ]
+                    for old_row, new_row, bound_row in zip(times, quantized, onset_bounds, strict=False)
+                ]
+            times = quantized
         self._thread = None
         self.run.setEnabled(True)
         self.rebuild.setEnabled(True)
         self.progress.setRange(0, 1)
         self.progress.setValue(1)
         self.status.setText(tr("Aligned {lines} lines", lines=len(times)))
-        self.aligned.emit(times, model, ())
+        self.aligned.emit(times, model, (), scores, onset_bounds)
 
     def _fail(self, message: str) -> None:
         self._thread = None

@@ -17,11 +17,12 @@ from namioto.lyricmap.problems import MappingError
 
 
 class Raw(NamedTuple):
-    """One Sound's editable onset, reference duration and alignment score."""
+    """One Sound's editable onset, duration, alignment score and optional onset credible interval."""
 
     onset: float
     raw_length: float
     score: float | None = None
+    onset_bounds: tuple[float, float] | None = None
 
     @property
     def reference_end(self) -> float:
@@ -72,4 +73,13 @@ def validate(lines: Sequence[SoundLine], raw: Sequence[Sequence[Raw]]) -> None:
                 raise MappingError("incomplete_alignment", "the raw evidence is invalid")
             if sound.onset < previous - 1e-9:
                 raise MappingError("incomplete_alignment", "the raw onsets are not in order")
+            if sound.onset_bounds is not None:
+                bounds = sound.onset_bounds
+                if not isinstance(bounds, (tuple, list)) or len(bounds) != 2:
+                    raise MappingError("incomplete_alignment", "a sound has invalid onset uncertainty")
+                low, high = bounds
+                if any(isinstance(value, bool) or not isinstance(value, (int, float)) for value in bounds):
+                    raise MappingError("incomplete_alignment", "a sound has invalid onset uncertainty")
+                if not math.isfinite(low) or not math.isfinite(high) or low > high:
+                    raise MappingError("incomplete_alignment", "a sound has invalid onset uncertainty")
             previous = sound.onset

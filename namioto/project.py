@@ -330,7 +330,8 @@ class Lyrics(NamedTuple):
     The text is the source of truth for temporary editing copies and exports.
     `key` is the hash of the text the times were made from, so a changed text invalidates them;
     `raw` holds one `(onset, raw_length)` in seconds per Sound, `None` where none was found; `scores`
-    holds the aligner's own score per sound beside it; `flagged` holds one bool per line, true where
+    holds the aligner's own score per sound beside it; `onset_bounds` holds optional 90% CTC onset
+    intervals in seconds; `flagged` holds one bool per line, true where
     the aligner itself doubted the times it made; `problems` holds the aligner's line-level
     complaints. KRC channel wrappers name each Sound's MIDI channel.
     `mode`, `operations`, `version` and `use_constraints` are retained only for legacy migration.
@@ -347,6 +348,7 @@ class Lyrics(NamedTuple):
     operations: tuple = ()
     version: int = MAPPING_VERSION
     use_constraints: bool = False
+    onset_bounds: tuple[tuple[tuple[float, float] | None, ...], ...] = ()
 
 
 @dataclass(frozen=True)
@@ -413,6 +415,15 @@ def _lyrics_dict(lyrics: Lyrics | None) -> dict | None:
         "model": lyrics.model,
         "raw": [[list(sound) for sound in line] for line in lyrics.raw],
         "scores": [list(row) for row in lyrics.scores],
+        **(
+            {
+                "onset_bounds": [
+                    [list(bounds) if bounds is not None else None for bounds in row] for row in lyrics.onset_bounds
+                ]
+            }
+            if lyrics.onset_bounds
+            else {}
+        ),
         "flagged": list(lyrics.flagged),
         "problems": [list(row) for row in lyrics.problems],
         **(
@@ -610,6 +621,7 @@ def _lyrics(value: Any) -> Lyrics | None:
         operations=_operations(value.get("operations")),
         version=_version(value.get("version")),
         use_constraints=value.get("use_constraints") is True,
+        onset_bounds=_onset_bounds(value.get("onset_bounds")),
     )
 
 
@@ -627,6 +639,29 @@ def _scores(value: Any) -> tuple[tuple[float | None, ...], ...]:
                 found.append(None)
             else:
                 found.append(float(score))
+        rows.append(tuple(found))
+    return tuple(rows)
+
+
+def _onset_bounds(value: Any) -> tuple[tuple[tuple[float, float] | None, ...], ...]:
+    if not isinstance(value, list):
+        return ()
+    rows = []
+    for row in value:
+        if not isinstance(row, list):
+            return ()
+        found = []
+        for bounds in row:
+            valid = (
+                isinstance(bounds, list)
+                and len(bounds) == 2
+                and all(
+                    not isinstance(bound, bool) and isinstance(bound, (int, float)) and math.isfinite(bound)
+                    for bound in bounds
+                )
+                and bounds[0] <= bounds[1]
+            )
+            found.append((float(bounds[0]), float(bounds[1])) if valid else None)
         rows.append(tuple(found))
     return tuple(rows)
 

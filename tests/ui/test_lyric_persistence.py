@@ -424,7 +424,7 @@ def test_faithful_lyrics_can_start_alignment(own_window, tmp_path, monkeypatch) 
     own_window._open_align()
     assert len(opened) == 1
     own_window.view.set_notes([(60, 0, 1), (62, 2, 1)])
-    opened[0].aligned.emit([[(0.0, 1.0), (1.0, 1.0)]], "mms", ())
+    opened[0].aligned.emit([[(0.0, 1.0), (1.0, 1.0)]], "mms", (), (), [])
     assert not hasattr(own_window, "_lyric_mode")
     assert own_window.edit.lyrics.isEnabled()
 

@@ -78,9 +78,19 @@ def test_the_alignment_cache_holds_the_raw_lines_and_reuses_them_by_their_inputs
     rows = [[(0.0, 0.5), (0.5, 1.0), (None, None)]]
     problems = ["あい: empty"]
     flagged = [True]
-    align.save_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", rows, problems, flagged)
+    scores = [[0.8, 0.6, None]]
+    onset_bounds = [[(0.01, 0.03), (0.5, 0.52), None]]
+    align.save_alignment(
+        "/tmp/song.wav", "mms", "cpu", "あい\n", rows, problems, flagged, scores=scores, onset_bounds=onset_bounds
+    )
 
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n") == (rows, problems, flagged)
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n") == (
+        rows,
+        problems,
+        flagged,
+        scores,
+        onset_bounds,
+    )
     assert align.find_alignment("/tmp/song.wav", "yohane", "cpu", "あい\n") is None
     assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "うえ\n") is None
 
@@ -89,8 +99,50 @@ def test_the_alignment_cache_tells_the_cutting_modes_apart():
     rows = [[(0.0, 0.5)]]
     align.save_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", rows, [], [], chunk="off")
 
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk="off") == (rows, [], [])
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk="off") == (rows, [], [], [], [])
     assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk="silence") is None
+
+
+def test_the_alignment_cache_distinguishes_midi_onset_priors():
+    rows = [[(0.0, 0.5)]]
+    priors = [[0.25]]
+    align.save_alignment("/tmp/song.wav", "mms", "cpu", "あ\n", rows, [], [], onset_priors=priors)
+
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あ\n", onset_priors=priors) == (
+        rows,
+        [],
+        [],
+        [],
+        [],
+    )
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あ\n", onset_priors=[[0.5]]) is None
+
+
+def test_midi_onset_priors_are_assigned_once_per_shared_note():
+    mapped = (((11,), (11,), (12, 13), ()), ((13,), (14,)))
+
+    assert align.midi_onset_priors(mapped, {11: 0.25, 12: 0.5, 13: 0.75, 14: 1.0}) == [
+        [0.25, None, 0.5, None],
+        [None, 1.0],
+    ]
+
+
+def test_non_monotonic_midi_mapping_disables_all_onset_priors():
+    mapped = (((11,), (12,)),)
+
+    assert align.midi_onset_priors(mapped, {11: 1.0, 12: 0.5}) == [[None, None]]
+
+
+def test_an_old_alignment_cache_is_a_miss():
+    target = align._store_path("/tmp/song.wav")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(
+        json.dumps({"version": align.ALIGNMENT_STORE_VERSION - 1, "alignments": {"old": {}}}),
+        encoding="utf-8",
+    )
+
+    assert align.load_alignments("/tmp/song.wav") == {}
+    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n") is None
 
 
 def test_a_broken_alignment_cache_is_no_alignment():
@@ -178,9 +230,65 @@ def test_forced_align_visits_every_target_in_order():
     assert list(path) == [1, 1, 0, 2, 2, 0]
 
 
+def test_a_zero_weight_onset_prior_keeps_the_original_viterbi_path():
+    emission = align.log_softmax(np.asarray(LOGITS, dtype=np.float32))
+
+    expected, _scores = align.forced_align(emission, [1, 2])
+    actual, _scores = align.forced_align(emission, [1, 2], onset_priors=[0.4, 0.1], prior_weight=0.0)
+
+    np.testing.assert_array_equal(actual, expected)
+
+
+def test_a_soft_onset_prior_resolves_an_acoustically_ambiguous_ctc_path():
+    emission = align.log_softmax(np.zeros((5, 3), dtype=np.float32))
+
+    path, _scores = align.forced_align(emission, [1, 2], onset_priors=[0.04, None], prior_sigma=0.02)
+
+    assert np.flatnonzero(path == 1)[0] == 2
+
+
 def test_forced_align_gives_up_when_the_window_cannot_hold_the_targets():
     emission = align.log_softmax(np.zeros((2, 3), dtype=np.float32))
     assert align.forced_align(emission, [1, 1, 1]) is None
+
+
+@pytest.mark.parametrize("tokens", [[1, 2], [1, 1]])
+def test_ctc_onset_posteriors_match_every_path_in_a_small_lattice(tokens):
+    emission = align.log_softmax(np.asarray([[0.2, 0.8, 0.1], [0.6, 0.3, 0.5], [0.1, 0.4, 0.9], [0.5, 0.7, 0.2]]))
+    actual = align.ctc_onset_posteriors(emission, tokens)
+    labels = [0]
+    for token in tokens:
+        labels.extend((token, 0))
+    skip = [False, False] + [labels[state] != labels[state - 2] for state in range(2, len(labels))]
+    paths = []
+
+    def visit(path):
+        frame = len(path)
+        if frame == len(emission):
+            if path[-1] in (len(labels) - 1, len(labels) - 2):
+                score = sum(emission[at, labels[state]] for at, state in enumerate(path))
+                paths.append((path, np.exp(score)))
+            return
+        state = path[-1]
+        for following in (state, state + 1, state + 2):
+            if following < len(labels) and (following <= state + 1 or skip[following]):
+                visit([*path, following])
+
+    visit([0])
+    visit([1])
+    total = sum(weight for _path, weight in paths)
+    expected = np.zeros_like(actual)
+    for path, weight in paths:
+        for token in range(len(tokens)):
+            state = 2 * token + 1
+            expected[token, path.index(state)] += weight / total
+    np.testing.assert_allclose(actual, expected, atol=1e-12)
+    np.testing.assert_allclose(actual.sum(axis=1), np.ones(len(tokens)), atol=1e-12)
+
+
+def test_ctc_onset_posteriors_return_none_when_repeats_need_more_frames():
+    emission = align.log_softmax(np.zeros((2, 3), dtype=np.float32))
+    assert align.ctc_onset_posteriors(emission, [1, 1]) is None
 
 
 def test_merge_tokens_collapses_runs_and_drops_the_blank():
@@ -208,12 +316,34 @@ def test_align_groups_a_multi_character_token_into_one_span():
     assert only.text == "ab"
     assert only.start == pytest.approx(0.0, abs=1e-6)
     assert only.end == pytest.approx(0.10, abs=1e-6)
+    assert only.onset_interval is not None
+    assert only.onset_interval[0] <= only.start <= only.onset_interval[1]
 
 
 def test_align_keeps_the_original_case_of_a_token():
     aligned = align.align([align.Segment(0.0, 1.0, ("A",))], FakeBackend(LOGITS), DICTIONARY, AUDIO)
     assert aligned[0].tokens[0].text == "A"
     assert aligned[0].tokens[0].start is not None
+
+
+def test_model_onset_calibration_shifts_only_the_onset():
+    rows = [[(0.10, 0.30), (0.30, 0.50)]]
+    tokens = [align.Token("ka", 0.10, 0.30), align.Token("a", 0.30, 0.50)]
+
+    calibrated = align.calibrate_times(rows, tokens, "mms")
+    assert calibrated[0][0][0] == pytest.approx(0.14)
+    assert calibrated[0][0][1] == pytest.approx(0.30)
+    assert calibrated[0][1][0] == pytest.approx(0.25)
+    assert calibrated[0][1][1] == pytest.approx(0.50)
+
+
+def test_model_onset_calibration_preserves_monotonicity():
+    rows = [[(0.10, 0.12), (0.11, 0.20)]]
+    tokens = [align.Token("ka", 0.10, 0.12), align.Token("a", 0.11, 0.20)]
+
+    calibrated = align.calibrate_times(rows, tokens, "mms")
+    assert calibrated[0][0][0] <= calibrated[0][1][0]
+    assert calibrated[0][1][1] == pytest.approx(0.20)
 
 
 def test_align_times_a_character_outside_the_dictionary():
@@ -252,13 +382,13 @@ def test_correct_times_fills_a_tail_up_to_the_next_onset(monkeypatch):
     assert got[1] == [(1.1, 1.5)]  # nothing follows, so it reaches the stretch's end
 
 
-def test_correct_times_moves_a_head_that_straddles_a_rest_to_the_stretch_of_its_end(monkeypatch):
+def test_correct_times_keeps_a_head_that_straddles_a_rest(monkeypatch):
     monkeypatch.setattr(
         align, "voice_segments", lambda audio, frame_seconds=align.TAIL_FRAME_SECONDS: [(0.4, 0.9), (1.2, 2.0)]
     )
     rows = [[(0.5, 0.8), (1.3, 1.6)]]
     got = align.correct_times(rows, np.zeros(1))
-    assert got[0][0][0] == pytest.approx(0.8)  # no one stretch holds the line, so the head takes its own end
+    assert got[0][0][0] == pytest.approx(0.5)  # the line end must not move its CTC onset
     assert got[0][1][1] == pytest.approx(2.0)  # the last sound reaches the stretch's end
 
 

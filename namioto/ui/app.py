@@ -60,7 +60,7 @@ from PySide6.QtWidgets import (
 from namioto import i18n, ipc, lyrics, midi, params, project, qtplugins, subtitle
 from namioto import settings as store
 from namioto import state as window_state
-from namioto.analysis import bpm
+from namioto.analysis import align, bpm
 from namioto.analysis.spectrum import CHANNEL_MODES, NoteSpectrum
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
@@ -260,6 +260,7 @@ class MainWindow(QMainWindow):
         self._lyric_model = ""
         self._lyric_flags: tuple[bool, ...] = ()
         self._lyric_scores = None
+        self._lyric_onset_bounds = None
         self._lyric_problems = None
         self._lyric_filtered: tuple = ()
         self._lyric_error = ""
@@ -1287,6 +1288,7 @@ class MainWindow(QMainWindow):
                 raw=self.view.lyric_raw,
                 flagged=self._lyric_flags,
                 scores=tuple(tuple(row) for row in (self._lyric_scores or ())),
+                onset_bounds=tuple(tuple(row) for row in (self._lyric_onset_bounds or ())),
                 problems=tuple(tuple(row) for row in (self._lyric_problems or ())),
             )
             if self.lyrics_text
@@ -1536,6 +1538,7 @@ class MainWindow(QMainWindow):
                     mode="edit",
                     anchors=tuple(operation for operation in stored.operations if operation.confirmed),
                     use_constraints=stored.use_constraints,
+                    onset_bounds=stored.onset_bounds,
                     notes_by_channel={channel: self._target_notes(channel) for channel in split_channels(stored.text)},
                 )
                 if result.error:
@@ -1594,6 +1597,9 @@ class MainWindow(QMainWindow):
             raw = [list(row) for row in stored.raw]
             self._lyric_flags = stored.flagged if len(stored.flagged) == len(lines) else ()
             self._lyric_scores = [list(row) for row in stored.scores] if len(stored.scores) == len(lines) else None
+            self._lyric_onset_bounds = (
+                [list(row) for row in stored.onset_bounds] if len(stored.onset_bounds) == len(lines) else None
+            )
             problems = stored.problems if len(stored.problems) == len(lines) else ()
             self._lyric_problems = [list(row) for row in problems]
             self.view.lyric_operations = ()
@@ -1601,6 +1607,7 @@ class MainWindow(QMainWindow):
             raw = [[(None, None)] * len(line.sounds) for line in lines]
             self._lyric_flags = ()
             self._lyric_scores = None
+            self._lyric_onset_bounds = None
             self._lyric_problems = None
             self.view.lyric_operations = []
         self.view.lyric_evidence = (
@@ -1608,6 +1615,7 @@ class MainWindow(QMainWindow):
             tuple(self._lyric_flags),
             tuple(tuple(row) for row in (self._lyric_scores or ())),
             tuple(tuple(row) for row in (self._lyric_problems or ())),
+            tuple(tuple(row) for row in (self._lyric_onset_bounds or ())),
         )
         self.view.load_lyrics(lines, raw, raw=raw, editable=True)
         self._remap_lyrics()
@@ -1629,6 +1637,7 @@ class MainWindow(QMainWindow):
             "lines": lines,
             "raw": raw,
             "scores": tuple(tuple(row) for row in (self._lyric_scores or ())),
+            "onset_bounds": tuple(tuple(row) for row in (self._lyric_onset_bounds or ())),
             "flagged": tuple(self._lyric_flags),
             "notes_by_channel": self._notes_by_channel({sound.channel for line in lines for sound in line.sounds}),
             "mode": "read",
@@ -1860,23 +1869,58 @@ class MainWindow(QMainWindow):
         if part is None:
             self.statusBar().showMessage(i18n.tr("The selected channel has no lyric sounds"))
             return
+        onset_priors = ()
+        mapped = self.view.lyric_mapped
+        if not self.view.lyric_mapping_pending and len(mapped) == len(self.view.lyric_lines):
+            note_onsets = {
+                note.id: self.view.to_seconds(note.start)
+                for note in self.view.notes()
+                if note.id > 0
+            }
+            mapped_rows = part.rows(mapped)
+            if len(mapped_rows) == len(part.lines) and all(
+                len(row) == len(line.sounds) for row, line in zip(mapped_rows, part.lines, strict=True)
+            ):
+                onset_priors = align.midi_onset_priors(mapped_rows, note_onsets)
+                if not any(center is not None for row in onset_priors for center in row):
+                    onset_priors = ()
         dialog = AlignDialog(
-            self.audio_path, self.lyrics_text, self.view.bpm, self, offset=self.view.offset, channel=channel
+            self.audio_path,
+            self.lyrics_text,
+            self.view.bpm,
+            self,
+            offset=self.view.offset,
+            channel=channel,
+            onset_priors=onset_priors,
         )
         generation = self._audio_generation
 
-        def adopt(raw, model, flagged):
+        def adopt(raw, model, flagged, scores, onset_bounds):
             if dialog.text != self.lyrics_text or generation != self._audio_generation:
                 return
             self._adopt_alignment(
-                raw, model, flagged, use_constraints=dialog.parameters()["use_constraints"], channel=channel
+                raw,
+                model,
+                flagged,
+                scores=scores,
+                onset_bounds=onset_bounds,
+                use_constraints=dialog.parameters()["use_constraints"],
+                channel=channel,
             )
 
         dialog.aligned.connect(adopt)
         dialog.exec()
 
     def _adopt_alignment(
-        self, raw, model: str, flagged=(), *, use_constraints: bool = True, channel: int | None = None
+        self,
+        raw,
+        model: str,
+        flagged=(),
+        *,
+        scores=(),
+        onset_bounds=(),
+        use_constraints: bool = True,
+        channel: int | None = None,
     ) -> None:
         if self.view.gesture_active or self._lyric_migration_error:
             return
@@ -1893,11 +1937,37 @@ class MainWindow(QMainWindow):
         ):
             return
         combined = [list(row) for row in self.view.lyric_raw]
+        existing_scores = self._lyric_scores or []
+        if len(existing_scores) != len(lines) or any(
+            len(row) != len(line.sounds) for row, line in zip(existing_scores, lines, strict=False)
+        ):
+            existing_scores = [[None] * len(line.sounds) for line in lines]
+        combined_scores = [list(row) for row in existing_scores]
+        existing_bounds = self._lyric_onset_bounds or []
+        if len(existing_bounds) != len(lines) or any(
+            len(row) != len(line.sounds) for row, line in zip(existing_bounds, lines, strict=False)
+        ):
+            existing_bounds = [[None] * len(line.sounds) for line in lines]
+        combined_bounds = [list(row) for row in existing_bounds]
+        valid_scores = len(scores) == len(refs) and all(
+            len(row) == len(owned) for row, owned in zip(scores, refs, strict=True)
+        )
+        if not valid_scores:
+            combined_scores = [[None] * len(line.sounds) for line in lines]
+        valid_bounds = len(onset_bounds) == len(refs) and all(
+            len(row) == len(owned) for row, owned in zip(onset_bounds, refs, strict=True)
+        )
         flags = list(self._lyric_flags) if len(self._lyric_flags) == len(lines) else [False] * len(lines)
         row_flags = {}
         for position, owned in enumerate(refs):
-            for ref, span in zip(owned, raw[position], strict=True):
+            row_scores = scores[position] if valid_scores else [None] * len(owned)
+            row_bounds = onset_bounds[position] if valid_bounds else [None] * len(owned)
+            for ref, span, score, bounds in zip(owned, raw[position], row_scores, row_bounds, strict=True):
                 combined[ref.line][ref.index] = span
+                if valid_scores:
+                    combined_scores[ref.line][ref.index] = score
+                if valid_bounds:
+                    combined_bounds[ref.line][ref.index] = bounds
                 row_flags[ref.line] = row_flags.get(ref.line, False) or (
                     flagged[position] if position < len(flagged) else False
                 )
@@ -1911,7 +1981,8 @@ class MainWindow(QMainWindow):
             self._mapping_request(lines),
             raw=combined,
             flagged=tuple(flags),
-            scores=(),
+            scores=combined_scores,
+            onset_bounds=combined_bounds,
             mode="edit",
             use_constraints=use_constraints,
             solve_channels=(channel,) if channel is not None else None,
@@ -1994,9 +2065,20 @@ class MainWindow(QMainWindow):
             self._lyric_key = text_key(text)
             self._lyric_model = model
             self._lyric_flags = snapshot["flagged"]
-            self._lyric_scores = None
+            self._lyric_scores = snapshot["scores"]
+            self._lyric_onset_bounds = (
+                snapshot["onset_bounds"]
+                if any(bounds is not None for row in snapshot["onset_bounds"] for bounds in row)
+                else None
+            )
             self._lyric_problems = None
-            self.view.lyric_evidence = (model, snapshot["flagged"], (), ())
+            self.view.lyric_evidence = (
+                model,
+                snapshot["flagged"],
+                tuple(tuple(row) for row in snapshot["scores"]),
+                (),
+                tuple(tuple(row) for row in (self._lyric_onset_bounds or ())),
+            )
             self.view.load_lyrics(natural_sounds(text), self.view.lyric_times, raw=snapshot["raw"])
         self._prepare_lyrics_copy()
         self._remap_lyrics()
@@ -2006,7 +2088,16 @@ class MainWindow(QMainWindow):
     def _restore_lyric_text(self, text: str) -> None:
         self.lyrics_text = text
         self._lyric_key = text_key(text) if text else ""
-        self._lyric_model, self._lyric_flags, self._lyric_scores, self._lyric_problems = self.view.lyric_evidence
+        evidence = self.view.lyric_evidence
+        if len(evidence) == 4:
+            evidence = (*evidence, ())
+        (
+            self._lyric_model,
+            self._lyric_flags,
+            self._lyric_scores,
+            self._lyric_problems,
+            self._lyric_onset_bounds,
+        ) = evidence
         if self._lyrics_directory is not None:
             self._prepare_lyrics_copy()
 
@@ -2240,8 +2331,9 @@ class MainWindow(QMainWindow):
             self._lyric_model = ""
             self._lyric_flags = ()
             self._lyric_scores = None
+            self._lyric_onset_bounds = None
             self._lyric_problems = None
-            self.view.lyric_evidence = ("", (), (), ())
+            self.view.lyric_evidence = ("", (), (), (), ())
             self.view.load_lyrics(
                 self.view.lyric_lines,
                 self.view.lyric_times,

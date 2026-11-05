@@ -44,6 +44,18 @@ def test_solver_preserves_explicit_structure_without_pinning_note_identity(text,
     assert result == expected
 
 
+def test_an_explicit_krc_group_can_still_include_a_sokuon():
+    text = "(きっ).1"
+    result = solve(
+        natural_sounds(text),
+        [[Raw(0.0, 0.5), Raw(0.5, 0.5)]],
+        [TimedNote(0.0, 1.0, 60, 1)],
+        constraints=read(text),
+    )
+
+    assert result == [Merge((SoundRef(0, 0), SoundRef(0, 1)), 1)]
+
+
 def test_session_edits_can_override_an_existing_krc_group():
     text = "(あい).1"
     notes = [TimedNote(0.0, 1.0, 60, 1), TimedNote(1.0, 2.0, 62, 2)]

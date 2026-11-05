@@ -46,6 +46,12 @@ def test_validate_refuses_invalid_evidence(sound):
         validate(natural_sounds("あ"), [[sound]])
 
 
+@pytest.mark.parametrize("bounds", [(0.2,), (0.3, 0.2), (0.0, float("inf")), (False, 0.1)])
+def test_validate_refuses_invalid_ctc_onset_bounds(bounds):
+    with pytest.raises(MappingError, match="onset uncertainty"):
+        validate(natural_sounds("あ"), [[Raw(0.0, 0.1, onset_bounds=bounds)]])
+
+
 def test_reference_durations_do_not_constrain_neighbouring_onsets():
     validate(natural_sounds("あい"), [[Raw(1.0, 10.0), Raw(1.0, 0.0)]])
 

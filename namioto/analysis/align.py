@@ -12,17 +12,20 @@ The alignment itself is a numpy port of torchaudio's `forced_align`/`merge_token
 see NOTICE). A line's tokens are flattened into their characters, each character is one CTC target,
 and a target's frames are merged into its span; the spans are grouped back into one per token. Only
 a token's start is worth reading: a CTC target's end is the next target's onset, so the last one
-before a rest reaches into the rest.
+before a rest reaches into the rest. The UI applies a model-specific onset calibration after this
+acoustic alignment, because the CTC start and the musical MIDI onset are different events.
 
-The caller passes a window per line; the aligner finds the best CTC path within that window.
+A `Segment` gives the CTC search its lyric tokens and time window. The Align UI currently supplies
+one whole-song segment: KRC lines have no timestamps, so the UI has no independent line windows to
+pass in. This is one global CTC path, separate from how the model computes emissions.
 
-A whole song is not run in one pass: `ChunkedBackend` walks it in overlapping chunks, because a
-wav2vec2 graph attends over its whole input and one pass is quadratic in frames; the `chunk`
-parameter of `PARAMETERS` picks between one pass, fixed chunks, and chunks whose seams are cut in
-the silences (the default). The model's pass is cached on its own
-(`save_emissions`/`load_emissions`, keyed without the lyrics, since the encoder never sees them) and
-the raw run beside it (`save_alignment`/`find_alignment`), so a changed lyric re-runs only the CTC
-search. The run is fitted to the voice the way FA-Kara does (`correct_times`).
+`ChunkedBackend` bounds the wav2vec2 encoder pass, whose cost grows quadratically with frame count.
+It runs overlapping audio chunks and keeps only frames that saw context on both sides, then
+concatenates those frames into one emission sequence. The `chunk` parameter picks between one
+encoder pass, fixed chunks, and chunks whose seams fall in silences (the default). Emissions are
+cached separately (`save_emissions`/`load_emissions`) by audio, model, device and chunk mode, not
+lyrics, so changed lyrics can reuse the model pass and rerun only the CTC search. The alignment
+result is fitted to the voice the way FA-Kara does (`correct_times`).
 """
 
 from __future__ import annotations
@@ -67,11 +70,9 @@ SLICE_THRESHOLD_DB = -40.0
 SLICE_MIN_LENGTH_MS = 1000
 SLICE_MIN_INTERVAL_MS = 200
 SLICE_MAX_SIL_KEPT_MS = 100
-# the energy windows the voice detector reads: a short one finds the tail a sound ends in, a wide
-# one the stretch a line's head sits in; a frame counts as voice above a fraction of the loud
-# percentile
+# the energy window the voice detector reads for line tails; a frame counts as voice above a
+# fraction of the loud percentile
 TAIL_FRAME_SECONDS = 0.02
-HEAD_FRAME_SECONDS = 0.8
 SILENCE_PERCENTILE = 10
 SILENCE_RATIO = 0.1
 MODEL_FILE = "model.onnx"
@@ -90,6 +91,15 @@ MODEL_ENV = model_store.MODELS["aligner"].env
 LANGUAGES = ("ja",)
 MODELS = ("mms", "yohane")
 DEFAULT_MODEL = "mms"
+# CTC localizes the acoustic start of a token, while the MIDI onset usually marks the musical
+# vowel/phoneme boundary. These offsets were estimated with leave-one-song-out comparisons on the
+# bundled projects; they are model-specific and deliberately live outside the mapping DP.
+ONSET_OFFSETS = {
+    "mms": {"consonant": 0.04, "vowel": -0.05},
+    "yohane": {"consonant": 0.08, "vowel": 0.06},
+}
+MIDI_ONSET_PRIOR_WEIGHT = 0.8
+MIDI_ONSET_PRIOR_SIGMA = 0.15
 # the ways the model's pass can be cut up: one pass over the whole song, fixed-length chunks, or
 # chunks whose seams are pulled into the silences
 SLICE_MODES = ("off", "fixed", "silence")
@@ -153,12 +163,13 @@ class Segment:
 
 @dataclass(frozen=True)
 class Token:
-    """One input token. `start`, `end` and `score` are None where it could not be aligned."""
+    """One input token, with its Viterbi span and a posterior interval for its onset."""
 
     text: str
     start: float | None = None
     end: float | None = None
     score: float | None = None
+    onset_interval: tuple[float, float] | None = None
 
 
 @dataclass(frozen=True)
@@ -221,7 +232,7 @@ def load_audio(path: str | pathlib.Path) -> np.ndarray:
 # An alignment is a derived result, not a preference: the store is a cache the next run may re-make
 # from the model, so a file that is missing or unreadable simply means there is nothing to reuse.
 ALIGNMENTS_DIR = "alignments"
-ALIGNMENT_STORE_VERSION = 2
+ALIGNMENT_STORE_VERSION = 5
 # the model's own pass over the audio depends on the audio alone, so it is cached apart from the
 # lyrics: a changed text re-runs only the cheap CTC search, not the wav2vec2 encoder
 EMISSIONS_DIR = "emissions"
@@ -259,9 +270,16 @@ def _store_path(audio: str | pathlib.Path) -> pathlib.Path:
     return alignments_root() / f"{digest}.json"
 
 
-def alignment_key(audio: str | pathlib.Path, model: str, provider: str, text: str, chunk: str = DEFAULT_MODE) -> str:
+def alignment_key(
+    audio: str | pathlib.Path,
+    model: str,
+    provider: str,
+    text: str,
+    chunk: str = DEFAULT_MODE,
+    onset_priors=(),
+) -> str:
     """What makes two alignments the same one: the audio, the model, where it runs, the lyrics and
-    how the model's pass was cut up.
+    how the model's pass was cut up, and the MIDI onset hints used by the CTC search.
 
     The tempo and the grid offset are not part of it: they only snap the result, so changing either
     re-snaps a stored alignment instead of running the model again. The cutting mode is, because it
@@ -273,6 +291,7 @@ def alignment_key(audio: str | pathlib.Path, model: str, provider: str, text: st
         "provider": provider,
         "text": text,
         "chunk": chunk,
+        "onset_priors": onset_priors,
     }
     return hashlib.sha1(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
 
@@ -301,12 +320,19 @@ def load_alignments(audio: str | pathlib.Path) -> dict[str, dict]:
     return {key: entry for key, entry in entries.items() if isinstance(entry, dict)}
 
 
-def find_alignment(audio: str | pathlib.Path, model: str, provider: str, text: str, chunk: str = DEFAULT_MODE):
+def find_alignment(
+    audio: str | pathlib.Path,
+    model: str,
+    provider: str,
+    text: str,
+    chunk: str = DEFAULT_MODE,
+    onset_priors=(),
+):
     """The lines, doubts and per-line flags an alignment with these exact inputs already found, or None.
 
     A store written before the flags existed has none, so it comes back empty rather than as a miss.
     """
-    entry = load_alignments(audio).get(alignment_key(audio, model, provider, text, chunk))
+    entry = load_alignments(audio).get(alignment_key(audio, model, provider, text, chunk, onset_priors))
     if not entry:
         return None
     rows = _stored_rows(entry.get("rows"))
@@ -318,6 +344,8 @@ def find_alignment(audio: str | pathlib.Path, model: str, provider: str, text: s
         rows,
         [str(problem) for problem in problems] if isinstance(problems, list) else [],
         [bool(flag) for flag in flagged] if isinstance(flagged, list) else [],
+        _stored_scores(entry.get("scores")),
+        _stored_onset_bounds(entry.get("onset_bounds")),
     )
 
 
@@ -330,15 +358,20 @@ def save_alignment(
     problems,
     flagged,
     chunk: str = DEFAULT_MODE,
+    scores=(),
+    onset_bounds=(),
+    onset_priors=(),
 ) -> pathlib.Path:
     """Keep one entry per alignment key: running the same one again replaces what it found last time."""
     entries = load_alignments(audio)
-    entries[alignment_key(audio, model, provider, text, chunk)] = {
+    entries[alignment_key(audio, model, provider, text, chunk, onset_priors)] = {
         "at": int(time.time()),
         "model": model,
         "rows": [[[start, end] for start, end in row] for row in rows],
         "problems": [str(problem) for problem in problems],
         "flagged": [bool(flag) for flag in flagged],
+        "scores": [list(row) for row in scores],
+        "onset_bounds": [[list(bounds) if bounds is not None else None for bounds in row] for row in onset_bounds],
     }
     target = _store_path(audio)
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -347,6 +380,52 @@ def save_alignment(
         encoding="utf-8",
     )
     return target
+
+
+def _stored_scores(value) -> list[list[float | None]]:
+    """Read optional per-token posteriors from an alignment cache written by a newer run."""
+    if not isinstance(value, list):
+        return []
+    rows = []
+    for row in value:
+        if not isinstance(row, list):
+            return []
+        found = []
+        for score in row:
+            if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
+                found.append(None)
+            else:
+                found.append(min(max(float(score), 0.0), 1.0))
+        rows.append(found)
+    return rows
+
+
+def _stored_onset_bounds(value) -> list[list[tuple[float, float] | None]]:
+    """Read optional per-token onset intervals from an alignment cache written by a newer run."""
+    if not isinstance(value, list):
+        return []
+    rows = []
+    for row in value:
+        if not isinstance(row, list):
+            return []
+        found = []
+        for bounds in row:
+            if bounds is None:
+                found.append(None)
+            elif (
+                isinstance(bounds, list)
+                and len(bounds) == 2
+                and all(
+                    isinstance(bound, (int, float)) and not isinstance(bound, bool) and math.isfinite(bound)
+                    for bound in bounds
+                )
+                and bounds[0] <= bounds[1]
+            ):
+                found.append((float(bounds[0]), float(bounds[1])))
+            else:
+                return []
+        rows.append(found)
+    return rows
 
 
 def emissions_root() -> pathlib.Path:
@@ -547,15 +626,29 @@ def whole_emissions(backend: Backend, audio: np.ndarray) -> np.ndarray:
 
 
 def forced_align(
-    emission: np.ndarray, tokens: Sequence[int], blank_id: int = 0
+    emission: np.ndarray,
+    tokens: Sequence[int],
+    blank_id: int = 0,
+    *,
+    onset_priors: Sequence[float | None] | None = None,
+    prior_weight: float = MIDI_ONSET_PRIOR_WEIGHT,
+    prior_sigma: float = MIDI_ONSET_PRIOR_SIGMA,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """The best frame path through the CTC graph, as a token id and a log-probability per frame.
 
     The graph alternates the blank with each target token; a token may follow itself only across a
     blank. The path is forced to end on the last token (or the blank after it), so every target is
-    visited. None means the window has fewer frames than the targets and their repeats need.
+    visited. An optional Gaussian prior changes only target-entry transitions, not acoustic
+    emissions or returned frame scores. None means the window has fewer frames than the targets
+    and their repeats need.
     """
     frames, count = emission.shape[0], len(tokens)
+    if onset_priors is not None and len(onset_priors) != count:
+        raise ValueError("onset prior count must match CTC targets")
+    if prior_sigma <= 0 or not math.isfinite(prior_sigma):
+        raise ValueError("onset prior sigma must be finite and positive")
+    if prior_weight < 0 or not math.isfinite(prior_weight):
+        raise ValueError("onset prior weight must be finite and non-negative")
     if count == 0:
         return np.full(frames, blank_id, dtype=np.int64), emission[:, blank_id].copy()
     repeats = sum(1 for earlier, later in zip(tokens, tokens[1:], strict=False) if earlier == later)
@@ -572,6 +665,17 @@ def forced_align(
     back = np.zeros((frames, states), dtype=np.int8)
     alpha[0, 0] = emission[0, blank_id]
     alpha[0, 1] = emission[0, labels[1]]
+    prior = np.zeros((frames, count), dtype=np.float64)
+    if onset_priors is not None and prior_weight:
+        frame_times = np.arange(frames, dtype=np.float64) * FRAME_SECONDS
+        for target, center in enumerate(onset_priors):
+            if center is None:
+                continue
+            if not math.isfinite(center):
+                raise ValueError("onset priors must be finite or None")
+            prior[:, target] = -0.5 * prior_weight * ((frame_times - center) / prior_sigma) ** 2
+        if count:
+            alpha[0, 1] += prior[0, 0]
     positions = np.arange(states)
     for t in range(1, frames):
         previous = alpha[t - 1]
@@ -579,6 +683,11 @@ def forced_align(
         step = np.concatenate(([-np.inf], previous[:-1]))
         over = np.full(states, -np.inf)
         over[skip] = previous[positions[skip] - 2]
+        if onset_priors is not None and prior_weight:
+            entry_bias = np.zeros(states, dtype=np.float64)
+            entry_bias[1::2] = prior[t]
+            step += entry_bias
+            over += entry_bias
         choice = np.where(over > np.maximum(stay, step), 2, np.where(step > np.maximum(stay, over), 1, 0))
         best = np.where(choice == 2, over, np.where(choice == 1, step, stay))
         alpha[t] = best + emission[t, labels]
@@ -590,6 +699,65 @@ def forced_align(
         path[t] = labels[state]
         state -= int(back[t, state])
     return path, emission[np.arange(frames), path]
+
+
+def ctc_onset_posteriors(
+    emission: np.ndarray, tokens: Sequence[int], blank_id: int = 0
+) -> np.ndarray | None:
+    """Posterior distribution over the first frame of each target in the CTC state lattice.
+
+    Rows correspond to input tokens and columns to emission frames. Unlike the Viterbi score, this
+    sums every valid forced path, so a broad row means the model did not localize that token's onset
+    reliably. `None` means no complete path can visit all targets.
+    """
+    frames, count = emission.shape[0], len(tokens)
+    if count == 0:
+        return np.empty((0, frames), dtype=np.float64)
+    repeats = sum(earlier == later for earlier, later in zip(tokens, tokens[1:], strict=False))
+    if frames < count + repeats:
+        return None
+
+    states = 2 * count + 1
+    labels = np.full(states, blank_id, dtype=np.int64)
+    labels[1::2] = tokens
+    skip = np.zeros(states, dtype=bool)
+    skip[2:] = (labels[2:] != blank_id) & (labels[2:] != labels[:-2])
+
+    alpha = np.full((frames, states), -np.inf, dtype=np.float64)
+    alpha[0, 0] = emission[0, blank_id]
+    alpha[0, 1] = emission[0, labels[1]]
+    for frame in range(1, frames):
+        previous = alpha[frame - 1]
+        step = np.concatenate(([-np.inf], previous[:-1]))
+        over = np.full(states, -np.inf)
+        valid = np.flatnonzero(skip)
+        over[valid] = previous[valid - 2]
+        alpha[frame] = np.logaddexp(np.logaddexp(previous, step), over) + emission[frame, labels]
+
+    beta = np.full((frames, states), -np.inf, dtype=np.float64)
+    beta[-1, -1:] = 0.0
+    beta[-1, -2] = 0.0
+    for frame in range(frames - 2, -1, -1):
+        following = beta[frame + 1] + emission[frame + 1, labels]
+        step = np.concatenate((following[1:], [-np.inf]))
+        over = np.full(states, -np.inf)
+        over[:-2] = beta[frame + 1, 2:] + emission[frame + 1, labels[2:]]
+        over[:-2][~skip[2:]] = -np.inf
+        beta[frame] = np.logaddexp(np.logaddexp(following, step), over)
+
+    total = np.logaddexp(alpha[-1, -1], alpha[-1, -2])
+    posterior = np.zeros((count, frames), dtype=np.float64)
+    for token in range(count):
+        state = 2 * token + 1
+        if token == 0:
+            posterior[token, 0] = np.exp(emission[0, labels[state]] + beta[0, state] - total)
+        entered = alpha[:-1, state - 1]
+        if skip[state]:
+            entered = np.logaddexp(entered, alpha[:-1, state - 2])
+        posterior[token, 1:] = np.exp(
+            entered + emission[1:, labels[state]] + beta[1:, state] - total
+        )
+    return posterior
 
 
 def merge_tokens(path: np.ndarray, scores: np.ndarray, blank_id: int = 0) -> list[tuple[int, int, int, float]]:
@@ -633,10 +801,78 @@ def align(
 
 
 def align_whole(
-    segment: Segment, emission: np.ndarray, dictionary: Mapping[str, int], *, blank_id: int = 0
+    segment: Segment,
+    emission: np.ndarray,
+    dictionary: Mapping[str, int],
+    *,
+    blank_id: int = 0,
+    onset_priors: Sequence[float | None] | None = None,
+    prior_weight: float = MIDI_ONSET_PRIOR_WEIGHT,
+    prior_sigma: float = MIDI_ONSET_PRIOR_SIGMA,
 ) -> AlignedSegment:
     """Align a segment that is the whole audio, from the model's already-computed pass over it."""
-    return _align_emission(segment, emission, 0.0, dictionary, blank_id)
+    return _align_emission(
+        segment, emission, 0.0, dictionary, blank_id, onset_priors, prior_weight, prior_sigma
+    )
+
+
+def onset_offset(model: str, token: str) -> float:
+    """The model's estimated shift from a CTC token onset to a musical onset."""
+    kind = "vowel" if token[:1].lower() in "aeiou" else "consonant"
+    try:
+        return ONSET_OFFSETS[model][kind]
+    except KeyError as error:
+        raise ValueError(f"no onset calibration for model {model!r}") from error
+
+
+def midi_onset_priors(mapped, note_onsets: Mapping[int, float]) -> list[list[float | None]]:
+    """Give each mapped NOTE onset to its first Sound; shared NOTE members get no duplicate prior."""
+    used: set[int] = set()
+    rows: list[list[float | None]] = []
+    ordered: list[float] = []
+    for row in mapped:
+        priors = []
+        for note_ids in row:
+            available = [note_id for note_id in note_ids if note_id not in used and note_id in note_onsets]
+            center = float(note_onsets[available[0]]) if available else None
+            priors.append(center)
+            if center is not None:
+                ordered.append(center)
+            used.update(note_ids)
+        rows.append(priors)
+    if any(later < earlier for earlier, later in zip(ordered, ordered[1:], strict=False)):
+        return [[None for _center in row] for row in rows]
+    return rows
+
+
+def calibrate_times(
+    rows: Sequence[Sequence[tuple[float | None, float | None]]],
+    tokens: Sequence[Token],
+    model: str,
+) -> list[list[tuple[float | None, float | None]]]:
+    """Shift token onsets to the model's musical-onset estimate, preserving durations.
+
+    CTC can give two adjacent tokens the same frame. Calibration must therefore retain global
+    monotonicity: only the rare inverted onset is clipped to the previous calibrated onset.
+    """
+    result: list[list[tuple[float | None, float | None]]] = []
+    token_at = 0
+    previous = float("-inf")
+    for row in rows:
+        found = []
+        for start, end in row:
+            token = tokens[token_at]
+            token_at += 1
+            if start is None or end is None:
+                found.append((start, end))
+                continue
+            adjusted = min(end, max(previous, max(0.0, start + onset_offset(model, token.text))))
+            found.append((adjusted, end))
+            previous = adjusted
+        result.append(found)
+    if token_at != len(tokens):
+        raise ValueError("token count does not match alignment rows")
+    return result
 
 
 def _align_one(
@@ -660,6 +896,9 @@ def _align_emission(
     offset: float,
     dictionary: Mapping[str, int],
     blank_id: int,
+    onset_priors: Sequence[float | None] | None = None,
+    prior_weight: float = 0.8,
+    prior_sigma: float = 0.15,
 ) -> AlignedSegment:
     lengths = [len(token) for token in segment.tokens]
     codes = [dictionary.get(char.lower(), -1) for token in segment.tokens for char in token]
@@ -671,20 +910,47 @@ def _align_emission(
         emission = np.concatenate([emission, emission[:, non_blank].max(axis=1)[:, None]], axis=1)
         wildcard = emission.shape[1] - 1
         codes = [wildcard if missing else code for code, missing in zip(codes, unknown, strict=True)]
-    found = forced_align(emission, codes, blank_id)
+    char_priors = None
+    if onset_priors is not None:
+        if len(onset_priors) != len(segment.tokens):
+            raise ValueError("onset prior count must match input tokens")
+        char_priors = []
+        for length, center in zip(lengths, onset_priors, strict=True):
+            if length:
+                char_priors.extend((center, *([None] * (length - 1))))
+        if not any(center is not None for center in char_priors):
+            char_priors = None
+    found = forced_align(
+        emission,
+        codes,
+        blank_id,
+        onset_priors=char_priors,
+        prior_weight=prior_weight,
+        prior_sigma=prior_sigma,
+    )
     if found is not None:
+        onset = ctc_onset_posteriors(emission, codes, blank_id)
         spans = merge_tokens(found[0], found[1], blank_id)
         if len(spans) == len(codes):
             at = 0
             for index, length in enumerate(lengths):
                 chunk = spans[at : at + length]
+                first_code = at
                 at += length
                 if not chunk:
                     continue
                 start = chunk[0][1] * FRAME_SECONDS + offset
                 end = chunk[-1][2] * FRAME_SECONDS + offset
                 score = float(np.exp(sum(span[3] for span in chunk) / len(chunk)))
-                tokens[index] = Token(segment.tokens[index], round(start, 3), round(end, 3), round(score, 3))
+                interval = None
+                if onset is not None:
+                    cumulative = np.cumsum(onset[first_code])
+                    low = int(np.searchsorted(cumulative, 0.05))
+                    high = int(np.searchsorted(cumulative, 0.95))
+                    interval = (round(low * FRAME_SECONDS + offset, 3), round(high * FRAME_SECONDS + offset, 3))
+                tokens[index] = Token(
+                    segment.tokens[index], round(start, 3), round(end, 3), round(score, 3), interval
+                )
     return AlignedSegment(segment.start, segment.end, tuple(tokens))
 
 
@@ -729,32 +995,16 @@ def voice_segments(audio: np.ndarray, frame_seconds: float = TAIL_FRAME_SECONDS)
 def correct_times(
     rows: list[list[tuple[float | None, float | None]]], audio: np.ndarray
 ) -> list[list[tuple[float | None, float | None]]]:
-    """A line's head and ends take the voice they were aligned against, the way FA-Kara fixes them.
+    """Extend each line's last Sound to the voice ending, as FA-Kara does.
 
-    A line's last sound reaches the end of the voiced stretch it sits in, or the next line's onset
-    when the voice runs on; its first sound moves to the onset of the stretch that holds the line's
-    end. This is FA-Kara's `tail_correct=3`/`head_correct=1` defaults for the MMS model, on the
-    lines `split` hands back, so a rest still stays a rest. A line with nothing aligned is left
-    alone.
+    A line's last Sound reaches the end of the voiced stretch it sits in, or the next line's onset
+    when the voice runs on. Keep the CTC onset unchanged: the line-level energy heuristic can move a
+    head to a later stretch when the line crosses a rest, while CTC onsets are already more precise
+    than that envelope. A line with nothing aligned is left alone.
     """
     rows = [list(row) for row in rows]
-    _correct_heads(rows, voice_segments(audio, HEAD_FRAME_SECONDS))
     _correct_tails(rows, voice_segments(audio))
     return rows
-
-
-def _correct_heads(rows: list[list], segments: Sequence[tuple[float, float]]) -> None:
-    """A line that no single stretch covers starts where the stretch holding its end starts."""
-    for row in rows:
-        first, last = _first_aligned(row), _last_aligned(row)
-        if first is None or last is None:
-            continue
-        start, end = row[first][0], row[last][1]
-        if start is None or end is None or any(begin <= start and finish >= end for begin, finish in segments):
-            continue
-        onset = next((begin for begin, finish in segments if begin <= end <= finish), None)
-        if onset is not None:
-            row[first] = (min(row[first][1], onset), row[first][1])
 
 
 def _correct_tails(rows: list[list], segments: Sequence[tuple[float, float]]) -> None:
@@ -769,10 +1019,6 @@ def _correct_tails(rows: list[list], segments: Sequence[tuple[float, float]]) ->
         filled = _tail_end(segments, end, _next_onset(rows, index))
         if filled > end:
             row[last] = (start, filled)
-
-
-def _first_aligned(row: list) -> int | None:
-    return next((index for index, (start, _end) in enumerate(row) if start is not None), None)
 
 
 def _last_aligned(row: list) -> int | None:

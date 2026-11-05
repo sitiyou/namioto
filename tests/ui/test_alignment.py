@@ -21,13 +21,24 @@ def test_the_aligned_times_are_kept_in_the_project(own_window, tmp_path, text) -
     own_window._on_lyrics_saved(text)
     own_window.transport.bpm.setValue(60)
     own_window.view.set_notes([(60, 0, 1), (62, 1, 1)])
-    own_window._adopt_alignment([[(0.0, 1.0), (1.0, 1.0)]], "mms")
+    own_window._adopt_alignment(
+        [[(0.0, 1.0), (1.0, 1.0)]],
+        "mms",
+        scores=[[0.8, 0.6]],
+        onset_bounds=[[(0.0, 0.02), (1.0, 1.02)]],
+    )
     wait_for_lyric_mapping(own_window)
 
     assert own_window.save_project(tmp_path / "song.nto") is True
     saved = project.load(tmp_path / "song.nto")
     assert saved.lyrics == project.Lyrics(
-        text=text, key=text_key(text), model="mms", raw=(((0.0, 1.0), (1.0, 1.0)),), flagged=(False,)
+        text=text,
+        key=text_key(text),
+        model="mms",
+        raw=(((0.0, 1.0), (1.0, 1.0)),),
+        flagged=(False,),
+        scores=((0.8, 0.6),),
+        onset_bounds=(((0.0, 0.02), (1.0, 1.02)),),
     )
     assert own_window.project_dirty is False
 
@@ -35,9 +46,9 @@ def test_the_aligned_times_are_kept_in_the_project(own_window, tmp_path, text) -
 def test_the_align_dialog_hands_the_times_over(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あい\n", 120.0, parent=own_window)
     got: list = []
-    dialog.aligned.connect(lambda times, model, flagged: got.append((times, model)))
-    dialog._done(([[(0.0, 1.0), (1.0, 2.0)]], "mms", [], []))
-    assert got == [([[(0.0, 1.0), (1.0, 1.0)]], "mms")]
+    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append((times, model, scores)))
+    dialog._done(([[(0.0, 1.0), (1.0, 2.0)]], "mms", [], [], [[0.8, 0.6]]))
+    assert got == [([[(0.0, 1.0), (1.0, 1.0)]], "mms", [[0.8, 0.6]])]
     assert dialog.run.isEnabled()
 
 
@@ -56,16 +67,36 @@ def test_the_align_dialog_snaps_to_the_beat_grid_when_asked(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
     parameter_writer(dialog, "quantize")(1)  # 1/4 notes, one beat
     got: list = []
-    dialog.aligned.connect(lambda times, model, flagged: got.append(times))
+    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append(times))
     dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
     assert got == [[[(0.0, 0.5), (0.5, pytest.approx(0.5))]]]
+
+
+def test_quantization_shifts_the_posterior_onset_bounds_with_the_onsets(own_window) -> None:
+    dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
+    parameter_writer(dialog, "quantize")(1)
+    got: list = []
+    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append((times, bounds)))
+    dialog._done(
+        (
+            [[(0.1, 0.6), (0.6, 1.1)]],
+            "mms",
+            [],
+            [],
+            [[0.8, 0.6]],
+            [[(0.08, 0.12), (0.58, 0.62)]],
+        )
+    )
+    times, bounds = got[0]
+    assert times == [[(0.0, 0.5), (0.5, pytest.approx(0.5))]]
+    assert bounds == [[(-0.02, 0.02), (0.48, 0.52)]]
 
 
 def test_the_align_dialog_can_quantize_to_eighth_notes(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
     parameter_writer(dialog, "quantize")(2)  # 1/8 notes, half a beat
     got: list = []
-    dialog.aligned.connect(lambda times, model, flagged: got.append(times))
+    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append(times))
     dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
     assert got == [[[(0.0, 0.5), (0.5, pytest.approx(0.5))]]]
 
@@ -74,7 +105,7 @@ def test_the_align_dialog_quantizes_onto_the_offset_grid(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window, offset=0.25)
     parameter_writer(dialog, "quantize")(1)  # 1/4 notes, one beat
     got: list = []
-    dialog.aligned.connect(lambda times, model, flagged: got.append(times))
+    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append(times))
     dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
     assert got == [[[(0.25, 0.5), (0.75, pytest.approx(0.5))]]]
 
@@ -85,7 +116,7 @@ def test_a_cached_alignment_is_reused_and_resnapped(own_window, monkeypatch) -> 
     dialog = AlignDialog("/tmp/vocal.wav", "あん\n", 120.0, parent=own_window, offset=0.25)
     parameter_writer(dialog, "quantize")(1)  # 1/4 notes, one beat
     got: list = []
-    dialog.aligned.connect(lambda times, model, flagged: got.append(times))
+    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append(times))
 
     dialog._start()
 
@@ -100,7 +131,7 @@ def test_a_cached_whole_song_alignment_is_reused_when_chunking_is_off(own_window
     dialog = AlignDialog("/tmp/vocal.wav", "あん\n", 120.0, parent=own_window)
     parameter_writer(dialog, "chunk")("off")
     got: list = []
-    dialog.aligned.connect(lambda times, model, flagged: got.append(times))
+    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append(times))
 
     dialog._start()
 
@@ -134,7 +165,7 @@ def test_the_align_dialog_runs_chunked_unless_told_otherwise(own_window) -> None
 def test_the_align_dialog_leaves_the_times_alone_by_default(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
     got: list = []
-    dialog.aligned.connect(lambda times, model, flagged: got.append(times))
+    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append(times))
     dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
     assert got == [[[(0.1, 0.5), (0.6, pytest.approx(0.5))]]]
 
