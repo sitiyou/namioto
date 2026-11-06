@@ -54,7 +54,7 @@ def test_shift_right_resizes_the_whole_group_without_changing_its_neighbor(own_w
     before = own_window.view.undo_stack.count()
     _shift_lyric(own_window, 0.75, 1.75)
     assert own_window.lyrics_text == "(あい).2う.2"
-    assert own_window.view.lyric_group[0][0] == own_window.view.lyric_group[0][1] >= 0
+    assert own_window.view.lyric_group[0] == (0, 0, -1)
     assert own_window.view.lyric_mapped == (((1,), (2,), (3, 4)),)
     assert own_window.view.undo_stack.count() == before + 1
     own_window.view.undo()
@@ -108,7 +108,7 @@ def test_shift_group_can_shrink_to_zero_without_losing_its_members(own_window, t
     assert own_window.lyrics_text == "(あい).0う"
     blocks = own_window.sound_strip._blocks()
     assert all(blocks[(0, index)].top() > 36 for index in (0, 1))
-    assert own_window.view.lyric_group[0][0] == own_window.view.lyric_group[0][1] >= 0
+    assert own_window.view.lyric_group[0] == (0, 0, -1)
 
 
 def test_group_edge_drag_keeps_remaining_count_and_moves_following_lyrics_back(own_window, tmp_path):
@@ -176,25 +176,28 @@ def test_escape_restores_shift_resize_and_does_not_add_an_undo_step(own_window, 
     assert own_window.view.undo_stack.count() == before
 
 
-@pytest.mark.parametrize("text, count", [("(あい).2う", 3), ("(あい).0う", 1), ("泣[な.2]い.+う", 3)])
-def test_auto_mapping_preserves_literal_groups_and_their_counts(own_window, tmp_path, text, count):
+@pytest.mark.parametrize(
+    "text, count, expected",
+    [("(あい).2う", 3, "あいう"), ("(あい).0う", 1, "あい.0う.0"), ("泣[な.2]い.+う", 3, "泣[な]いう")],
+)
+def test_auto_mapping_overwrites_literal_groups_and_their_counts(own_window, tmp_path, text, count, expected):
     _gesture_lyrics(own_window, tmp_path, text, count=count)
     own_window._adopt_alignment([[(0.0, 1.0), (1.0, 1.0), (2.0, 1.0)]], "mms")
     wait_for_lyric_mapping(own_window)
-    assert own_window.lyrics_text == text
+    assert own_window.lyrics_text == expected
     assert own_window._lyric_model == "mms"
-    assert own_window.view.lyric_group[0][0] == own_window.view.lyric_group[0][1] >= 0
+    assert own_window.view.lyric_group[0] == (-1, -1, -1)
 
 
-def test_channel_rebuild_preserves_another_channels_literal_multi_note_group(own_window, tmp_path):
+def test_channel_rebuild_overwrites_another_channels_literal_multi_note_group(own_window, tmp_path):
     text = "@1{(あい).2}@0{う}"
     _gesture_lyrics(own_window, tmp_path, text, count=1)
     own_window.view.set_channels((Channel(channel=0), Channel(channel=1)))
     own_window.view.set_notes(((60, 0, 1, 1, 10), (62, 1, 1, 1, 20), (64, 0, 1, 0, 30)))
     wait_for_lyric_mapping(own_window)
-    own_window._adopt_alignment([[(0.0, 1.0)]], "mms", use_constraints=False, channel=0)
+    own_window._adopt_alignment([[(0.0, 1.0)]], "mms", channel=0)
     wait_for_lyric_mapping(own_window)
-    assert own_window.lyrics_text == text
+    assert own_window.lyrics_text == "@1{あい}@0{う}"
     assert own_window.view.lyric_mapped == (((10,), (20,), (30,)),)
 
 

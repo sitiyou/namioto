@@ -21,12 +21,19 @@ from namioto.karaoke.sounds import SoundLine, _base_words, natural_sounds
 from namioto.karaoke.writer import dumps
 
 
-def rebuild(text: str, operations: Sequence[Operation | NoteRun], *, line_indices: Sequence[int] | None = None) -> str:
+def rebuild(
+    text: str,
+    operations: Sequence[Operation | NoteRun],
+    *,
+    line_indices: Sequence[int] | None = None,
+    dotted: bool = True,
+) -> str:
     """The canonical `.krc` for `text` under `operations`, verified to read back the same Sounds.
 
     `operations` must partition the natural Sounds of `line_indices`, or all lines when omitted.
     Unselected lines keep their literal KRC structure. An incomplete partition or a written `.N`
-    that would move a Sound raises `KrcError` rather than writing a broken file.
+    that would move a Sound raises `KrcError` rather than writing a broken file. `dotted=False`
+    drops redundant explicit counts while retaining counts that change NOTE consumption.
     """
     if not text.strip():
         return ""
@@ -65,7 +72,7 @@ def rebuild(text: str, operations: Sequence[Operation | NoteRun], *, line_indice
                     pieces.append((count, override, joined))
             _rebuild_line(line, pieces, lines[line_index])
             line_index += 1
-    rebuilt = dumps(lyrics, dotted=True)
+    rebuilt = dumps(lyrics, dotted=dotted)
     _verify(lines, rebuilt)
     return rebuilt
 

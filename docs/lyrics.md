@@ -72,7 +72,7 @@ Use a separated singing voice for alignment, not a full mix. With lyrics and aud
 the clock button opens **Align** for the selected channel.
 
 - **Auto-map** uses alignment while respecting explicit KRC counts and shared-sound groups.
-- **Rebuild mapping** computes a structure without those constraints.
+- **Align** replaces the current mapping with the structure computed from the vocal.
 - **Quantize** optionally snaps the result onto the BPM grid.
 
 Successful mapping updates KRC in one undo step without automatically saving the project.

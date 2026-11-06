@@ -1884,7 +1884,6 @@ class MainWindow(QMainWindow):
                 flagged,
                 scores=scores,
                 onset_bounds=onset_bounds,
-                use_constraints=dialog.parameters()["use_constraints"],
                 channel=channel,
             )
 
@@ -1899,7 +1898,6 @@ class MainWindow(QMainWindow):
         *,
         scores=(),
         onset_bounds=(),
-        use_constraints: bool = True,
         channel: int | None = None,
     ) -> None:
         if self.view.gesture_active or self._lyric_migration_error:
@@ -1964,7 +1962,7 @@ class MainWindow(QMainWindow):
             scores=combined_scores,
             onset_bounds=combined_bounds,
             mode="edit",
-            use_constraints=use_constraints,
+            use_constraints=False,
             solve_channels=(channel,) if channel is not None else None,
         )
         self._lyric_map_revision += 1
@@ -2028,12 +2026,11 @@ class MainWindow(QMainWindow):
         try:
             if errors:
                 raise KrcError("; ".join(errors))
-            text = self._canonical_mapping(
+            text = rebuild(
                 snapshot["text"],
                 mapping.operations,
-                channels=selected,
                 line_indices=sorted({ref.line for row in refs for ref in row}),
-                preserve_groups=snapshot["use_constraints"],
+                dotted=False,
             )
         except (KrcError, ValueError) as error:
             self._remap_lyrics()

@@ -119,8 +119,7 @@ def test_alignment_writes_krc_without_saving_or_entering_a_mode(own_window, tmp_
     assert own_window.view.lyric_mapped == expected
 
 
-@pytest.mark.parametrize("use_constraints,slots", [(True, (2, 1)), (False, (1, 2))])
-def test_alignment_mapping_can_use_or_ignore_krc_constraints(own_window, tmp_path, use_constraints, slots):
+def test_alignment_mapping_overwrites_krc_constraints(own_window, tmp_path):
     own_window.project_path = tmp_path / "song.nto"
     own_window._watch_lyrics()
     own_window.transport.bpm.setValue(60.0)
@@ -128,14 +127,14 @@ def test_alignment_mapping_can_use_or_ignore_krc_constraints(own_window, tmp_pat
     own_window.view.set_active_channel(5)
     own_window.view.set_notes([(60, 0.0, 1.0, 0), (62, 1.0, 1.0, 0), (64, 2.0, 1.0, 0)])
     assert own_window._on_lyrics_saved("あ.2い")
-    own_window._adopt_alignment([[(0.0, 1.0), (1.0, 2.0)]], "mms", use_constraints=use_constraints)
+    own_window._adopt_alignment([[(0.0, 1.0), (1.0, 2.0)]], "mms")
     wait_for_lyric_mapping(own_window)
-    assert tuple(operation.slots for operation in own_window.view.lyric_operations) == slots
+    assert tuple(operation.slots for operation in own_window.view.lyric_operations) == (1, 2)
     assert own_window.save_project(own_window.project_path)
     assert own_window.load_project(own_window.project_path)
     wait_for_lyric_mapping(own_window)
     assert not hasattr(own_window, "_lyric_mode")
-    assert tuple(operation.slots for operation in own_window.view.lyric_operations) == slots
+    assert tuple(operation.slots for operation in own_window.view.lyric_operations) == (1, 2)
     expected = own_window.view.lyric_mapped
     assert own_window._prepare_lyrics_copy() is not None
     assert lyrics.load(own_window.lyrics_path()) == own_window.lyrics_text
@@ -169,16 +168,12 @@ def test_incompatible_krc_constraints_leave_the_original_text_until_rebuilt(own_
     own_window._watch_lyrics()
     own_window.view.set_notes([(60, 0.0, 1.0)])
     assert own_window._on_lyrics_saved("あ.3")
-    own_window._adopt_alignment([[(0.0, 1.0)]], "mms", use_constraints=True)
+    own_window._adopt_alignment([[(0.0, 1.0)]], "mms")
     wait_for_lyric_mapping(own_window)
     assert not own_window._lyric_error
     assert own_window.view.lyric_times == (((0.0, own_window.view.to_seconds(1.0)),),)
     assert own_window.view.lyric_editable
     assert not own_window.sound_strip.isHidden()
-    assert own_window.lyrics_text == "あ.3"
-    own_window._adopt_alignment([[(0.0, 1.0)]], "mms", use_constraints=False)
-    wait_for_lyric_mapping(own_window)
-    assert not own_window._lyric_error
     assert own_window.lyrics_text == "あ"
 
 
@@ -466,7 +461,7 @@ def test_faithful_strip_dragging_does_not_change_alignment_evidence(own_window, 
 
 def test_realigning_keeps_the_faithful_editor_available(own_window, tmp_path) -> None:
     _mapped_pair(own_window, tmp_path, raw=((0.1, 0.2), (0.8, 0.4)))
-    own_window._adopt_alignment([[(0.1, 0.2), (0.8, 0.4)]], "mms", use_constraints=True)
+    own_window._adopt_alignment([[(0.1, 0.2), (0.8, 0.4)]], "mms")
     wait_for_lyric_mapping(own_window)
     assert own_window.view.lyric_editable
     assert own_window.view.lyric_raw == (((0.1, 0.2), (0.8, 0.4)),)

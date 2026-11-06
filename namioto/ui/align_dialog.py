@@ -102,7 +102,7 @@ class Aligner(LoadingThread):
         if len(flattened_priors) != len(segment.tokens):
             flattened_priors = [None] * len(segment.tokens)
         ctc_priors = [
-            None if center is None else center - align.onset_offset(self.model, token.text)
+            None if center is None else center - align.onset_offset(self.model, token)
             for token, center in zip(segment.tokens, flattened_priors, strict=True)
         ]
         found = align.align_whole(
@@ -185,7 +185,6 @@ class AlignDialog(QDialog):
         self._thread: Aligner | None = None
         # the choices the last run was made with, straight onto the form
         self._parameters = align.load_parameters()
-        self._use_constraints = False
         self._fields: list[tuple[Field, Callable[[], object], Callable[[object], None]]] = []
 
         form = self._build_form()
@@ -214,7 +213,6 @@ class AlignDialog(QDialog):
         return align.coerce_parameters(
             {
                 **{field.name: read() for field, read, _write in self._fields},
-                "use_constraints": self._use_constraints,
             }
         )
 
@@ -224,8 +222,6 @@ class AlignDialog(QDialog):
         form.setContentsMargins(0, 0, 0, 0)
         form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
         for item in align.PARAMETERS:
-            if item.name == "use_constraints":
-                continue
             editor, read, write = field_editor(self._parameters[item.name], item)
             add_row(form, editor, item)
             self._fields.append((item, read, write))
@@ -239,7 +235,6 @@ class AlignDialog(QDialog):
     def _start(self) -> None:
         if self._thread is not None:
             return
-        self._use_constraints = False
         problem = devices.validate()
         if problem is not None:
             self._fail(tr(problem))

@@ -115,13 +115,6 @@ PARAMETER_FILE = "align.json"
 PARAMETERS: tuple[Field, ...] = (
     Field("model", "choice", DEFAULT_MODEL, "Model", "Which forced-alignment model to use", choices=MODELS),
     Field(
-        "use_constraints",
-        "bool",
-        True,
-        "Use KRC mapping constraints",
-        "Preserve explicit NOTE counts and shared-sound groups when mapping the aligned sounds",
-    ),
-    Field(
         "device",
         "choice",
         "cpu",

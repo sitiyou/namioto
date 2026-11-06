@@ -1,6 +1,9 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
 import pytest
 from PySide6.QtWidgets import QFileDialog
 
@@ -12,6 +15,29 @@ from namioto.lyrics import text_key
 from namioto.ui.align_dialog import AlignDialog, Aligner
 
 from .helpers import parameter_writer, wait_for_lyric_mapping
+
+
+def test_aligner_applies_onset_priors_to_string_tokens(monkeypatch) -> None:
+    import numpy as np
+
+    observed = {}
+    monkeypatch.setattr(align, "load_audio", lambda _path: np.zeros(16000, dtype=np.float32))
+    monkeypatch.setattr(align, "load_emissions", lambda *_args: object())
+    monkeypatch.setattr(align, "resolve_model", lambda *_args, **_kwargs: Path("/tmp"))
+    monkeypatch.setattr(align, "load_dictionary", lambda _path: ({}, 0))
+
+    def align_whole(_segment, _emission, _dictionary, *, blank_id, onset_priors):
+        observed["priors"] = onset_priors
+        return SimpleNamespace(tokens=[align.Token("a", 0.1, 0.2, 0.9)])
+
+    monkeypatch.setattr(align, "align_whole", align_whole)
+    monkeypatch.setattr(align, "correct_times", lambda rows, _audio: rows)
+    monkeypatch.setattr(align, "calibrate_times", lambda rows, _tokens, _model: rows)
+    monkeypatch.setattr(align, "save_alignment", lambda *_args, **_kwargs: None)
+
+    Aligner("vocal.wav", "あ\n", onset_priors=[[0.15]]).load()
+
+    assert observed["priors"] == [pytest.approx(0.15 - align.onset_offset(align.DEFAULT_MODEL, "a"))]
 
 
 @pytest.mark.parametrize("text", ["あい\n", "# header\n\nあい  # inline\n# footer\n"])
@@ -153,7 +179,6 @@ def test_the_align_dialog_remembers_what_was_chosen(own_window) -> None:
         "device": "cpu",
         "quantize": 4,
         "chunk": "off",
-        "use_constraints": False,
     }
 
 
