@@ -121,6 +121,7 @@ def _convert(line, spans, settings, index):
         return None
     units, colours, segment_colours, channels = [], [], [], []
     first, last = None, 0
+    explicit = []
     for container_index, container in enumerate(line.containers):
         owned = [sound for sound in line.sounds if sound.container == container_index]
         cursor = 0
@@ -140,8 +141,10 @@ def _convert(line, spans, settings, index):
                     raise ValueError(f"lyric line {index + 1}: reversed interval {start}..{end}")
                 if end > 0 or settings.offset_ms >= 0:
                     segment = Segment(max(0, start), max(0, end), sound.reading if sound.rubied else "")
-                    first = segment.start_ms if first is None else min(first, segment.start_ms)
-                    last = max(last, segment.end_ms)
+                    explicit.append(segment)
+                    if segment.end_ms > segment.start_ms:
+                        first = segment.start_ms if first is None else min(first, segment.start_ms)
+                        last = max(last, segment.end_ms)
             if sound.rubied and segment is None:
                 anchor = units[-1].segments[-1].end_ms if sound is not owned[0] and units[-1].segments else 0
                 segment = Segment(anchor, anchor, sound.reading)
@@ -174,7 +177,20 @@ def _convert(line, spans, settings, index):
                 colours.append(container.channels[atom] if colour is None else colour)
                 segment_colours.append(())
     if first is None:
-        return None
+        timed = [
+            segment
+            for unit in units
+            for segment in unit.segments
+            if segment is not None and segment.end_ms > segment.start_ms
+        ]
+        if not timed and not explicit:
+            return None
+        if timed:
+            first = min(segment.start_ms for segment in timed)
+            last = max(segment.end_ms for segment in timed)
+        else:
+            first = min(segment.start_ms for segment in explicit)
+            last = max(segment.end_ms for segment in explicit)
     preceding = []
     previous = None
     for unit, colour in zip(units, colours, strict=True):
@@ -225,8 +241,6 @@ def _convert(line, spans, settings, index):
         adjusted[i][j] = replace(segment, start_ms=start, end_ms=start + duration)
         shift += duration - (segment.end_ms - segment.start_ms)
     units = [replace(unit, segments=tuple(segments)) for unit, segments in zip(units, adjusted, strict=True)]
-    first = min(segment.start_ms for unit in units for segment in unit.segments)
-    last = max(segment.end_ms for unit in units for segment in unit.segments)
     return _DisplayLine(
         KaraokeLine(tuple(units)), tuple(colours), tuple(segment_colours), line.track, line.chapter, index, first, last
     )

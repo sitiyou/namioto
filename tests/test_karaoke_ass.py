@@ -77,6 +77,26 @@ def test_custom_effect_receives_structured_layout_and_independent_times():
     assert events[0].text == "青"
 
 
+def test_untimed_leading_ruby_does_not_pull_line_start_to_zero():
+    text = "想[お.0も]いを伝[つた]えたくて"
+    spans = [None, *((62 + index * 0.3, 62.2 + index * 0.3) for index in range(9))]
+    shows = []
+
+    def effect(unit, style, show, hide, settings, colours, **options):
+        if style == "K1":
+            shows.append(show)
+        return []
+
+    generate_ass(text, [spans], settings=AssSettings(lead_time_ms=5000), effect=effect)
+
+    assert shows
+    assert set(shows) == {57000}
+
+
+def test_an_entirely_untimed_ruby_line_is_omitted():
+    assert not _events("青[あお]", [[None, None]])
+
+
 def test_final_output_has_styles_but_no_templates_or_timing_protocol():
     result = generate_ass("あ", [[(0, 0.5)]])
     assert result.count("[Events]") == 1
