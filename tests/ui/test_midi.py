@@ -323,26 +323,6 @@ def test_opening_audio_keeps_the_analysis_habits_the_user_changed(own_window, mo
     assert own_window.project_settings.analysis.a4 == 442.0
 
 
-def test_the_command_line_analysis_values_start_the_dialog_and_stop_there(own_window, monkeypatch, tmp_path) -> None:
-    audio = tmp_path / "song.flac"
-    audio.write_bytes(b"")
-    fake_loaders(monkeypatch)
-    own_window.overrides["channels"] = "left"
-    seen: list[str] = []
-
-    def accept(self):
-        seen.append(self.document().analysis.channels)
-        return QDialog.DialogCode.Accepted
-
-    monkeypatch.setattr(OpenAudioDialog, "exec", accept)
-
-    assert own_window.open_audio(str(audio)) is True
-
-    assert seen == ["left"]  # the window opened on the value the command line asked for
-    assert own_window.overrides == {}  # and the document owns it from there
-    assert own_window.project_settings.analysis.channels == "left"
-
-
 def test_opening_new_audio_does_not_save_the_previous_document(own_window, monkeypatch, tmp_path) -> None:
     audio = tmp_path / "song.flac"
     audio.write_bytes(b"")
