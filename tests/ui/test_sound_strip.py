@@ -390,7 +390,7 @@ def test_a_label_is_dropped_when_it_does_not_fit(window) -> None:
 
 def test_without_alignment_lyrics_use_faithful_mapping(own_window, tmp_path) -> None:
     own_window.project_path = tmp_path / "song.nto"
-    own_window._stored_lyrics = project.Lyrics(text="あい\n", mode="read")
+    own_window._stored_lyrics = project.Lyrics(text="あい\n")
     own_window._watch_lyrics()
     own_window.transport.bpm.setValue(60.0)  # a beat is a second, so notes read in seconds
     own_window.view.set_channels((Channel(channel=0),))
@@ -404,7 +404,7 @@ def test_without_alignment_lyrics_use_faithful_mapping(own_window, tmp_path) -> 
 
 def test_an_alignment_puts_each_sound_on_the_note_its_time_covers(own_window, tmp_path) -> None:
     own_window.project_path = tmp_path / "song.nto"
-    own_window._stored_lyrics = project.Lyrics(text="あい\n", mode="read")
+    own_window._stored_lyrics = project.Lyrics(text="あい\n")
     own_window._watch_lyrics()
     own_window.transport.bpm.setValue(60.0)
     own_window.view.set_channels((Channel(channel=0),))
@@ -480,4 +480,3 @@ def test_loading_lyrics_batches_filtering_and_skips_unchanged_refreshes(own_wind
     assert changes == [True]
     assert not note.filtered
     assert "Overlapping note" not in note.toolTip()
-

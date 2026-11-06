@@ -20,7 +20,7 @@ from namioto.ui.palette_dialog import PaletteDialog
 from .helpers import _manual_mapping, _mapped_pair, drag_sound, wait_for_lyric_mapping
 
 
-def _mixed_lyrics(own_window, tmp_path, *, confirmed=True):
+def _mixed_lyrics(own_window, tmp_path):
     text = "あ\n@1{い}\nう"
     own_window.project_path = tmp_path / "mixed.nto"
     own_window.transport.bpm.setValue(60.0)
@@ -32,7 +32,6 @@ def _mixed_lyrics(own_window, tmp_path, *, confirmed=True):
         text=text,
         key=text_key(text),
         raw=(((0.0, 1.0),), ((4.0, 1.0),), ((2.0, 1.0),)),
-        operations=(Match(SoundRef(2, 0), (20,), confirmed=True),) if confirmed else (),
     )
     own_window._watch_lyrics()
     wait_for_lyric_mapping(own_window)
@@ -79,7 +78,7 @@ def test_moving_one_line_preserves_krc_counts_and_restarts_channel_cursors(own_w
 
 
 def test_empty_channel_does_not_block_other_channel_edits(own_window, tmp_path):
-    _mixed_lyrics(own_window, tmp_path, confirmed=False)
+    _mixed_lyrics(own_window, tmp_path)
     own_window._set_lyric_channel(1, 2)
     wait_for_lyric_mapping(own_window)
     assert "Channel 2" in own_window._lyric_error
@@ -106,7 +105,7 @@ def test_nonzero_channel_edits_write_krc_directly(own_window, tmp_path):
 
 
 def test_nonzero_only_lyrics_can_be_aligned(own_window, tmp_path, monkeypatch):
-    _mixed_lyrics(own_window, tmp_path, confirmed=False)
+    _mixed_lyrics(own_window, tmp_path)
     own_window._set_lyric_channel(0, 1)
     wait_for_lyric_mapping(own_window)
     own_window._set_lyric_channel(2, 1)
@@ -259,27 +258,6 @@ def test_alignment_flags_never_mark_notes_red_and_are_undoable(own_window, tmp_p
     assert own_window.load_project(own_window.project_path)
     wait_for_lyric_mapping(own_window)
     assert own_window.view.lyric_red == ((False, False),)
-
-
-def test_failed_legacy_migration_preserves_the_project_and_blocks_overwriting(own_window, tmp_path):
-    path = tmp_path / "broken.nto"
-    project.save(
-        project.Project(
-            notes=(project.Note(0, 1, 60, id=10),),
-            lyrics=project.Lyrics(
-                text="あ",
-                mode="edit",
-                operations=(Match(SoundRef(0, 0), (999,), confirmed=True),),
-            ),
-        ),
-        path,
-    )
-    before = path.read_bytes()
-    assert own_window.load_project(path)
-    assert own_window._lyric_migration_error
-    assert not own_window.save_project(path)
-    assert path.read_bytes() == before
-    assert own_window._stored_lyrics.operations == (Match(SoundRef(0, 0), (999,), confirmed=True),)
 
 
 def test_stale_automatic_mapping_does_not_replace_a_text_edit(own_window, tmp_path, monkeypatch):

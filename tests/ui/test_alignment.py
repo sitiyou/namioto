@@ -222,7 +222,7 @@ def test_the_aligner_logs_a_download_a_tenth_at_a_time(qt_app) -> None:
 
 def test_the_align_button_opens_the_dialog(own_window, monkeypatch, tmp_path) -> None:
     own_window.project_path = tmp_path / "song.nto"
-    own_window._stored_lyrics = project.Lyrics(text="あん\n", mode="read")
+    own_window._stored_lyrics = project.Lyrics(text="あん\n")
     own_window._watch_lyrics()
     own_window.audio_path = str(tmp_path / "vocal.wav")
 
@@ -256,7 +256,7 @@ def test_the_align_button_says_why_it_cannot_open(own_window, tmp_path) -> None:
     own_window._open_align()
     assert "no lyrics" in own_window.statusBar().currentMessage()
 
-    own_window._stored_lyrics = project.Lyrics(text="世界\n", mode="read")
+    own_window._stored_lyrics = project.Lyrics(text="世界\n")
     own_window._watch_lyrics()
     own_window._open_align()
     assert "could not be read" in own_window.statusBar().currentMessage()

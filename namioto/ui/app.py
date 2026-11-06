@@ -254,7 +254,6 @@ class MainWindow(QMainWindow):
         self.audio_path: str | None = None
         self.lyrics_text = ""
         self._stored_lyrics: project.Lyrics | None = None
-        self._lyric_migration_error = ""
         self._lyrics_directory: TemporaryDirectory | None = None
         self._lyric_key = ""
         self._lyric_model = ""
@@ -540,7 +539,6 @@ class MainWindow(QMainWindow):
             self.project_dirty = False
             self.autosave_timer.stop()
             self._stored_lyrics = None
-            self._lyric_migration_error = ""
             self.lyrics_text = ""
             self.transport.bpm.setValue(project.FIELD_SPECS[("tempo", "bpm")].default)
             self.transport.grid_offset.setValue(project.FIELD_SPECS[("editor", "grid_offset_ms")].default)
@@ -1049,8 +1047,6 @@ class MainWindow(QMainWindow):
 
     def _verification(self, subtitle: bool = False):
         """Run the one gate over the mapping the strip shows."""
-        if self._lyric_migration_error:
-            return Gate((Problem("invalid_lyrics", self._lyric_migration_error),))
         if self.view.lyric_mapping_pending:
             return Gate((Problem("mapping_pending", "the lyric mapping is still being calculated"),))
         lines = list(self.view.lyric_lines)
@@ -1211,7 +1207,6 @@ class MainWindow(QMainWindow):
             self.autosave_timer.stop()
             self._stored_lyrics = opened.lyrics
             self._lyric_alignment = None
-            self._lyric_migration_error = ""
             self._lyric_key = ""
             self._watch_lyrics()
             missing = self._open_audio(project.resolve_audio(self.project_path, opened.audio))
@@ -1225,24 +1220,15 @@ class MainWindow(QMainWindow):
             self.view.undo_stack.clear()  # another document starts its history over
         finally:
             self._loading = False
-        migrated = self._migrate_lyrics()
         self._remap_lyrics()
         self._update_status()
         self.statusBar().showMessage(
-            self._lyric_migration_error
-            or (
-                i18n.tr("Opened {name} — {notes} notes", name=self.project_path.name, notes=len(opened.notes)) + missing
-            )
+            i18n.tr("Opened {name} — {notes} notes", name=self.project_path.name, notes=len(opened.notes)) + missing
         )
-        if migrated:
-            self._mark_dirty()
         return True
 
     def save_project(self, path: str | Path) -> bool:
         """Write the notes and the values that belong to them out to `path`."""
-        if self._lyric_migration_error:
-            self.statusBar().showMessage(self._lyric_migration_error)
-            return False
         self._remember_configuration()
         self._remember_session()
         target = Path(path)
@@ -1264,7 +1250,6 @@ class MainWindow(QMainWindow):
                 text=self.lyrics_text,
                 key=self._lyric_key,
                 model=self._lyric_model,
-                mode="read",
                 raw=self.view.lyric_raw,
                 flagged=self._lyric_flags,
                 scores=tuple(tuple(row) for row in (self._lyric_scores or ())),
@@ -1498,45 +1483,7 @@ class MainWindow(QMainWindow):
         self.lyrics_watcher.watch(self.lyrics_path() if self._lyrics_directory is not None else None)
 
     def _lyrics_text_editable(self) -> bool:
-        return not self.view.gesture_active and not self._lyric_migration_error
-
-    def _migrate_lyrics(self) -> bool:
-        stored = self._stored_lyrics
-        if stored is None or stored.mode != "edit":
-            return False
-        try:
-            operations = stored.operations
-            try:
-                rebuild(stored.text, operations)
-            except KrcError:
-                result = map_lyrics(
-                    stored.text,
-                    natural_sounds(stored.text),
-                    stored.raw,
-                    stored.scores,
-                    stored.flagged,
-                    mode="edit",
-                    anchors=tuple(operation for operation in stored.operations if operation.confirmed),
-                    use_constraints=stored.use_constraints,
-                    onset_bounds=stored.onset_bounds,
-                    notes_by_channel={channel: self._target_notes(channel) for channel in split_channels(stored.text)},
-                )
-                if result.error:
-                    raise KrcError(result.error) from None
-                operations = result.operations
-            text = self._canonical_mapping(stored.text, operations)
-            self._stored_lyrics = stored._replace(text=text, key=text_key(text), mode="read", operations=())
-            self._lyric_key = ""
-            self._watch_lyrics()
-            return True
-        except (KrcError, ValueError) as error:
-            self._lyric_migration_error = i18n.tr(
-                "The saved lyric mapping could not be recovered: {error}", error=error
-            )
-            self._invalidate_lyric_mapping()
-            self._set_lyric_mapping_pending(False)
-            self.view.lyric_editable = False
-            return False
+        return not self.view.gesture_active
 
     def _watch_lyrics(self) -> None:
         """Restore project lyrics and watch only the temporary editing copy."""
@@ -1638,10 +1585,6 @@ class MainWindow(QMainWindow):
 
     def _remap_lyrics_async(self) -> None:
         if self._loading or self.view.gesture_active:
-            return
-        if self._lyric_migration_error:
-            self._lyric_error = self._lyric_migration_error
-            self._set_lyric_mapping_pending(False)
             return
         if not self.view.lyric_lines:
             self._invalidate_lyric_mapping()
@@ -1823,7 +1766,7 @@ class MainWindow(QMainWindow):
 
     def _open_align(self) -> None:
         """Ask the forced aligner for a time on every sound of the project lyrics."""
-        if self.view.gesture_active or self._lyric_migration_error:
+        if self.view.gesture_active:
             return
         path = self.project_path
         if path is None:
@@ -1852,11 +1795,7 @@ class MainWindow(QMainWindow):
         onset_priors = ()
         mapped = self.view.lyric_mapped
         if not self.view.lyric_mapping_pending and len(mapped) == len(self.view.lyric_lines):
-            note_onsets = {
-                note.id: self.view.to_seconds(note.start)
-                for note in self.view.notes()
-                if note.id > 0
-            }
+            note_onsets = {note.id: self.view.to_seconds(note.start) for note in self.view.notes() if note.id > 0}
             mapped_rows = part.rows(mapped)
             if len(mapped_rows) == len(part.lines) and all(
                 len(row) == len(line.sounds) for row, line in zip(mapped_rows, part.lines, strict=True)
@@ -1900,7 +1839,7 @@ class MainWindow(QMainWindow):
         onset_bounds=(),
         channel: int | None = None,
     ) -> None:
-        if self.view.gesture_active or self._lyric_migration_error:
+        if self.view.gesture_active:
             return
         lines = self.view.lyric_lines
         if channel is None:
@@ -2079,12 +2018,7 @@ class MainWindow(QMainWindow):
             self._prepare_lyrics_copy()
 
     def _apply_lyric_editor(self, source, text, note_ids, channel):
-        if (
-            source != self.lyrics_text
-            or self._lyric_migration_error
-            or self.view.lyric_mapping_pending
-            or self.view.gesture_active
-        ):
+        if source != self.lyrics_text or self.view.lyric_mapping_pending or self.view.gesture_active:
             QMessageBox.warning(
                 self, i18n.tr("Edit lyrics"), i18n.tr("Lyrics changed or are busy. Reopen the editor and try again.")
             )
@@ -2119,8 +2053,7 @@ class MainWindow(QMainWindow):
 
     def _set_lyric_channel(self, line: int, channel: int, *, index: int | None = None) -> None:
         if (
-            self._lyric_migration_error
-            or self.view.lyric_mapping_pending
+            self.view.lyric_mapping_pending
             or self.view.gesture_active
             or not 0 <= line < len(self.view.lyric_lines)
             or channel not in {item.channel for item in self.view.channels}
@@ -2202,7 +2135,7 @@ class MainWindow(QMainWindow):
 
     def _on_lyric_action(self, kind: str, line: int, index: int) -> None:
         """A Sound's context menu changes the KRC in one undo step."""
-        if self._lyric_migration_error or self.view.gesture_active or not 0 <= line < len(self.view.lyric_lines):
+        if self.view.gesture_active or not 0 <= line < len(self.view.lyric_lines):
             return
         if self.view.lyric_mapping_pending:
             self.statusBar().showMessage(i18n.tr("Calculating lyric mapping…"))

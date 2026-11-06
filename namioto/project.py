@@ -32,7 +32,6 @@ from typing import Any, NamedTuple
 from namioto import params
 from namioto.analysis.choices import CHANNEL_MODES
 from namioto.channels import CHANNEL_COUNT, Channel, valid_color
-from namioto.karaoke.operations import MAPPING_VERSION, Drop, Match, Merge, Operation, SoundRef
 from namioto.lyric_colors import DEFAULT_COLORS
 from namioto.params import Field, Section
 from namioto.utils import write_json
@@ -41,7 +40,6 @@ FORMAT = "namioto"
 VERSION = 1
 SUFFIX = ".nto"
 NOTE_DECIMALS = 4
-LYRIC_MODES = ("edit", "read")
 DIVISIONS = ("beats", "seconds")
 
 PROJECT_SECTIONS: tuple[Section, ...] = (
@@ -334,20 +332,15 @@ class Lyrics(NamedTuple):
     intervals in seconds; `flagged` holds one bool per line, true where
     the aligner itself doubted the times it made; `problems` holds the aligner's line-level
     complaints. KRC channel wrappers name each Sound's MIDI channel.
-    `mode`, `operations`, `version` and `use_constraints` are retained only for legacy migration.
     """
 
     text: str = ""
     key: str = ""
     model: str = ""
-    mode: str = "read"
     raw: tuple[tuple[tuple[float | None, float | None], ...], ...] = ()
     flagged: tuple[bool, ...] = ()
     scores: tuple[tuple[float | None, ...], ...] = ()
     problems: tuple[tuple[str, ...], ...] = ()
-    operations: tuple = ()
-    version: int = MAPPING_VERSION
-    use_constraints: bool = False
     onset_bounds: tuple[tuple[tuple[float, float] | None, ...], ...] = ()
 
 
@@ -426,66 +419,7 @@ def _lyrics_dict(lyrics: Lyrics | None) -> dict | None:
         ),
         "flagged": list(lyrics.flagged),
         "problems": [list(row) for row in lyrics.problems],
-        **(
-            {
-                "mode": "edit",
-                "operations": [_operation_dict(operation) for operation in lyrics.operations],
-                "version": lyrics.version,
-                "use_constraints": lyrics.use_constraints,
-            }
-            if lyrics.mode == "edit"
-            else {}
-        ),
     }
-
-
-def _operation_dict(operation: Operation) -> dict:
-    if isinstance(operation, Match):
-        return {
-            "kind": "match",
-            "sound": [operation.sound.line, operation.sound.index],
-            "notes": list(operation.notes),
-            "confirmed": operation.confirmed,
-        }
-    if isinstance(operation, Merge):
-        return {
-            "kind": "merge",
-            "sounds": [[ref.line, ref.index] for ref in operation.sounds],
-            "note": operation.note,
-            "confirmed": operation.confirmed,
-        }
-    return {
-        "kind": "drop",
-        "sound": [operation.sound.line, operation.sound.index],
-        "confirmed": operation.confirmed,
-    }
-
-
-def _operation(value: Any) -> Operation | None:
-    """One stored operation, or None when it is malformed; a confirmed one is never padded over."""
-    if not isinstance(value, dict):
-        return None
-    confirmed = value.get("confirmed") is True
-    try:
-        if value.get("kind") == "match":
-            ref = value["sound"]
-            return Match(SoundRef(int(ref[0]), int(ref[1])), tuple(int(note) for note in value["notes"]), confirmed)
-        if value.get("kind") == "merge":
-            refs = tuple(SoundRef(int(ref[0]), int(ref[1])) for ref in value["sounds"])
-            return Merge(refs, int(value["note"]), confirmed)
-        if value.get("kind") == "drop":
-            ref = value["sound"]
-            return Drop(SoundRef(int(ref[0]), int(ref[1])), confirmed)
-    except (TypeError, ValueError, IndexError, KeyError):
-        return None
-    return None
-
-
-def _operations(value: Any) -> tuple:
-    if not isinstance(value, list):
-        return ()
-    found = [_operation(entry) for entry in value]
-    return tuple(operation for operation in found if operation is not None)
 
 
 def _channel_dict(channel: Channel) -> dict:
@@ -586,7 +520,7 @@ def _lyrics(value: Any) -> Lyrics | None:
     if not isinstance(value, dict):
         return None
     key, raw = value.get("key"), value.get("raw")
-    model, text, mode = value.get("model"), value.get("text"), value.get("mode")
+    model, text = value.get("model"), value.get("text")
     flagged = value.get("flagged")
     if not isinstance(key, str) or not isinstance(raw, list):
         return None
@@ -613,14 +547,10 @@ def _lyrics(value: Any) -> Lyrics | None:
         text=text if isinstance(text, str) else "",
         key=key,
         model=model if isinstance(model, str) else "",
-        mode=mode if mode in LYRIC_MODES else ("edit" if "operations" in value else "read"),
         raw=tuple(rows),
         flagged=tuple(bool(flag) for flag in flagged) if isinstance(flagged, list) else (),
         scores=_scores(value.get("scores")),
         problems=_problems(value.get("problems")),
-        operations=_operations(value.get("operations")),
-        version=_version(value.get("version")),
-        use_constraints=value.get("use_constraints") is True,
         onset_bounds=_onset_bounds(value.get("onset_bounds")),
     )
 
@@ -675,12 +605,6 @@ def _problems(value: Any) -> tuple[tuple[str, ...], ...]:
             return ()
         rows.append(tuple(str(problem) for problem in row))
     return tuple(rows)
-
-
-def _version(value: Any) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
-        return MAPPING_VERSION
-    return value
 
 
 def from_dict(data: Any) -> Project:

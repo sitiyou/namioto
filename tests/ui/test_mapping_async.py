@@ -5,7 +5,6 @@ import pytest
 from PySide6.QtCore import QEvent
 
 from namioto import project
-from namioto.karaoke.operations import Match, SoundRef
 from namioto.karaoke.sounds import natural_sounds
 from namioto.lyrics import text_key
 
@@ -219,10 +218,7 @@ def test_time_edit_undo_and_redo_preserve_sparse_note_ids_and_anchors(own_window
     own_window.transport.bpm.setValue(60.0)
     own_window.view.set_notes(((60, 0.0, 1.0, 0, 41), (62, 1.0, 1.0, 0, 99)))
     own_window.project_path = tmp_path / "song.nto"
-    anchor = Match(SoundRef(0, 0), (41,), confirmed=True)
-    own_window._stored_lyrics = project.Lyrics(
-        text="あい", key=text_key("あい"), raw=(((0.0, 1.0), (1.0, 1.0)),), operations=(anchor,)
-    )
+    own_window._stored_lyrics = project.Lyrics(text="あい", key=text_key("あい"), raw=(((0.0, 1.0), (1.0, 1.0)),))
     own_window._watch_lyrics()
     wait_for_lyric_mapping(own_window)
     view = own_window.view
@@ -235,7 +231,7 @@ def test_time_edit_undo_and_redo_preserve_sparse_note_ids_and_anchors(own_window
         wait_for_lyric_mapping(own_window)
         assert [note.id for note in view.notes()] == [41, 99]
         assert view.lyric_raw[0][1][0] == onset
-        assert anchor in view.lyric_operations
+        assert len(view.lyric_operations) == 2
         assert not own_window._lyric_error
 
 
@@ -255,4 +251,3 @@ def test_mapping_snapshot_collects_all_channels_in_one_note_pass(own_window, mon
     assert set(request["notes_by_channel"]) == {0, 1}
     assert all(len(notes) == 1 for notes in request["notes_by_channel"].values())
     assert calls == [True]
-

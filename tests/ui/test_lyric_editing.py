@@ -171,7 +171,6 @@ def test_boundary_drag_changes_mapping_without_editing_raw(own_window, tmp_path)
     assert own_window.save_project(own_window.project_path)
     saved = project.load(own_window.project_path).lyrics
     assert saved.raw == raw
-    assert saved.operations == ()
     assert saved.text == own_window.lyrics_text
     assert own_window.load_project(own_window.project_path)
     wait_for_lyric_mapping(own_window)
@@ -526,7 +525,7 @@ def test_a_lyric_drag_is_kept_in_the_project(own_window, tmp_path) -> None:
 
 def test_notes_on_another_channel_are_not_mapped(own_window, tmp_path) -> None:
     own_window.project_path = tmp_path / "song.nto"
-    own_window._stored_lyrics = project.Lyrics(text="あい\n", mode="read")
+    own_window._stored_lyrics = project.Lyrics(text="あい\n")
     own_window._watch_lyrics()
     own_window.transport.bpm.setValue(60.0)
     own_window.view.set_channels((Channel(channel=1),))
