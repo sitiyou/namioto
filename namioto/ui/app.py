@@ -1121,7 +1121,7 @@ class MainWindow(QMainWindow):
             self._locate_export_problem(gate)
             self.statusBar().showMessage(self._gate_message(gate))
             return False
-        dialog = ExportDialog(self.settings, self, lyric_colors=self.view.lyric_colors)
+        dialog = ExportDialog(self.settings, self, lyric_colors=self.view.lyric_colors, project_path=self.project_path)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
         selected = dialog.values()
@@ -1142,11 +1142,11 @@ class MainWindow(QMainWindow):
             format=fmt,
             template=dialog.active_id,
             parameters=dialog.parameters(),
-            scripts=dialog.scripts,
+            scripts=dialog.selected_scripts(),
             fps=dialog.fps.value(),
         ):
             return False
-        save_preferences(dialog.preferences())
+        save_preferences(dialog.preferences(), self.project_path)
         self.settings.ass = selected.ass
         self.settings_store.flush()
         self.subtitle_changed.emit()

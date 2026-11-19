@@ -205,3 +205,43 @@ def test_export_remembers_only_the_last_successful_format(subtitle_window, monke
     monkeypatch.setattr(subtitle_window, "export_lyrics", lambda *args, **kwargs: False)
     assert not subtitle_window._on_export_lyrics()
     assert ExportDialog(subtitle_window.settings).format.currentData() == "hook"
+
+
+def test_project_template_discovery_and_export(subtitle_window, tmp_path, monkeypatch):
+    from pathlib import Path
+
+    from namioto.karaoke.templates import project_scripts, read_preferences
+
+    project = subtitle_window.project_path
+    script = tmp_path / "template.py"
+    script.write_text((Path(__file__).parents[2] / "examples/cool_ink.py").read_text())
+    folder = tmp_path / "template"
+    folder.mkdir()
+    broken = folder / "broken.py"
+    broken.write_text("raise ValueError('broken effect')")
+    (tmp_path / "unrelated.py").write_text("raise AssertionError()")
+    assert project_scripts(project) == (script, broken)
+    assert project_scripts(None) == ()
+
+    def select(dialog):
+        assert dialog.template.findData("cool-ink") == -1
+
+        def select_file(path):
+            index = next(i for i in range(dialog.template.count()) if dialog.template.itemData(i) == path)
+            dialog.template.setCurrentIndex(index)
+
+        select_file(broken)
+        assert "broken effect" in dialog.hint.text()
+        select_file(script)
+        assert dialog.active_id == "cool-ink"
+        assert dialog.custom_readers
+        return QDialog.DialogCode.Accepted
+
+    monkeypatch.setattr(ExportDialog, "exec", select)
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: (str(tmp_path / "local.ass"), ""))
+    assert subtitle_window._on_export_lyrics()
+    assert (tmp_path / "local.ass").is_file()
+    assert read_preferences(project)["id"] == "cool-ink"
+    assert str(script) not in read_preferences(tmp_path / "other.nto")["scripts"]
+    reopened = ExportDialog(subtitle_window.settings, project_path=project)
+    assert reopened.active_id == "cool-ink"

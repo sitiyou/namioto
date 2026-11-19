@@ -4,7 +4,7 @@
 
 ## Source setup
 
-Install uv, Python 3.14 and a C++17 compiler. During joint development the local uv source override points to the sibling `../kara-templater` checkout with the structured lyric and standalone hook APIs. Before releasing the packages together, replace the development override and lock the published engine version. Platforms without a compatible wheel also
+Install uv, Python 3.14 and a C++17 compiler. uv installs kara-templater 1.0.0 from PyPI. Platforms without a compatible wheel also
 need its native font/shaping build dependencies. Development and CI both read Python 3.14 from
 `.python-version`; patch releases can update within that series. The project explicitly uses
 PyPI as its default package index so the lockfile does not depend on a developer's global mirror

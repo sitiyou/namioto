@@ -607,3 +607,30 @@ def test_ass_revision_tracks_mapping_readiness_but_not_playback(qt_app, window, 
     assert failure(qt_app, endpoint, "project.export_lyrics", {"path": "unused.ass"}).code == "failed"
     window._set_lyric_mapping_pending(False)
     assert call(qt_app, endpoint, "state.get")["subtitle"]["revision"] > state["revision"]
+
+
+def test_session_exports_remembered_project_recipe(qt_app, window, endpoint, tmp_path):
+    from pathlib import Path
+
+    from namioto.karaoke.templates import save_preferences
+
+    _ready_ass(qt_app, window)
+    project = tmp_path / "local.nto"
+    assert window.save_project(project)
+    script = tmp_path / "template.py"
+    script.write_text((Path(__file__).parents[1] / "examples/cool_ink.py").read_text())
+    save_preferences(
+        {
+            "id": "cool-ink",
+            "scripts": [str(script)],
+            "values": {"cool-ink": {"ink": "123456"}},
+            "format": "ass",
+            "fps": 60,
+        },
+        project,
+    )
+    target = tmp_path / "local.ass"
+    assert (
+        _run(qt_app, lambda: export_cli.main(["--session", "--instance", endpoint.instance, "--out", str(target)])) == 0
+    )
+    assert r"\1c&H563412&" in target.read_text()

@@ -33,6 +33,8 @@ CATALOGS: dict[str, dict[str, str]] = {
     "zh": {
         "Export karaoke…": "导出卡拉 OK 歌词…",
         "Export karaoke": "导出卡拉 OK 歌词",
+        "The script registered no templates": "脚本未注册任何模板",
+        "Project template: {path}": "项目模板：{path}",
         "Load Python template": "载入 Python 模板",
         "Load trusted Python template": "载入受信任的 Python 模板",
         "Output format": "输出格式",

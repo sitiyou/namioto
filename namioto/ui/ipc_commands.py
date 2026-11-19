@@ -756,7 +756,7 @@ class WindowBridge:
             path = subtitle.export_path(path, fmt)
         except ValueError as error:
             raise IpcError("failed", str(error)) from error
-        saved = read_preferences()
+        saved = read_preferences(self.window.project_path)
         template = params.get("template", saved.get("id", "default"))
         if not isinstance(template, str):
             raise IpcError("failed", "template must be a string")
@@ -781,9 +781,10 @@ class WindowBridge:
             krc, data = self.window.export_source()
         except (KrcError, ValueError, OSError) as error:
             raise IpcError("failed", str(error)) from error
-        saved = read_preferences()
+        saved = read_preferences(self.window.project_path)
         template = saved.get("id", "default")
         return {
+            "project": str(self.window.project_path.resolve()) if self.window.project_path else None,
             "template": template,
             "parameters": saved.get("values", {}).get(template, {}),
             "fps": saved.get("fps", 60),

@@ -1,5 +1,6 @@
 """Registration and typed parameter resolution for explicitly loaded Python effects."""
 
+import hashlib
 import json
 import math
 import runpy
@@ -128,10 +129,29 @@ def preference_path() -> Path:
     return path.with_name(path.stem + "-export.json")
 
 
-def read_preferences() -> dict:
+def project_scripts(project: Path | None) -> tuple[Path, ...]:
+    """Find project effects by name without importing any Python."""
+    if project is None:
+        return ()
+    root = project.absolute().parent
+    return tuple(path for path in (root / "template.py", *sorted((root / "template").glob("*.py"))) if path.is_file())
+
+
+def _project_preferences(project: Path) -> Path:
+    key = hashlib.sha256(str(project.resolve()).encode()).hexdigest()
+    return preference_path().with_name(f"export-{key}.json")
+
+
+def read_preferences(project: Path | None = None) -> dict:
     """Read editor-local recipe choices. Song files never supply executable paths."""
     try:
-        data = json.loads(preference_path().read_text(encoding="utf-8"))
+        path = _project_preferences(project) if project is not None else preference_path()
+        if project is not None and not path.is_file():
+            return read_preferences()
+        data = json.loads(path.read_text(encoding="utf-8"))
+        if project is not None and isinstance(data, dict):
+            global_choices = read_preferences()
+            data.update({key: global_choices[key] for key in ("format", "fps") if key in global_choices})
     except OSError, ValueError:
         return {}
     if not isinstance(data, dict):
@@ -148,5 +168,15 @@ def read_preferences() -> dict:
     }
 
 
-def save_preferences(preferences: dict) -> None:
+def save_preferences(preferences: dict, project: Path | None = None) -> None:
+    if project is not None:
+        local = {str(path) for path in project_scripts(project)}
+        if local.intersection(preferences["scripts"]):
+            write_json(preferences, _project_preferences(project))
+            global_choices = read_preferences()
+            write_json(
+                {**global_choices, "format": preferences["format"], "fps": preferences["fps"]}, preference_path()
+            )
+            return
+        _project_preferences(project).unlink(missing_ok=True)
     write_json(preferences, preference_path())

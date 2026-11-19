@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -26,7 +28,7 @@ from PySide6.QtWidgets import (
 from namioto import settings as store
 from namioto.i18n import tr
 from namioto.karaoke import ExportSettings
-from namioto.karaoke.templates import load_templates, read_preferences
+from namioto.karaoke.templates import load_templates, project_scripts, read_preferences
 from namioto.lyric_colors import DEFAULT_COLORS
 from namioto.ui.colors import bind_swatch
 from namioto.ui.form import add_row, field_editor
@@ -73,7 +75,7 @@ GROUPS = (
 class ExportDialog(QDialog):
     """The export form; accepting it does not change the program's saved preferences."""
 
-    def __init__(self, settings, parent=None, *, lyric_colors=DEFAULT_COLORS):
+    def __init__(self, settings, parent=None, *, lyric_colors=DEFAULT_COLORS, project_path=None):
         super().__init__(parent)
         self.setWindowTitle(tr("Export karaoke"))
         self._settings = store.clone(settings)
@@ -147,13 +149,18 @@ class ExportDialog(QDialog):
         layout.addWidget(buttons)
         self.template.currentIndexChanged.connect(self._select)
         self._select()
-        saved = read_preferences()
+        saved = read_preferences(project_path)
         errors = []
         for path in saved.get("scripts", []):
             try:
                 self._add_script(path)
             except (OSError, ValueError) as error:
                 errors.append(str(error))
+        self.project_scripts = project_scripts(project_path)
+        for script in self.project_scripts:
+            if project_path is not None and str(script) not in self.scripts:
+                label = script.relative_to(project_path.absolute().parent)
+                self.template.addItem(tr("Project template: {path}", path=str(label)), script)
         self.custom_values.update(saved.get("values", {}))
         selected = self.template.findData(saved.get("id", "default"))
         if selected >= 0:
@@ -167,10 +174,16 @@ class ExportDialog(QDialog):
         if errors:
             self.hint.setText("\n".join(errors))
 
+    def selected_scripts(self):
+        local = set(self.project_scripts)
+        return [
+            path for path in self.scripts if Path(path) not in local or path == self.registry.origins[self.active_id]
+        ]
+
     def preferences(self):
         return {
             "id": self.active_id,
-            "scripts": self.scripts,
+            "scripts": self.selected_scripts(),
             "format": self.format.currentData(),
             "fps": self.fps.value(),
             "values": {**self.custom_values, self.active_id: self.parameters()},
@@ -180,16 +193,26 @@ class ExportDialog(QDialog):
         path, _ = QFileDialog.getOpenFileName(
             self, tr("Load trusted Python template"), "", tr("Python templates (*.py)")
         )
-        if not path or path in self.scripts:
-            return
+        if path and path not in self.scripts:
+            self._choose_script(Path(path))
+
+    def _choose_script(self, path):
         try:
-            self._add_script(path)
-            self.template.setCurrentIndex(self.template.count() - 1)
+            self._add_script(str(path))
         except ValueError as error:
+            self.template.setCurrentIndex(self.template.findData(self.active_id))
             self.hint.setText(str(error))
+            return
+        self.template.setCurrentIndex(self.template.count() - 1)
+        for index in range(self.template.count()):
+            if self.template.itemData(index) == path:
+                self.template.removeItem(index)
+                break
 
     def _add_script(self, path):
         registry = load_templates([*self.scripts, path])
+        if not set(registry.templates).difference(self.registry.templates):
+            raise ValueError(tr("The script registered no templates"))
         self.registry = registry
         self.scripts.append(path)
         for recipe in registry.templates.values():
@@ -197,6 +220,10 @@ class ExportDialog(QDialog):
                 self.template.addItem(tr(recipe.title), recipe.id)
 
     def _select(self, *_):
+        candidate = self.template.currentData()
+        if isinstance(candidate, Path):
+            self._choose_script(candidate)
+            return
         self.custom_values[self.active_id] = self.parameters()
         while self.custom_form.rowCount():
             self.custom_form.removeRow(0)

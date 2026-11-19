@@ -20,7 +20,7 @@ from pathlib import Path
 from namioto import ipc, subtitle
 from namioto import settings as store
 from namioto.karaoke import ExportSettings
-from namioto.karaoke.templates import load_templates, parameter_value
+from namioto.karaoke.templates import load_templates, parameter_value, read_preferences
 from namioto.utils import file_stamp
 
 POLL_SECONDS = 0.1
@@ -141,9 +141,18 @@ def main(argv: list[str] | None = None) -> int:
             parser.error("--set expects KEY=VALUE")
         parameters[key] = value
 
+    def selected_scripts(project, template):
+        if args.script or not project or template == "default":
+            return args.script
+        saved = read_preferences(Path(project))
+        if saved.get("id", "default") != "default" and template in (None, saved["id"]):
+            return [Path(path) for path in saved["scripts"]]
+        return []
+
     def export(krc, data, settings, wavetone, session=None):
         session = session or {}
         template = args.template or session.get("template", "default")
+        scripts = selected_scripts(session.get("project"), template)
         inherited = session.get("parameters", {}) if template == session.get("template") else {}
         return subtitle.export_song(
             target,
@@ -153,15 +162,15 @@ def main(argv: list[str] | None = None) -> int:
             wavetone=wavetone,
             format=format,
             template=template,
-            scripts=args.script,
+            scripts=scripts,
             parameters={**inherited, **parameters},
             fps=args.fps if args.fps is not None else session.get("fps", 60),
             save_krc=args.save_krc,
             save_midi=args.save_midi,
         )
 
-    def script_stamps():
-        return tuple(file_stamp(path) for path in args.script)
+    def script_stamps(scripts):
+        return tuple((path, file_stamp(path)) for path in scripts)
 
     if args.session:
         if args.midi or args.krc or args.wavetone is not None:
@@ -188,7 +197,13 @@ def main(argv: list[str] | None = None) -> int:
                     return export(source["krc"], data, settings, source["wavetone"], source)
 
                 if args.watch:
-                    watch(build, lambda: (client.request("state.get")["subtitle"]["revision"], script_stamps()))
+
+                    def session_stamp():
+                        state = client.request("state.get")
+                        project = state.get("project", {}).get("path")
+                        return state["subtitle"]["revision"], script_stamps(selected_scripts(project, args.template))
+
+                    watch(build, session_stamp)
                 else:
                     return 0 if _attempt(build) else 1
         else:
@@ -201,7 +216,7 @@ def main(argv: list[str] | None = None) -> int:
                 return export(krc, data, settings, wavetone)
 
             if args.watch:
-                watch(build, lambda: (file_stamp(args.krc), file_stamp(args.midi), script_stamps()))
+                watch(build, lambda: (file_stamp(args.krc), file_stamp(args.midi), script_stamps(args.script)))
             else:
                 return 0 if _attempt(build) else 1
     except KeyboardInterrupt:
