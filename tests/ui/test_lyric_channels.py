@@ -182,14 +182,39 @@ def test_channel_alignment_preserves_other_channels_evidence_and_anchors(own_win
     assert anchor in own_window.view.lyric_operations
 
 
-def test_align_dialog_selects_the_active_channel_and_separates_its_cache(own_window, tmp_path, monkeypatch):
+def test_aligning_a_resegmented_sound_preserves_following_channel_evidence(own_window, tmp_path):
+    own_window.project_path = tmp_path / "song.nto"
+    text = "(hel).1(lo).0 @1{あ.2}"
+    own_window._stored_lyrics = project.Lyrics(
+        text=text,
+        key=text_key(text),
+        raw=(((0.1, 0.5), (0.7, 0.5), (2.1, 1.0)),),
+        scores=((0.2, 0.4, 0.85),),
+        onset_bounds=(((0.1, 0.2), (0.7, 0.8), (2.1, 2.2)),),
+    )
+    own_window.transport.bpm.setValue(60)
+    own_window.view.set_channels((Channel(channel=0), Channel(channel=1)))
+    own_window.view.set_notes(((60, 0, 1, 0, 1), (62, 1, 1, 0, 2), (65, 2, 1, 1, 3), (67, 3, 1, 1, 4)))
+    own_window._watch_lyrics()
+    wait_for_lyric_mapping(own_window)
+
+    own_window._adopt_alignment([[(0.0, 2.0)]], "mms", channel=0)
+    wait_for_lyric_mapping(own_window)
+
+    assert own_window.lyrics_text == "(hello).2 @1{あ.2}"
+    assert own_window.view.lyric_raw == (((0.0, 2.0), (2.1, 1.0)),)
+    assert own_window._lyric_scores == [[None, 0.85]]
+    assert own_window._lyric_onset_bounds == [[None, (2.1, 2.2)]]
+
+
+def test_align_dialog_selects_the_active_channel(own_window, tmp_path, monkeypatch):
     _mixed_lyrics(own_window, tmp_path)
     own_window.view.set_active_channel(1)
     own_window.audio_path = Path("/tmp/song.wav")
     seen = []
-    monkeypatch.setattr(AlignDialog, "exec", lambda dialog: seen.append((dialog.channel, dialog.cache_text)))
+    monkeypatch.setattr(AlignDialog, "exec", lambda dialog: seen.append(dialog.channel))
     own_window._open_align()
-    assert seen == [(1, "# Align channel 1\n" + own_window.lyrics_text)]
+    assert seen == [1]
 
 
 def test_project_colour_pickers_validate_and_leave_preferences_untouched(own_window):
@@ -285,11 +310,11 @@ def test_channel_alignment_preserves_an_unmapped_other_channel(own_window, tmp_p
 
 
 def test_align_dialog_exposes_rebuild_mapping_without_constraints(own_window, monkeypatch):
-    dialog = AlignDialog("vocal.wav", "あい", 120.0, own_window)
+    dialog = AlignDialog("vocal.wav", "あい", own_window)
     calls = []
     monkeypatch.setattr(dialog, "_start", lambda: calls.append(dialog.parameters()))
     dialog.rebuild.click()
-    assert calls == [{"model": "mms", "device": "cpu", "quantize": 0, "chunk": "silence"}]
+    assert calls == [{"model": "mms", "device": "cpu", "chunk": "silence"}]
     assert not hasattr(dialog, "run")
     assert all(field.name != "use_constraints" for field, _read, _write in dialog._fields)
 

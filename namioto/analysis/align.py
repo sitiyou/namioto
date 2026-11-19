@@ -23,8 +23,8 @@ pass in. This is one global CTC path, separate from how the model computes emiss
 It runs overlapping audio chunks and keeps only frames that saw context on both sides, then
 concatenates those frames into one emission sequence. The `chunk` parameter picks between one
 encoder pass, fixed chunks, and chunks whose seams fall in silences (the default). Emissions are
-cached separately (`save_emissions`/`load_emissions`) by audio, model, device and chunk mode, not
-lyrics, so changed lyrics can reuse the model pass and rerun only the CTC search. The alignment
+cached (`save_emissions`/`load_emissions`) by audio contents, model, device and chunk mode, so
+each Align run searches the emissions with the current lyric readings. The alignment
 result is fitted to the voice the way FA-Kara does (`correct_times`).
 """
 
@@ -32,11 +32,11 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import io
 import json
 import math
 import pathlib
 import sys
-import time
 import zipfile
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from contextlib import suppress
@@ -50,7 +50,7 @@ from namioto import params
 from namioto.analysis import devices, model_store
 from namioto.analysis.slicing import Slicer
 from namioto.params import Field
-from namioto.utils import config_dir, data_dir, file_stamp, resolved
+from namioto.utils import config_dir, data_dir, write_bytes
 
 SAMPLE_RATE = 16000
 # the convolutional front end strides 320 samples into one frame in both models, so a frame is
@@ -98,17 +98,11 @@ ONSET_OFFSETS = {
     "mms": {"consonant": 0.04, "vowel": -0.05},
     "yohane": {"consonant": 0.08, "vowel": 0.06},
 }
-MIDI_ONSET_PRIOR_WEIGHT = 0.8
-MIDI_ONSET_PRIOR_SIGMA = 0.15
 # the ways the model's pass can be cut up: one pass over the whole song, fixed-length chunks, or
 # chunks whose seams are pulled into the silences
 SLICE_MODES = ("off", "fixed", "silence")
 SLICE_LABELS = ("Off", "Fixed chunks", "Silence-aware chunks")
 DEFAULT_MODE = "silence"
-# the cells per quarter note the window offers to snap with; a label is the note that cell is
-QUANTIZE_CELLS = (0, 1, 2, 4, 8, 16, 32)
-QUANTIZE_LABELS = ("Off", "1/4", "1/8", "1/16", "1/32", "1/64", "1/128")
-
 # What the alignment window remembers between runs: the last choices, in a file of their own beside
 # settings.json. Nothing else is kept - the times live in the project, the runs in the data side.
 PARAMETER_FILE = "align.json"
@@ -122,15 +116,6 @@ PARAMETERS: tuple[Field, ...] = (
         "Run on the CPU, or on the GPU backend the settings name; the settings window says which",
         choices=devices.RUN_CHOICES,
         labels=devices.RUN_LABELS,
-    ),
-    Field(
-        "quantize",
-        "choice",
-        0,
-        "Quantize",
-        "Snap the times to the beat grid, this many cells per quarter note",
-        choices=QUANTIZE_CELLS,
-        labels=QUANTIZE_LABELS,
     ),
     Field(
         "chunk",
@@ -222,10 +207,6 @@ def load_audio(path: str | pathlib.Path) -> np.ndarray:
     return librosa.load(path, sr=SAMPLE_RATE, mono=True)[0]
 
 
-# An alignment is a derived result, not a preference: the store is a cache the next run may re-make
-# from the model, so a file that is missing or unreadable simply means there is nothing to reuse.
-ALIGNMENTS_DIR = "alignments"
-ALIGNMENT_STORE_VERSION = 5
 # the model's own pass over the audio depends on the audio alone, so it is cached apart from the
 # lyrics: a changed text re-runs only the cheap CTC search, not the wav2vec2 encoder
 EMISSIONS_DIR = "emissions"
@@ -253,174 +234,6 @@ def save_parameters(values: Any) -> pathlib.Path:
     return params.save_values(parameter_path(), PARAMETERS, values)
 
 
-def alignments_root() -> pathlib.Path:
-    """Where a cached alignment lives: the platform's data directory, beside the models."""
-    return data_dir(ALIGNMENTS_DIR)
-
-
-def _store_path(audio: str | pathlib.Path) -> pathlib.Path:
-    digest = hashlib.sha1(str(resolved(audio)).encode("utf-8")).hexdigest()
-    return alignments_root() / f"{digest}.json"
-
-
-def alignment_key(
-    audio: str | pathlib.Path,
-    model: str,
-    provider: str,
-    text: str,
-    chunk: str = DEFAULT_MODE,
-    onset_priors=(),
-) -> str:
-    """What makes two alignments the same one: the audio, the model, where it runs, the lyrics and
-    how the model's pass was cut up, and the MIDI onset hints used by the CTC search.
-
-    The tempo and the grid offset are not part of it: they only snap the result, so changing either
-    re-snaps a stored alignment instead of running the model again. The cutting mode is, because it
-    is part of how the model ran and so of the times it found.
-    """
-    identity = {
-        "audio": list(file_stamp(audio)),
-        "model": model,
-        "provider": provider,
-        "text": text,
-        "chunk": chunk,
-        "onset_priors": onset_priors,
-    }
-    return hashlib.sha1(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
-
-
-def _stored_rows(raw) -> list[list[tuple[float | None, float | None]]] | None:
-    try:
-        return [
-            [(None if start is None else float(start), None if end is None else float(end)) for start, end in row]
-            for row in raw
-        ]
-    except (TypeError, ValueError):
-        return None
-
-
-def load_alignments(audio: str | pathlib.Path) -> dict[str, dict]:
-    """Every alignment saved for one audio file, keyed by alignment key; nothing usable means none."""
-    try:
-        data = json.loads(_store_path(audio).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    if not isinstance(data, dict) or data.get("version") != ALIGNMENT_STORE_VERSION:
-        return {}
-    entries = data.get("alignments")
-    if not isinstance(entries, dict):
-        return {}
-    return {key: entry for key, entry in entries.items() if isinstance(entry, dict)}
-
-
-def find_alignment(
-    audio: str | pathlib.Path,
-    model: str,
-    provider: str,
-    text: str,
-    chunk: str = DEFAULT_MODE,
-    onset_priors=(),
-):
-    """The lines, doubts and per-line flags an alignment with these exact inputs already found, or None.
-
-    A store written before the flags existed has none, so it comes back empty rather than as a miss.
-    """
-    entry = load_alignments(audio).get(alignment_key(audio, model, provider, text, chunk, onset_priors))
-    if not entry:
-        return None
-    rows = _stored_rows(entry.get("rows"))
-    if rows is None:
-        return None
-    problems = entry.get("problems")
-    flagged = entry.get("flagged")
-    return (
-        rows,
-        [str(problem) for problem in problems] if isinstance(problems, list) else [],
-        [bool(flag) for flag in flagged] if isinstance(flagged, list) else [],
-        _stored_scores(entry.get("scores")),
-        _stored_onset_bounds(entry.get("onset_bounds")),
-    )
-
-
-def save_alignment(
-    audio: str | pathlib.Path,
-    model: str,
-    provider: str,
-    text: str,
-    rows,
-    problems,
-    flagged,
-    chunk: str = DEFAULT_MODE,
-    scores=(),
-    onset_bounds=(),
-    onset_priors=(),
-) -> pathlib.Path:
-    """Keep one entry per alignment key: running the same one again replaces what it found last time."""
-    entries = load_alignments(audio)
-    entries[alignment_key(audio, model, provider, text, chunk, onset_priors)] = {
-        "at": int(time.time()),
-        "model": model,
-        "rows": [[[start, end] for start, end in row] for row in rows],
-        "problems": [str(problem) for problem in problems],
-        "flagged": [bool(flag) for flag in flagged],
-        "scores": [list(row) for row in scores],
-        "onset_bounds": [[list(bounds) if bounds is not None else None for bounds in row] for row in onset_bounds],
-    }
-    target = _store_path(audio)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps({"version": ALIGNMENT_STORE_VERSION, "audio": str(audio), "alignments": entries}, indent=2) + "\n",
-        encoding="utf-8",
-    )
-    return target
-
-
-def _stored_scores(value) -> list[list[float | None]]:
-    """Read optional per-token posteriors from an alignment cache written by a newer run."""
-    if not isinstance(value, list):
-        return []
-    rows = []
-    for row in value:
-        if not isinstance(row, list):
-            return []
-        found = []
-        for score in row:
-            if isinstance(score, bool) or not isinstance(score, (int, float)) or not math.isfinite(score):
-                found.append(None)
-            else:
-                found.append(min(max(float(score), 0.0), 1.0))
-        rows.append(found)
-    return rows
-
-
-def _stored_onset_bounds(value) -> list[list[tuple[float, float] | None]]:
-    """Read optional per-token onset intervals from an alignment cache written by a newer run."""
-    if not isinstance(value, list):
-        return []
-    rows = []
-    for row in value:
-        if not isinstance(row, list):
-            return []
-        found = []
-        for bounds in row:
-            if bounds is None:
-                found.append(None)
-            elif (
-                isinstance(bounds, list)
-                and len(bounds) == 2
-                and all(
-                    isinstance(bound, (int, float)) and not isinstance(bound, bool) and math.isfinite(bound)
-                    for bound in bounds
-                )
-                and bounds[0] <= bounds[1]
-            ):
-                found.append((float(bounds[0]), float(bounds[1])))
-            else:
-                return []
-        rows.append(found)
-    return rows
-
-
 def emissions_root() -> pathlib.Path:
     """Where a cached model pass lives: the platform's data directory, beside the alignments."""
     return data_dir(EMISSIONS_DIR)
@@ -430,14 +243,11 @@ def _emissions_path(key: str) -> pathlib.Path:
     return emissions_root() / f"{key}.npy"
 
 
-def emissions_key(audio: str | pathlib.Path, model: str, provider: str, chunk: str = DEFAULT_MODE) -> str:
-    """What makes two model passes the same: the audio, the model, where it runs and how it was cut.
-
-    The lyrics are not part of it, and neither are the tempo and the grid offset: the model never
-    sees them, so a changed `.krc` reuses the pass and only the search runs again.
-    """
+def emissions_key(audio: np.ndarray, model: str, provider: str, chunk: str = DEFAULT_MODE) -> str:
+    """Identify the model pass by the exact mono PCM samples and encoder settings."""
+    samples = np.ascontiguousarray(audio, dtype="<f4")
     identity = {
-        "audio": list(file_stamp(audio)),
+        "audio": hashlib.sha256(samples).hexdigest(),
         "model": model,
         "provider": provider,
         "chunk": chunk,
@@ -445,29 +255,19 @@ def emissions_key(audio: str | pathlib.Path, model: str, provider: str, chunk: s
     return hashlib.sha1(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def load_emissions(
-    audio: str | pathlib.Path, model: str, provider: str, chunk: str = DEFAULT_MODE
-) -> np.ndarray | None:
+def load_emissions(key: str) -> np.ndarray | None:
     """The model's log-softmax pass over the whole audio, or None when it was never kept."""
     try:
-        return np.load(_emissions_path(emissions_key(audio, model, provider, chunk)))
-    except (OSError, ValueError):
+        return np.load(_emissions_path(key))
+    except (OSError, EOFError, ValueError):
         return None
 
 
-def save_emissions(
-    audio: str | pathlib.Path, model: str, provider: str, chunk: str, emission: np.ndarray
-) -> pathlib.Path:
+def save_emissions(key: str, emission: np.ndarray) -> pathlib.Path:
     """Keep the pass so a changed lyric re-runs only the search, not the model."""
-    target = _emissions_path(emissions_key(audio, model, provider, chunk))
-    target.parent.mkdir(parents=True, exist_ok=True)
-    np.save(target, np.asarray(emission, dtype=np.float32))
-    return target
-
-
-def has_emissions(audio: str | pathlib.Path, model: str, provider: str, chunk: str = DEFAULT_MODE) -> bool:
-    """Whether a pass with these inputs was kept, without reading it back."""
-    return _emissions_path(emissions_key(audio, model, provider, chunk)).exists()
+    stream = io.BytesIO()
+    np.save(stream, np.asarray(emission, dtype=np.float32))
+    return write_bytes(_emissions_path(key), stream.getvalue())
 
 
 class Backend(Protocol):
@@ -622,26 +422,14 @@ def forced_align(
     emission: np.ndarray,
     tokens: Sequence[int],
     blank_id: int = 0,
-    *,
-    onset_priors: Sequence[float | None] | None = None,
-    prior_weight: float = MIDI_ONSET_PRIOR_WEIGHT,
-    prior_sigma: float = MIDI_ONSET_PRIOR_SIGMA,
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """The best frame path through the CTC graph, as a token id and a log-probability per frame.
 
     The graph alternates the blank with each target token; a token may follow itself only across a
     blank. The path is forced to end on the last token (or the blank after it), so every target is
-    visited. An optional Gaussian prior changes only target-entry transitions, not acoustic
-    emissions or returned frame scores. None means the window has fewer frames than the targets
-    and their repeats need.
+    visited. None means the window has fewer frames than the targets and their repeats need.
     """
     frames, count = emission.shape[0], len(tokens)
-    if onset_priors is not None and len(onset_priors) != count:
-        raise ValueError("onset prior count must match CTC targets")
-    if prior_sigma <= 0 or not math.isfinite(prior_sigma):
-        raise ValueError("onset prior sigma must be finite and positive")
-    if prior_weight < 0 or not math.isfinite(prior_weight):
-        raise ValueError("onset prior weight must be finite and non-negative")
     if count == 0:
         return np.full(frames, blank_id, dtype=np.int64), emission[:, blank_id].copy()
     repeats = sum(1 for earlier, later in zip(tokens, tokens[1:], strict=False) if earlier == later)
@@ -658,17 +446,6 @@ def forced_align(
     back = np.zeros((frames, states), dtype=np.int8)
     alpha[0, 0] = emission[0, blank_id]
     alpha[0, 1] = emission[0, labels[1]]
-    prior = np.zeros((frames, count), dtype=np.float64)
-    if onset_priors is not None and prior_weight:
-        frame_times = np.arange(frames, dtype=np.float64) * FRAME_SECONDS
-        for target, center in enumerate(onset_priors):
-            if center is None:
-                continue
-            if not math.isfinite(center):
-                raise ValueError("onset priors must be finite or None")
-            prior[:, target] = -0.5 * prior_weight * ((frame_times - center) / prior_sigma) ** 2
-        if count:
-            alpha[0, 1] += prior[0, 0]
     positions = np.arange(states)
     for t in range(1, frames):
         previous = alpha[t - 1]
@@ -676,11 +453,6 @@ def forced_align(
         step = np.concatenate(([-np.inf], previous[:-1]))
         over = np.full(states, -np.inf)
         over[skip] = previous[positions[skip] - 2]
-        if onset_priors is not None and prior_weight:
-            entry_bias = np.zeros(states, dtype=np.float64)
-            entry_bias[1::2] = prior[t]
-            step += entry_bias
-            over += entry_bias
         choice = np.where(over > np.maximum(stay, step), 2, np.where(step > np.maximum(stay, over), 1, 0))
         best = np.where(choice == 2, over, np.where(choice == 1, step, stay))
         alpha[t] = best + emission[t, labels]
@@ -799,14 +571,9 @@ def align_whole(
     dictionary: Mapping[str, int],
     *,
     blank_id: int = 0,
-    onset_priors: Sequence[float | None] | None = None,
-    prior_weight: float = MIDI_ONSET_PRIOR_WEIGHT,
-    prior_sigma: float = MIDI_ONSET_PRIOR_SIGMA,
 ) -> AlignedSegment:
     """Align a segment that is the whole audio, from the model's already-computed pass over it."""
-    return _align_emission(
-        segment, emission, 0.0, dictionary, blank_id, onset_priors, prior_weight, prior_sigma
-    )
+    return _align_emission(segment, emission, 0.0, dictionary, blank_id)
 
 
 def onset_offset(model: str, token: str) -> float:
@@ -816,26 +583,6 @@ def onset_offset(model: str, token: str) -> float:
         return ONSET_OFFSETS[model][kind]
     except KeyError as error:
         raise ValueError(f"no onset calibration for model {model!r}") from error
-
-
-def midi_onset_priors(mapped, note_onsets: Mapping[int, float]) -> list[list[float | None]]:
-    """Give each mapped NOTE onset to its first Sound; shared NOTE members get no duplicate prior."""
-    used: set[int] = set()
-    rows: list[list[float | None]] = []
-    ordered: list[float] = []
-    for row in mapped:
-        priors = []
-        for note_ids in row:
-            available = [note_id for note_id in note_ids if note_id not in used and note_id in note_onsets]
-            center = float(note_onsets[available[0]]) if available else None
-            priors.append(center)
-            if center is not None:
-                ordered.append(center)
-            used.update(note_ids)
-        rows.append(priors)
-    if any(later < earlier for earlier, later in zip(ordered, ordered[1:], strict=False)):
-        return [[None for _center in row] for row in rows]
-    return rows
 
 
 def calibrate_times(
@@ -889,9 +636,6 @@ def _align_emission(
     offset: float,
     dictionary: Mapping[str, int],
     blank_id: int,
-    onset_priors: Sequence[float | None] | None = None,
-    prior_weight: float = 0.8,
-    prior_sigma: float = 0.15,
 ) -> AlignedSegment:
     lengths = [len(token) for token in segment.tokens]
     codes = [dictionary.get(char.lower(), -1) for token in segment.tokens for char in token]
@@ -903,24 +647,7 @@ def _align_emission(
         emission = np.concatenate([emission, emission[:, non_blank].max(axis=1)[:, None]], axis=1)
         wildcard = emission.shape[1] - 1
         codes = [wildcard if missing else code for code, missing in zip(codes, unknown, strict=True)]
-    char_priors = None
-    if onset_priors is not None:
-        if len(onset_priors) != len(segment.tokens):
-            raise ValueError("onset prior count must match input tokens")
-        char_priors = []
-        for length, center in zip(lengths, onset_priors, strict=True):
-            if length:
-                char_priors.extend((center, *([None] * (length - 1))))
-        if not any(center is not None for center in char_priors):
-            char_priors = None
-    found = forced_align(
-        emission,
-        codes,
-        blank_id,
-        onset_priors=char_priors,
-        prior_weight=prior_weight,
-        prior_sigma=prior_sigma,
-    )
+    found = forced_align(emission, codes, blank_id)
     if found is not None:
         onset = ctc_onset_posteriors(emission, codes, blank_id)
         spans = merge_tokens(found[0], found[1], blank_id)

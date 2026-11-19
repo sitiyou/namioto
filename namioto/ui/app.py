@@ -60,13 +60,13 @@ from PySide6.QtWidgets import (
 from namioto import i18n, ipc, lyrics, midi, params, project, qtplugins, subtitle
 from namioto import settings as store
 from namioto import state as window_state
-from namioto.analysis import align, bpm
+from namioto.analysis import bpm
 from namioto.analysis.spectrum import NoteSpectrum
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
 from namioto.channels import set_field as channel_set_field
 from namioto.karaoke import ExportSettings, KrcError
-from namioto.karaoke.canonical import rebuild
+from namioto.karaoke.canonical import rebuild, without_note_mapping
 from namioto.karaoke.operations import SoundRef
 from namioto.karaoke.parser import parse
 from namioto.karaoke.sounds import natural_sounds
@@ -1622,8 +1622,8 @@ class MainWindow(QMainWindow):
             return
         snapshot = self._mapping_request(self.view.lyric_lines)
         if self._lyric_alignment is not None:
-            _revision, _model, request, _refs = self._lyric_alignment
-            if all(request[key] == snapshot[key] for key in ("text", "lines", "notes_by_channel")):
+            _revision, _model, request, _refs, source = self._lyric_alignment
+            if source == snapshot["text"] and request["notes_by_channel"] == snapshot["notes_by_channel"]:
                 return
             self._lyric_alignment = None
         if self._lyric_map_pending is not None and self._lyric_map_pending[1] == snapshot:
@@ -1800,47 +1800,29 @@ class MainWindow(QMainWindow):
         if not self.lyrics_text:
             self.statusBar().showMessage(i18n.tr("There are no lyrics in {name} to align", name=path.name))
             return
-        if not self.view.lyric_lines:
-            self.statusBar().showMessage(
-                i18n.tr("The lyrics could not be read: {error}", error=self._lyric_error or path.name)
-            )
-            return
         if self.audio_path is None:
             self.statusBar().showMessage(i18n.tr("Load the audio before aligning the lyrics"))
             return
         channel = self.view.active_channel
         try:
-            part = split_channels(self.lyrics_text).get(channel)
+            text = without_note_mapping(self.lyrics_text, channel=channel)
+            part = split_channels(text).get(channel)
         except KrcError as error:
-            self.statusBar().showMessage(str(error))
+            self.statusBar().showMessage(i18n.tr("The lyrics could not be read: {error}", error=error))
             return
         if part is None:
             self.statusBar().showMessage(i18n.tr("The selected channel has no lyric sounds"))
             return
-        onset_priors = ()
-        mapped = self.view.lyric_mapped
-        if not self.view.lyric_mapping_pending and len(mapped) == len(self.view.lyric_lines):
-            note_onsets = {note.id: self.view.to_seconds(note.start) for note in self.view.notes() if note.id > 0}
-            mapped_rows = part.rows(mapped)
-            if len(mapped_rows) == len(part.lines) and all(
-                len(row) == len(line.sounds) for row, line in zip(mapped_rows, part.lines, strict=True)
-            ):
-                onset_priors = align.midi_onset_priors(mapped_rows, note_onsets)
-                if not any(center is not None for row in onset_priors for center in row):
-                    onset_priors = ()
-        dialog = AlignDialog(
-            self.audio_path,
-            self.lyrics_text,
-            self.view.bpm,
-            self,
-            offset=self.view.offset,
-            channel=channel,
-            onset_priors=onset_priors,
-        )
+        dialog = AlignDialog(self.audio_path, text, self, channel=channel)
         generation = self._audio_generation
 
         def adopt(raw, model, flagged, scores, onset_bounds):
-            if dialog.text != self.lyrics_text or generation != self._audio_generation:
+            if generation != self._audio_generation:
+                return
+            try:
+                if dialog.text != without_note_mapping(self.lyrics_text, channel=channel):
+                    return
+            except KrcError:
                 return
             self._adopt_alignment(
                 raw,
@@ -1866,11 +1848,18 @@ class MainWindow(QMainWindow):
     ) -> None:
         if self.view.gesture_active:
             return
-        lines = self.view.lyric_lines
+        source = self.lyrics_text
+        try:
+            text = without_note_mapping(source, channel=channel)
+            lines = natural_sounds(text)
+            parts = split_channels(text) if channel is not None else {}
+        except KrcError as error:
+            self.statusBar().showMessage(str(error))
+            return
         if channel is None:
             refs = tuple(tuple(SoundRef(row, at) for at in range(len(line.sounds))) for row, line in enumerate(lines))
         else:
-            part = split_channels(self.lyrics_text).get(channel)
+            part = parts.get(channel)
             refs = part.refs if part is not None else ()
         if (
             not refs
@@ -1878,24 +1867,25 @@ class MainWindow(QMainWindow):
             or any(len(row) != len(owned) for row, owned in zip(raw, refs, strict=True))
         ):
             return
-        combined = [list(row) for row in self.view.lyric_raw]
-        existing_scores = self._lyric_scores or []
-        if len(existing_scores) != len(lines) or any(
-            len(row) != len(line.sounds) for row, line in zip(existing_scores, lines, strict=False)
-        ):
-            existing_scores = [[None] * len(line.sounds) for line in lines]
-        combined_scores = [list(row) for row in existing_scores]
-        existing_bounds = self._lyric_onset_bounds or []
-        if len(existing_bounds) != len(lines) or any(
-            len(row) != len(line.sounds) for row, line in zip(existing_bounds, lines, strict=False)
-        ):
-            existing_bounds = [[None] * len(line.sounds) for line in lines]
-        combined_bounds = [list(row) for row in existing_bounds]
+        combined = [[(None, None)] * len(line.sounds) for line in lines]
+        combined_scores = [[None] * len(line.sounds) for line in lines]
+        combined_bounds = [[None] * len(line.sounds) for line in lines]
+        other_channels = parts.keys() - {channel}
+        if other_channels:
+            original_parts = split_channels(source)
+            for owner in other_channels:
+                old = original_parts[owner]
+                for old_rows, new_rows, default in (
+                    (self.view.lyric_raw, combined, (None, None)),
+                    (self._lyric_scores or (), combined_scores, None),
+                    (self._lyric_onset_bounds or (), combined_bounds, None),
+                ):
+                    for owned, values in zip(parts[owner].refs, old.rows(old_rows, default), strict=True):
+                        for ref, value in zip(owned, values, strict=True):
+                            new_rows[ref.line][ref.index] = value
         valid_scores = len(scores) == len(refs) and all(
             len(row) == len(owned) for row, owned in zip(scores, refs, strict=True)
         )
-        if not valid_scores:
-            combined_scores = [[None] * len(line.sounds) for line in lines]
         valid_bounds = len(onset_bounds) == len(refs) and all(
             len(row) == len(owned) for row, owned in zip(onset_bounds, refs, strict=True)
         )
@@ -1906,10 +1896,8 @@ class MainWindow(QMainWindow):
             row_bounds = onset_bounds[position] if valid_bounds else [None] * len(owned)
             for ref, span, score, bounds in zip(owned, raw[position], row_scores, row_bounds, strict=True):
                 combined[ref.line][ref.index] = span
-                if valid_scores:
-                    combined_scores[ref.line][ref.index] = score
-                if valid_bounds:
-                    combined_bounds[ref.line][ref.index] = bounds
+                combined_scores[ref.line][ref.index] = score
+                combined_bounds[ref.line][ref.index] = bounds
                 row_flags[ref.line] = row_flags.get(ref.line, False) or (
                     flagged[position] if position < len(flagged) else False
                 )
@@ -1919,19 +1907,20 @@ class MainWindow(QMainWindow):
                 if channel is None or all(sound.channel == channel for sound in lines[row].sounds)
                 else flags[row] or flagged_row
             )
-        snapshot = dict(
-            self._mapping_request(lines),
-            raw=combined,
-            flagged=tuple(flags),
-            scores=combined_scores,
-            onset_bounds=combined_bounds,
-            mode="edit",
-            use_constraints=False,
-            solve_channels=(channel,) if channel is not None else None,
-        )
+        snapshot = {
+            "text": text,
+            "lines": tuple(lines),
+            "raw": combined,
+            "flagged": tuple(flags),
+            "scores": combined_scores,
+            "onset_bounds": combined_bounds,
+            "notes_by_channel": self._notes_by_channel({sound.channel for line in lines for sound in line.sounds}),
+            "mode": "edit",
+            "solve_channels": (channel,) if channel is not None else None,
+        }
         self._lyric_map_revision += 1
         revision = self._lyric_map_revision
-        self._lyric_alignment = revision, model, snapshot, refs
+        self._lyric_alignment = revision, model, snapshot, refs, source
         request = revision, snapshot
         self._set_lyric_mapping_pending(True)
         if self._lyric_map_thread is not None:
@@ -1977,11 +1966,12 @@ class MainWindow(QMainWindow):
         return rebuilt
 
     def _commit_alignment(self, mapping) -> None:
-        _revision, model, snapshot, refs = self._lyric_alignment
+        _revision, model, snapshot, refs, source = self._lyric_alignment
         self._lyric_alignment = None
-        current = self._mapping_request(self.view.lyric_lines)
-        if self.view.gesture_active or any(
-            snapshot[key] != current[key] for key in ("text", "lines", "notes_by_channel")
+        if (
+            self.view.gesture_active
+            or source != self.lyrics_text
+            or snapshot["notes_by_channel"] != self._notes_by_channel(snapshot["notes_by_channel"])
         ):
             self._remap_lyrics()
             return
@@ -2020,7 +2010,7 @@ class MainWindow(QMainWindow):
                 (),
                 tuple(tuple(row) for row in (self._lyric_onset_bounds or ())),
             )
-            self.view.load_lyrics(natural_sounds(text), self.view.lyric_times, raw=snapshot["raw"])
+            self.view.load_lyrics(natural_sounds(text), mapping.spans, raw=snapshot["raw"])
         self._prepare_lyrics_copy()
         self._remap_lyrics()
         self._mark_dirty()

@@ -39,7 +39,7 @@
 | `.N` | Unit 的 NOTE 槽数 override；不表示 Sound 数。 |
 | `.+` | 当前完整 Unit/group 接续前一个 Sound 所属的单 NOTE 共享组，不额外消费 NOTE；不是 drop。 |
 | `Sound` | edit 模式的稳定、最小自然读音原子。 |
-| raw evidence | 每个 Sound 的可编辑 `onset`、参考时长 `raw_length` 与可选 `score`；是匹配证据，不是最终 NOTE 边界。`raw_length` 在现有对齐流程输出后、Quantize 前取 `end - start`，不随编辑或 Quantize 改变。score 可缺失，缺失时降低置信度。 |
+| raw evidence | 每个 Sound 的可编辑 `onset`、参考时长 `raw_length` 与可选 `score`；是匹配证据，不是最终 NOTE 边界。`raw_length` 取对齐结果的 `end - start`，不随 onset 编辑改变。score 可缺失，缺失时降低置信度。 |
 | target channel | KRC 行的 `{N}` 所指定的 MIDI channel，默认 `0`；edit mapping 仅使用 channel `0`。 |
 | target NOTE stream（歌词 NOTE，lyrics note） | target channel 的 NOTE 经过冲突预处理后得到的单声部、有序预览流；就是 timeline 上显示的歌词 NOTE，每个元素对应条带上的一块 NOTE block。 |
 | operation | 最终映射的一个 `match`、`merge` 或 `drop`。 |
@@ -234,7 +234,7 @@ b.start < a.end - OVERLAP_SLACK
 
 任一 Sound 缺失或逆序时，整次映射不运行，产生 `incomplete_alignment`，提示重新对齐；不得只映射剩余部分。
 
-用户选择 Quantize 时，只量化 onset，结果不得小于 `0`；`raw_length` 保持不变。量化后的 onset 是映射输入和工程持久化值，程序不同时维护另一套隐藏的原始起点时间轴。
+Align 直接使用对齐得到的 onset 作为映射输入和工程持久化值，不吸附到节拍网格。
 
 目标 channel 没有 NOTE 时产生 `no_target_notes`；edit 模式 KRC 和 ASS 都不得导出。
 
@@ -826,7 +826,7 @@ read-only KRC 原文复制不依赖 edit mapping 门禁。read-only ASS 使用 �
 20. 未完成工程可保存，但不能绕过统一导出门禁；
 21. 只有用户手动选择源 KRC 路径时才覆盖源文件；
 22. read-only faithful 模式不向 edit 模式泄漏 group、`.N`、`.+` 或确认状态，不改写 edit evidence；
-23. 拖动和 Quantize 只改变 onset，不改变 `raw_length`；
+23. 拖动只改变 onset，不改变 `raw_length`；
 24. 零参考时长的 Sound 仍能向右移动，全曲最后一个 Sound 不受结束参考点限制；
 25. onset 拖动受全曲相邻 onset 约束，允许相等，空行不切断顺序；
 26. 不存在独立的行末 end 拖动柄或命中区域；
