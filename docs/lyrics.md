@@ -107,17 +107,16 @@ Different channels can sing simultaneously.
 
 ## Export lyrics and subtitles
 
-Use **Export → Export lyrics (.krc)…** to write the current KRC, including its groups and
-`.N` counts. Use **Export ASS subtitle…** for karaoke subtitles with syllable timing, ruby
-and gaps between notes. The exported ASS is ready to play; no template processing is needed.
-Different words on the same displayed line can highlight at the same time. Readings sharing
-one base text must have non-overlapping, ordered times; export reports an error otherwise.
+Use **Export → Export lyrics (.krc)…** for mapped KRC, or **Export karaoke…** for styled lyrics. Choose the default template, single or alternating double rows, and ASS or hook output. The next export opens with the format of the last successful export. The editor takes a KRC/MIDI snapshot and uses the same mapping as file export. Independent words on one line can sing simultaneously. Multiple readings of a shared base retain their own ordered time intervals.
 
-GUI exports use the current lyric mapping. Set font, overlay colour, fades, lead time and
-guide dot in export settings. In **Channel colours**, leave a channel blank to inherit the
-global overlay colour.
+The sweep follows the measured text during its singing interval. The engine handles outlines and halos automatically. Sweep transition width sets the width of the colour blend at the moving edge in canvas pixels.
 
-![ASS subtitle export settings](ass-export.png)
+The default uses white lettering, channel-coloured highlights, outlines and a halo. Turn off **Use project channel colours** to override the sung colour or individual channels for this export. Ruby size is relative to the main font; its gap is measured between visible outlines. Preview controls how early a line appears, and hold extends its tail before the line fades as a group. The section count-in can use three filling dots or descending bars. An independent count-in reserves space above its main lyric row, including any ruby. The guide gap controls this clearance. A per-symbol duration of zero follows MIDI tempo.
 
-For file-based exports, automatic rebuilding and session exports, see
-[ASS command-line export](cli.md#export-ass-subtitles).
+A KRC bracket starts a reading group that may extend on both sides of its base. Comma-separated parts inside one bracket keep their own timings and share the group. This corresponds to Aegisub’s float-left marker at the start of a word.
+
+The default singing pulse scales the body glyphs around their own centers over the lyric unit. Each ruby glyph pulses around its own center as the wipe reaches its part of the reading. Other ruby glyphs stay in place, including during gaps between readings. Set the singing scale multiplier to 1 to turn off both pulses.
+
+![Karaoke export settings](ass-export.png)
+
+See [CLI export](cli.md#export-karaoke) for file and session exports and [Python templates](karaoke-templates.md) for custom recipes.

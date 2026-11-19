@@ -24,8 +24,8 @@ def settings_file(tmp_path, monkeypatch) -> Path:
     return path
 
 
-def test_ass_settings_keep_existing_preferences_and_default_new_fields(settings_file) -> None:
-    from namioto.karaoke import AssSettings
+def test_export_settings_keep_existing_preferences_and_default_new_fields(settings_file) -> None:
+    from namioto.karaoke import ExportSettings
 
     existing = {
         "font": "Old Font",
@@ -39,7 +39,7 @@ def test_ass_settings_keep_existing_preferences_and_default_new_fields(settings_
     loaded = store.load()
     for name, value in existing.items():
         assert getattr(loaded.ass, name) == value
-    assert AssSettings(**vars(store.Settings().ass)) == AssSettings()
+    assert ExportSettings(**vars(store.Settings().ass)) == ExportSettings()
     assert loaded.ass.font_size == 96
     assert loaded.ass.overlay_blur_color == ""
     assert loaded.ass.offset_ms == 0
@@ -50,7 +50,7 @@ def test_ass_settings_keep_existing_preferences_and_default_new_fields(settings_
     assert vars(store.load().ass) == vars(loaded.ass)
 
 
-def test_ass_settings_do_not_read_the_original_environment(settings_file, monkeypatch) -> None:
+def test_export_settings_do_not_read_the_original_environment(settings_file, monkeypatch) -> None:
     monkeypatch.setenv("FONTNAME", "Environment Font")
     monkeypatch.setenv("BORD", "20")
     assert store.load().ass.font == "sans-serif"

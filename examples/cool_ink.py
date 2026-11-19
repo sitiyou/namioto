@@ -1,0 +1,23 @@
+"""An external recipe using Namioto's timed default scene and the project's sung colours."""
+
+from dataclasses import replace
+
+from namioto.karaoke.default_template import default_scene
+from namioto.params import Field
+
+
+def build(song, values):
+    settings = replace(song.settings, base_color=values["ink"], pulse=values["pulse"])
+    return default_scene(replace(song, settings=settings))
+
+
+def register(registry):
+    registry.add(
+        id="cool-ink",
+        title="Cool ink",
+        parameters=(
+            Field("ink", "color", "CDEEFF", "Unsung fill colour"),
+            Field("pulse", "float", 1.04, "Singing scale multiplier", low=1, high=1.3),
+        ),
+        build=build,
+    )

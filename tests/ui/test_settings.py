@@ -375,12 +375,12 @@ def test_the_transport_carries_the_project_buttons() -> None:
     bar.save_requested.connect(lambda: seen.append("save"))
     bar.export_midi_requested.connect(lambda: seen.append("export midi"))
     bar.export_krc_requested.connect(lambda: seen.append("export lyrics"))
-    bar.export_ass_requested.connect(lambda: seen.append("export subtitle"))
+    bar.export_lyrics_requested.connect(lambda: seen.append("export subtitle"))
     bar.open.click()
     bar.save.click()
     bar.export_midi_action.trigger()
     bar.export_krc_action.trigger()
-    bar.export_ass_action.trigger()
+    bar.export_lyrics_action.trigger()
     assert seen == ["open", "save", "export midi", "export lyrics", "export subtitle"]
 
 

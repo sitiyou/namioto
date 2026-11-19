@@ -48,7 +48,7 @@ def test_palette_is_applied_when_project_settings_are_restored(own_window):
     own_window.project_settings = settings
     own_window._apply_project_settings()
     assert own_window.view.lyric_color(3) == QColor("#123456")
-    exported = own_window._ass_settings()
+    exported = own_window._export_settings()
     assert exported.channel_colours()[3] == "123456"
     from namioto.karaoke import generate_ass
 

@@ -7,7 +7,7 @@ import subprocess
 import numpy as np
 import pytest
 
-from namioto.karaoke import AssSettings, generate_ass
+from namioto.karaoke import ExportSettings, generate_ass
 
 
 def test_two_words_sweep_simultaneously_in_libass(tmp_path):
@@ -24,7 +24,7 @@ def test_two_words_sweep_simultaneously_in_libass(tmp_path):
     filters = subprocess.run(["ffmpeg", "-filters"], capture_output=True, text=True, check=True).stdout
     if " ass " not in filters:
         pytest.skip("ffmpeg was built without libass")
-    settings = AssSettings(
+    settings = ExportSettings(
         font="DejaVu Sans",
         channel_colors={1: "FF0000", 2: "00FF00"},
         border=0,

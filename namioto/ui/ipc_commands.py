@@ -18,6 +18,7 @@ from __future__ import annotations
 import base64
 import contextlib
 import math
+from pathlib import Path
 from typing import Any
 
 from namioto import __version__, ipc, midi, project, subtitle
@@ -25,6 +26,7 @@ from namioto.channels import CHANNEL_COUNT, Channel, free_channel
 from namioto.channels import set_field as channel_set_field
 from namioto.ipc import IpcError
 from namioto.karaoke import KrcError
+from namioto.karaoke.templates import read_preferences
 from namioto.ui.roll import PITCH_MAX, PITCH_MIN
 
 MATCH_SECONDS = 1e-3  # how close two notes have to be to count as the same one when removing
@@ -261,14 +263,22 @@ class WindowBridge:
             params={"path": "the .krc file"},
         )
         add(
-            "project.export_ass",
-            self.export_ass,
-            summary="Build ASS from the current KRC and MIDI exports using GUI settings",
-            params={"path": "the .ass file", "save_krc?": "KRC export path", "save_midi?": "MIDI export path"},
+            "project.export_lyrics",
+            self.export_lyrics,
+            summary="Export ASS or a libplacebo hook from the current lyrics and MIDI",
+            params={
+                "path": "the .ass or .hook file",
+                "format?": "ass or hook",
+                "fps?": "hook frame rate",
+                "template?": "registered template ID",
+                "parameters?": "template overrides",
+                "save_krc?": "KRC export path",
+                "save_midi?": "MIDI export path",
+            },
         )
         add(
-            "project.ass_source",
-            self.ass_source,
+            "project.export_source",
+            self.export_source,
             summary="Snapshot the current KRC, base64 MIDI and ASS settings without writing files",
         )
         add(
@@ -739,22 +749,47 @@ class WindowBridge:
             raise IpcError("failed", "the lyrics could not be written")
         return {"path": path}
 
-    def export_ass(self, params: dict) -> dict:
-        path = subtitle.ass_path(_text(params, "path"))
+    def export_lyrics(self, params: dict) -> dict:
+        path = Path(_text(params, "path"))
+        fmt = params.get("format", "hook" if path.suffix.lower() == ".hook" else "ass")
+        try:
+            path = subtitle.export_path(path, fmt)
+        except ValueError as error:
+            raise IpcError("failed", str(error)) from error
+        saved = read_preferences()
+        template = params.get("template", saved.get("id", "default"))
+        if not isinstance(template, str):
+            raise IpcError("failed", "template must be a string")
+        parameters = params.get("parameters", {})
+        if not isinstance(parameters, dict):
+            raise IpcError("failed", "parameters must be an object")
         paths = {name: _text(params, name) for name in ("save_krc", "save_midi") if name in params}
-        if not self.window.export_ass(path, **paths):
+        if not self.window.export_lyrics(
+            path,
+            format=fmt,
+            fps=params.get("fps", saved.get("fps", 60)),
+            template=template,
+            scripts=saved.get("scripts", ()) if template != "default" else (),
+            parameters={**saved.get("values", {}).get(template, {}), **parameters},
+            **paths,
+        ):
             raise IpcError("failed", self.window.statusBar().currentMessage())
         return {"path": str(path), **paths}
 
-    def ass_source(self, _params: dict) -> dict:
+    def export_source(self, _params: dict) -> dict:
         try:
-            krc, data = self.window.ass_source()
+            krc, data = self.window.export_source()
         except (KrcError, ValueError, OSError) as error:
             raise IpcError("failed", str(error)) from error
+        saved = read_preferences()
+        template = saved.get("id", "default")
         return {
+            "template": template,
+            "parameters": saved.get("values", {}).get(template, {}),
+            "fps": saved.get("fps", 60),
             "krc": krc,
             "midi": base64.b64encode(data).decode("ascii"),
-            "settings": vars(self.window._ass_settings()).copy(),
+            "settings": vars(self.window._export_settings()).copy(),
             "wavetone": self.window.settings.midi.wavetone,
             "revision": self._subtitle_revision,
         }

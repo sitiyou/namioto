@@ -45,7 +45,7 @@ def test_mixed_channels_all_use_faithful_mapping(own_window, tmp_path):
     assert not own_window._lyric_error
     assert own_window.export_krc(tmp_path / "mixed.krc")
     assert natural_sounds((tmp_path / "mixed.krc").read_text())[1].track == 1
-    assert own_window.export_ass(tmp_path / "mixed.ass")
+    assert own_window.export_lyrics(tmp_path / "mixed.ass")
 
 
 def test_alignment_adopts_all_channel_rows(own_window, tmp_path):
@@ -208,7 +208,7 @@ def test_project_colour_pickers_validate_and_leave_preferences_untouched(own_win
     assert own_window.view.lyric_color(1).name() == "#ff0000"
     assert own_window.view.lyric_color(2).name() == "#00ff00"
     assert own_window.view.channel_color(1) == original_midi
-    assert own_window._ass_settings().channel_colours()[1] == "FF0000"
+    assert own_window._export_settings().channel_colours()[1] == "FF0000"
     dialog.color_editors[1].setText("invalid")
     assert picker.icon().isNull()
     assert not dialog._buttons.button(QDialogButtonBox.StandardButton.Apply).isEnabled()

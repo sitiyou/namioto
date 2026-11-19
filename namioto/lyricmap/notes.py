@@ -35,10 +35,17 @@ class Note(Protocol):
     which the callers here pass as beats.
     """
 
-    start: float
-    end: float
-    pitch: int
-    id: int
+    @property
+    def start(self) -> float: ...
+
+    @property
+    def end(self) -> float: ...
+
+    @property
+    def pitch(self) -> int: ...
+
+    @property
+    def id(self) -> int: ...
 
 
 @dataclass(frozen=True)

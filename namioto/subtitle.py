@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Qt-free ASS export from canonical KRC and encoded MIDI, shared by every entry point.
+"""Qt-free karaoke export from canonical KRC and encoded MIDI, shared by every entry point.
 
 KRC channel wrappers select zero-based MIDI channels. Their NOTE slots are read faithfully after MIDI
 serialization, so persistent and in-memory intermediate exports have identical timing.
@@ -8,13 +8,18 @@ serialization, so persistent and in-memory intermediate exports have identical t
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
+import os
+import tempfile
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from pathlib import Path
 
 from namioto import midi
 from namioto import settings as store
-from namioto.karaoke import AssSettings, generate_ass
+from namioto.karaoke import ExportSettings
+from namioto.karaoke.default_template import default_scene
+from namioto.karaoke.output import encode_ass
+from namioto.karaoke.song import Song, prepare_song
 from namioto.karaoke.sounds import natural_sounds
 from namioto.lyricmap import constraints, faithful
 from namioto.lyricmap.channels import split
@@ -25,7 +30,8 @@ from namioto.utils import resolved, write_bytes, write_text
 ASS_FIELDS = next(section.fields for section in store.SECTIONS if section.name == "ass")
 
 
-def validate_settings(settings: AssSettings) -> None:
+def validate_settings(settings: ExportSettings) -> None:
+    settings.vocal_roles()
     for field in ASS_FIELDS:
         value = getattr(settings, field.name)
         if field.name == "channel_colors":
@@ -38,10 +44,15 @@ def validate_settings(settings: AssSettings) -> None:
                 raise ValueError(f"{field.name} must be a whole number")
             if not field.low <= value <= field.high:
                 raise ValueError(f"{field.name} must be between {field.low:g} and {field.high:g}")
+        elif field.kind == "bool":
+            if type(value) is not bool:
+                raise ValueError(f"{field.name} must be boolean")
+        elif field.kind == "choice" and value not in field.choices:
+            raise ValueError(f"{field.name} must be one of {field.choices}")
         elif not isinstance(value, str):
             raise ValueError(f"{field.name} must be text")
         if field.name.endswith("_color"):
-            if not value and field.name in ("overlay_blur_color", "base_blur_color"):
+            if not value and field.name in ("overlay_blur_color", "base_blur_color", "cue_color", "ruby_color"):
                 continue
             colour = value.lstrip("#")
             if len(colour) != 6 or any(char not in "0123456789abcdefABCDEF" for char in colour):
@@ -52,16 +63,13 @@ def validate_settings(settings: AssSettings) -> None:
         raise ValueError("fade_in_ms must not exceed lead_time_ms")
 
 
-def build_ass(krc: str, data: bytes, *, settings: AssSettings | None = None, wavetone: bool = False) -> str:
-    settings = settings or AssSettings()
+def build_song(krc: str, data: bytes, *, settings: ExportSettings | None = None, wavetone: bool = False) -> Song:
+    settings = settings or ExportSettings()
     validate_settings(settings)
     lines = natural_sounds(krc)
     if not lines or not any(line.sounds for line in lines):
         raise ValueError("the lyrics have no sounds")
     imported = midi.read_bytes(data, wavetone=wavetone)
-    if settings.guide_dot_duration_ms == AssSettings().guide_dot_duration_ms:
-        duration = int(round(60 / imported.bpm * 4 * 1000))
-        settings = replace(settings, guide_dot_duration_ms=duration if duration < 1800 else duration // 2)
     if imported.dropped or imported.left_out:
         raise ValueError("the MIDI contains incomplete notes or unsupported channels")
     spans = [[None] * len(line.sounds) for line in lines]
@@ -89,12 +97,7 @@ def build_ass(krc: str, data: bytes, *, settings: AssSettings | None = None, wav
         for refs, row in zip(part.refs, rows, strict=True):
             for ref, span in zip(refs, row, strict=True):
                 spans[ref.line][ref.index] = span
-    return generate_ass(krc, spans, settings=settings)
-
-
-def ass_path(path: str | Path) -> Path:
-    target = Path(path)
-    return target if target.suffix.lower() == ".ass" else target.with_name(target.name + ".ass")
+    return prepare_song(krc, spans, settings, imported.bpm)
 
 
 def check_paths(outputs: Sequence[str | Path], inputs: Sequence[str | Path] = ()) -> None:
@@ -103,19 +106,67 @@ def check_paths(outputs: Sequence[str | Path], inputs: Sequence[str | Path] = ()
         raise ValueError("output paths must be distinct and must not overwrite input files")
 
 
-def save_export(
+def build_ass(krc: str, data: bytes, *, settings: ExportSettings | None = None, wavetone: bool = False) -> str:
+    song = build_song(krc, data, settings=settings, wavetone=wavetone)
+    return encode_ass(default_scene(song))
+
+
+def export_path(path: str | Path, format: str) -> Path:
+    if format not in ("ass", "hook"):
+        raise ValueError(f"unknown export format {format!r}")
+    target = Path(path)
+    if target.suffix.lower() in (".ass", ".hook") and target.suffix.lower() != "." + format:
+        raise ValueError(f"{target.name} conflicts with the selected format {format}")
+    return target if target.suffix.lower() == "." + format else target.with_name(target.name + "." + format)
+
+
+def export_song(
     path: str | Path,
     krc: str,
     data: bytes,
-    text: str,
     *,
+    settings: ExportSettings | None = None,
+    wavetone: bool = False,
+    template: str = "default",
+    parameters: Mapping | None = None,
+    scripts: Sequence[str | Path] = (),
+    format: str = "ass",
+    fps: int = 60,
     save_krc: str | Path | None = None,
     save_midi: str | Path | None = None,
 ) -> Path:
-    target = ass_path(path)
-    check_paths([target, *([save_krc] if save_krc else []), *([save_midi] if save_midi else [])])
-    if save_krc:
-        write_text(save_krc, krc)
-    if save_midi:
-        write_bytes(save_midi, data)
-    return write_text(target, text)
+    """Resolve the recipe once and replace the requested file only after compilation succeeds."""
+    from namioto.karaoke.templates import load_templates
+
+    target = export_path(path, format)
+    check_paths([target, *([save_krc] if save_krc else []), *([save_midi] if save_midi else [])], scripts)
+    recipe = load_templates(scripts).get(template)
+    if format not in recipe.formats:
+        raise ValueError(f"{template}: unsupported format {format}")
+    settings = settings or ExportSettings()
+    values = recipe.resolve(parameters or {}, settings)
+    if template == "default":
+        settings = replace(settings, **values)
+    song = build_song(krc, data, settings=settings, wavetone=wavetone)
+    try:
+        scene = recipe.build(song, values)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile(dir=target.parent, suffix=target.suffix, delete=False) as stream:
+            temp = Path(stream.name)
+        try:
+            if format == "hook":
+                scene.export_hook(temp, fps=fps)
+            else:
+                temp.write_text(encode_ass(scene), encoding="utf-8")
+            if save_krc:
+                write_text(save_krc, krc)
+            if save_midi:
+                write_bytes(save_midi, data)
+            os.replace(temp, target)
+        finally:
+            temp.unlink(missing_ok=True)
+    except ValueError, OSError:
+        raise
+    except Exception as error:
+        raise ValueError(f"{template}: {error}") from error
+    return target

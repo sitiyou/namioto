@@ -9,7 +9,7 @@ location and analysis options, then creates the project. MIDI files are imported
 open project, not opened as standalone projects.
 
 - **Save**: `Ctrl+S`; **Save As**: `Ctrl+Shift+S`.
-- **Export**: MIDI, KRC lyrics or ASS subtitles. Exporting does not replace saving the project.
+- **Export**: MIDI, KRC lyrics, ASS subtitles or libplacebo hooks. Exporting does not replace saving the project.
 - A `*` in the title means there are unsaved changes. Switching projects or closing asks
   before discarding them. An unnamed sketch closes without asking.
 

@@ -98,26 +98,37 @@ The default model is Meta's MMS; `yohane` is a karaoke fine-tune. `--dir` or
 `$NAMIOTO_ALIGN_MODEL` selects a converted model. See [development](development.md#model-conversion)
 for conversion tools.
 
-## Export ASS subtitles
+## Export karaoke
 
 ```bash
-uv run namioto-cli ass --krc song.krc --midi song.mid --out song.ass
-uv run namioto-cli ass --krc song.krc --midi song.mid --out song.ass --watch
-uv run namioto-cli ass --session --out song.ass --watch
-uv run namioto-cli ass --session --out song.ass --save-krc song.krc --save-midi song.mid
+uv run namioto-cli export --krc song.krc --midi song.mid --out song.ass
+uv run namioto-cli export --krc song.krc --midi song.mid --out song.ass --watch
+uv run namioto-cli export --session --out song.ass --watch
+uv run namioto-cli export --session --out song.ass --save-krc song.krc --save-midi song.mid
 ```
+
+The output suffix selects standard ASS or a standalone libplacebo hook. For example:
+
+```bash
+namioto-cli export --session --template default --set layout=single --out song.hook --fps 60
+mpv --vo=gpu-next --sub-auto=no --glsl-shader=song.hook video.mp4
+ffmpeg -init_hw_device vulkan=vk -i video.mp4 -vf 'fps=60,libplacebo=custom_shader_path=song.hook' -c:a copy karaoke.mp4
+```
+
+Use the hook on video with the same aspect ratio and time origin. FFmpeg's filter frame rate must match the export rate. Fonts are resolved at export. Ordinary ASS uses the playback machine's fonts.
+See [Python templates](karaoke-templates.md) for registration, parameters and script reloading.
 
 File mode uses the mapping already in KRC. Session mode uses the editor's current mapping
 and connects automatically to the first running editor with remote control enabled. Intermediate KRC/MIDI files are
 written only when requested. Session CLI outputs are written on the CLI machine.
 
 `--watch` builds immediately and rebuilds after changes settle. Invalid inputs leave the
-last successful ASS intact. A disconnected session exits instead of selecting another
+last successful output intact. A disconnected session exits instead of selecting another
 editor. Stop watching with `Ctrl+C`.
 
 Settings resolve per field in this order:
 
-1. Command-line option.
+1. Explicit template parameter (`--set key=value`), followed by the dedicated command-line option.
 2. `NAMIOTO_ASS_` environment variable, using the uppercase field name.
 3. Current GUI export setting, in session mode only.
 4. Built-in default.
@@ -147,7 +158,7 @@ uv run namioto-ctl notes
 uv run namioto-ctl document.add_notes notes='[{"pitch":60,"start":0.5,"duration":1.0}]'
 uv run namioto-ctl project.save path=song.nto
 uv run namioto-ctl audio.open path=song.mp3 analysis='{"channels":"both"}'
-uv run namioto-ctl project.export_ass path=song.ass
+uv run namioto-ctl project.export_lyrics path=song.ass
 uv run namioto-ctl methods
 uv run namioto-ctl --watch toggle
 ```
@@ -156,8 +167,8 @@ Parameters use `NAME=VALUE` with JSON types preserved. A short alias can take a 
 positional value. `seek` also accepts `beat=8` or `fraction=0.5`. Calls that would discard
 unsaved notes fail with `dirty` unless passed `force=true`.
 
-`project.export_ass` writes on the editor's machine and accepts `save_krc=PATH` and
-`save_midi=PATH`. Session ASS commands accept `--instance` and `--timeout` like ctl.
+`project.export_lyrics` writes on the editor's machine and accepts `save_krc=PATH` and
+`save_midi=PATH`. Session export commands accept `--instance` and `--timeout` like ctl.
 
 ### Local transport and discovery
 

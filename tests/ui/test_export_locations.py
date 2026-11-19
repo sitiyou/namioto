@@ -25,7 +25,7 @@ def test_failed_subtitle_export_reveals_the_affected_sound_on_the_roll(own_windo
     assert incomplete.refs == (SoundRef(1, 0),)
     assert own_window.lyric_editor.isHidden()
     target = tmp_path / "incomplete.ass"
-    assert not own_window.export_ass(target)
+    assert not own_window.export_lyrics(target)
     assert not target.exists()
     assert own_window.lyric_editor.isHidden()
     assert own_window.sound_strip._hover == (1, 0)
@@ -45,7 +45,7 @@ def test_subtitle_export_silently_truncates_the_final_sound_note_count(own_windo
 
     assert own_window._verification(subtitle=True).open()
     target = tmp_path / "truncated.ass"
-    assert own_window.export_ass(target)
+    assert own_window.export_lyrics(target)
     assert target.exists()
     assert own_window.lyrics_text == "あ\nい.2"
     assert own_window.lyric_editor.isHidden()

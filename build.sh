@@ -34,7 +34,7 @@ build_cli() {
     uv sync --extra cpu
     freeze namioto-cli namioto.cli \
         --collect-submodules namioto.analysis \
-        --hidden-import namioto.ass_cli \
+        --hidden-import namioto.export_cli \
         --collect-all janome
 }
 

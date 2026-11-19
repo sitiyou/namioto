@@ -65,12 +65,13 @@ from namioto.analysis.spectrum import NoteSpectrum
 from namioto.channels import Channel, free_channel
 from namioto.channels import audible as audible_channels
 from namioto.channels import set_field as channel_set_field
-from namioto.karaoke import AssSettings, KrcError
+from namioto.karaoke import ExportSettings, KrcError
 from namioto.karaoke.canonical import rebuild
 from namioto.karaoke.operations import SoundRef
 from namioto.karaoke.parser import parse
 from namioto.karaoke.sounds import natural_sounds
 from namioto.karaoke.sounds import set_channel as set_sound_channel
+from namioto.karaoke.templates import save_preferences
 from namioto.karaoke.writer import dumps
 from namioto.lyricmap import constraints, faithful, faithful_gate
 from namioto.lyricmap.channels import split as split_channels
@@ -82,11 +83,11 @@ from namioto.lyrics import text_key
 from namioto.playback import note_frequency
 from namioto.ui import theme
 from namioto.ui.align_dialog import AlignDialog
-from namioto.ui.ass_dialog import AssDialog
 from namioto.ui.audio import open_player
 from namioto.ui.bpm_dialog import BpmAnalysisDialog
 from namioto.ui.channel_panel import ChannelPanel
 from namioto.ui.controls import ControlArea, EditBar, MixBar, TransportBar
+from namioto.ui.export_dialog import ExportDialog
 from namioto.ui.ipc_commands import WindowBridge
 from namioto.ui.ipc_server import IpcServer
 from namioto.ui.loading import LoadingThread
@@ -385,7 +386,7 @@ class MainWindow(QMainWindow):
         self.transport.save_requested.connect(self._on_save)
         self.transport.export_midi_requested.connect(self._on_export_midi)
         self.transport.export_krc_requested.connect(self._on_export_krc)
-        self.transport.export_ass_requested.connect(self._on_export_ass)
+        self.transport.export_lyrics_requested.connect(self._on_export_lyrics)
         self.edit.transcribe_requested.connect(self._open_transcription)
         self.edit.lyrics_requested.connect(self._open_lyrics)
         self.edit.align_requested.connect(self._open_align)
@@ -1106,7 +1107,7 @@ class MainWindow(QMainWindow):
                     self.sound_strip.reveal_sound(ref.line, ref.index)
                     return
 
-    def _on_export_ass(self) -> bool:
+    def _on_export_lyrics(self) -> bool:
         """Write the lyrics out as a karaoke subtitle, timed by the mapping the strip shows."""
         if not self.lyrics_text or not self.view.lyric_lines:
             message = self._lyric_error if self.lyrics_text else i18n.tr("There are no lyrics to export")
@@ -1120,28 +1121,38 @@ class MainWindow(QMainWindow):
             self._locate_export_problem(gate)
             self.statusBar().showMessage(self._gate_message(gate))
             return False
-        dialog = AssDialog(self.settings, self, lyric_colors=self.view.lyric_colors)
+        dialog = ExportDialog(self.settings, self, lyric_colors=self.view.lyric_colors)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
         selected = dialog.values()
         name = Path(self.audio_path).stem if self.audio_path is not None else "untitled"
-        suggested = Path(self._start_directory()) / f"{name}.ass"
+        fmt = dialog.format.currentData()
+        suggested = Path(self._start_directory()) / f"{name}.{fmt}"
         chosen, _filter = QFileDialog.getSaveFileName(
             self,
-            i18n.tr("Export ASS subtitle"),
+            i18n.tr("Export karaoke"),
             str(suggested),
-            _ass_filter(),
+            _ass_filter() if fmt == "ass" else i18n.tr("libplacebo shader (*.hook)"),
         )
         if not chosen:
             return False
-        if not self.export_ass(chosen, settings=self._ass_settings(selected.ass)):
+        if not self.export_lyrics(
+            chosen,
+            settings=self._export_settings(selected.ass),
+            format=fmt,
+            template=dialog.active_id,
+            parameters=dialog.parameters(),
+            scripts=dialog.scripts,
+            fps=dialog.fps.value(),
+        ):
             return False
+        save_preferences(dialog.preferences())
         self.settings.ass = selected.ass
         self.settings_store.flush()
         self.subtitle_changed.emit()
         return True
 
-    def ass_source(self) -> tuple[str, bytes]:
+    def export_source(self) -> tuple[str, bytes]:
         """Export the current KRC first, then MIDI, as one GUI-thread snapshot."""
         gate = self._verification(subtitle=True)
         if not gate.open():
@@ -1151,25 +1162,37 @@ class MainWindow(QMainWindow):
         data = midi.to_bytes(**self._midi_export())
         return krc, data
 
-    def export_ass(
+    def export_lyrics(
         self,
         path: str | Path,
         *,
-        settings: AssSettings | None = None,
+        settings: ExportSettings | None = None,
+        format="ass",
+        template="default",
+        parameters=None,
+        scripts=(),
+        fps=60,
         save_krc: str | Path | None = None,
         save_midi: str | Path | None = None,
     ) -> bool:
         """Build the subtitle from the current KRC and MIDI exports, optionally saving both."""
-        target = subtitle.ass_path(path)
         try:
-            krc, data = self.ass_source()
-            text = subtitle.build_ass(
+            target = subtitle.export_path(path, format)
+            krc, data = self.export_source()
+            subtitle.export_song(
+                target,
                 krc,
                 data,
-                settings=self._with_lyric_colors(settings or self._ass_settings()),
+                settings=settings or self._export_settings(),
+                format=format,
+                template=template,
+                parameters=parameters,
+                scripts=scripts,
+                fps=fps,
+                save_krc=save_krc,
+                save_midi=save_midi,
                 wavetone=self.settings.midi.wavetone,
             )
-            subtitle.save_export(target, krc, data, text, save_krc=save_krc, save_midi=save_midi)
         except (KrcError, ValueError, EOFError) as error:
             self.statusBar().showMessage(i18n.tr("The subtitle could not be built: {error}", error=error))
             return False
@@ -1179,7 +1202,9 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(i18n.tr("Exported {name}", name=target.name))
         return True
 
-    def _with_lyric_colors(self, settings: AssSettings) -> AssSettings:
+    def _with_lyric_colors(self, settings: ExportSettings) -> ExportSettings:
+        if not settings.use_project_colors:
+            return settings
         colors = {number: color.lstrip("#") for number, color in enumerate(self.view.lyric_colors)}
         return replace(
             settings,
@@ -1187,9 +1212,9 @@ class MainWindow(QMainWindow):
             channel_colors=",".join(f"{number}={color}" for number, color in colors.items()),
         )
 
-    def _ass_settings(self, settings=None) -> AssSettings:
+    def _export_settings(self, settings=None) -> ExportSettings:
         """Subtitle effects with the project's authoritative lyric colours."""
-        return self._with_lyric_colors(AssSettings(**vars(settings or self.settings.ass)))
+        return self._with_lyric_colors(ExportSettings(**vars(settings or self.settings.ass)))
 
     def load_project(self, path: str | Path) -> bool:
         """Open a project: its values come over the running ones, and its notes replace the roll."""
@@ -1573,7 +1598,7 @@ class MainWindow(QMainWindow):
     def _set_lyric_mapping_pending(self, pending: bool) -> None:
         self.view.lyric_mapping_pending = pending
         self.transport.export_krc_action.setEnabled(not pending)
-        self.transport.export_ass_action.setEnabled(not pending)
+        self.transport.export_lyrics_action.setEnabled(not pending)
         self._lyric_map_status.setVisible(pending)
         self.subtitle_changed.emit()
 

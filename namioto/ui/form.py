@@ -176,7 +176,7 @@ def field_editor(value: Any, field: Field) -> tuple[QWidget, Callable[[], Any], 
         widget.setSingleStep(field.step or 0.1)
         widget.setSuffix(field.suffix)
         widget.setKeyboardTracking(False)
-    elif field.kind == "text":
+    elif field.kind in ("text", "color"):
         widget = QLineEdit()
     elif field.kind == "secret":
         widget = QLineEdit()

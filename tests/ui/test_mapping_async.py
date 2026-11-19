@@ -136,10 +136,10 @@ def test_pending_mapping_blocks_lyric_actions_and_exports_but_not_saving_or_midi
     own_window._remap_lyrics()
     assert own_window.view.lyric_mapping_pending
     assert not own_window.transport.export_krc_action.isEnabled()
-    assert not own_window.transport.export_ass_action.isEnabled()
+    assert not own_window.transport.export_lyrics_action.isEnabled()
     assert own_window.transport.export_midi_action.isEnabled()
     assert not own_window.export_krc(tmp_path / "pending.krc")
-    assert not own_window.export_ass(tmp_path / "pending.ass")
+    assert not own_window.export_lyrics(tmp_path / "pending.ass")
     assert not (tmp_path / "pending.krc").exists()
     assert not (tmp_path / "pending.ass").exists()
     assert own_window._verification().counts() == {"mapping_pending": 1}
@@ -150,7 +150,7 @@ def test_pending_mapping_blocks_lyric_actions_and_exports_but_not_saving_or_midi
     assert own_window.export_midi(tmp_path / "pending.mid")
     workers[0].complete()
     assert own_window.transport.export_krc_action.isEnabled()
-    assert own_window.transport.export_ass_action.isEnabled()
+    assert own_window.transport.export_lyrics_action.isEnabled()
     assert own_window.export_krc(tmp_path / "ready.krc")
     assert own_window.view.undo_stack.count() == before
 

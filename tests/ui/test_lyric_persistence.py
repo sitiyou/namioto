@@ -258,7 +258,7 @@ def test_faithful_ass_export_uses_krc_spans_without_edit_operations(own_window, 
     wait_for_lyric_mapping(own_window)
     assert own_window.view.lyric_operations[0].slots == 2
     assert own_window.view.lyric_times[0][0] == (0.0, 2.0)
-    assert own_window.export_ass(tmp_path / "lyrics.ass")
+    assert own_window.export_lyrics(tmp_path / "lyrics.ass")
     assert (tmp_path / "lyrics.ass").exists()
 
 

@@ -17,9 +17,9 @@ import pytest
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QApplication
 
-from namioto import ass_cli, ipc, midi, subtitle
+from namioto import export_cli, ipc, midi, subtitle
 from namioto import settings as store
-from namioto.karaoke import AssSettings
+from namioto.karaoke import ExportSettings
 from namioto.ui.app import MainWindow
 
 TIMEOUT = 5.0
@@ -447,31 +447,31 @@ def _ready_ass(app, window):
     assert window._verification(subtitle=True).open()
 
 
-def test_ass_source_and_ctl_share_the_gui_export_pipeline(qt_app, window, endpoint, tmp_path, monkeypatch):
+def test_export_source_and_ctl_share_the_gui_export_pipeline(qt_app, window, endpoint, tmp_path, monkeypatch):
     _ready_ass(qt_app, window)
     monkeypatch.setattr(window.settings.ass, "spacing", 3)
     monkeypatch.setenv("NAMIOTO_ASS_SPACING", "99")
-    source = call(qt_app, endpoint, "project.ass_source")
+    source = call(qt_app, endpoint, "project.export_source")
     assert source["krc"] == window._verification().canonical
     assert source["settings"]["spacing"] == 3
     data = base64.b64decode(source["midi"])
     assert len(midi.read_bytes(data, wavetone=source["wavetone"]).notes) == 2
     expected = subtitle.build_ass(
-        source["krc"], data, settings=AssSettings(**source["settings"]), wavetone=source["wavetone"]
+        source["krc"], data, settings=ExportSettings(**source["settings"]), wavetone=source["wavetone"]
     )
     assert not list(tmp_path.glob("*.krc"))
     assert not list(tmp_path.glob("*.mid"))
-    result = call(qt_app, endpoint, "project.export_ass", {"path": str(tmp_path / "ctl")})
+    result = call(qt_app, endpoint, "project.export_lyrics", {"path": str(tmp_path / "ctl")})
     assert result == {"path": str(tmp_path / "ctl.ass")}
     assert (tmp_path / "ctl.ass").read_text() == expected
-    assert window.export_ass(tmp_path / "gui.ass")
+    assert window.export_lyrics(tmp_path / "gui.ass")
     assert (tmp_path / "gui.ass").read_text() == expected
     assert not list(tmp_path.glob("*.krc"))
     assert not list(tmp_path.glob("*.mid"))
     call(
         qt_app,
         endpoint,
-        "project.export_ass",
+        "project.export_lyrics",
         {
             "path": str(tmp_path / "saved.ass"),
             "save_krc": str(tmp_path / "saved.krc"),
@@ -489,7 +489,7 @@ def test_session_cli_matches_file_cli_with_saved_exports(qt_app, window, endpoin
     assert (
         _run(
             qt_app,
-            lambda: ass_cli.main(
+            lambda: export_cli.main(
                 [
                     "--session",
                     "--instance",
@@ -509,7 +509,7 @@ def test_session_cli_matches_file_cli_with_saved_exports(qt_app, window, endpoin
     )
     compatibility = "--wavetone" if window.settings.midi.wavetone else "--no-wavetone"
     assert (
-        ass_cli.main(
+        export_cli.main(
             [
                 "--krc",
                 str(saved_krc),
@@ -518,9 +518,9 @@ def test_session_cli_matches_file_cli_with_saved_exports(qt_app, window, endpoin
                 "--out",
                 str(file_ass),
                 "--overlay-color",
-                window._ass_settings().overlay_color,
+                window._export_settings().overlay_color,
                 "--channel-colors",
-                window._ass_settings().channel_colors,
+                window._export_settings().channel_colors,
                 "--spacing",
                 "8",
                 compatibility,
@@ -552,7 +552,7 @@ def test_session_watch_rebuilds_after_an_edit_and_exits_on_disconnect(qt_app, wi
     QTimer.singleShot(10, observe)
     result = _run(
         qt_app,
-        lambda: ass_cli.main(
+        lambda: export_cli.main(
             [
                 "--session",
                 "--instance",
@@ -603,7 +603,7 @@ def test_ass_revision_tracks_mapping_readiness_but_not_playback(qt_app, window, 
     call(qt_app, endpoint, "transport.seek", {"seconds": 1})
     assert call(qt_app, endpoint, "state.get")["subtitle"]["revision"] == state["revision"]
     window.view.lyric_mapping_pending = True
-    assert failure(qt_app, endpoint, "project.ass_source").code == "failed"
-    assert failure(qt_app, endpoint, "project.export_ass", {"path": "unused.ass"}).code == "failed"
+    assert failure(qt_app, endpoint, "project.export_source").code == "failed"
+    assert failure(qt_app, endpoint, "project.export_lyrics", {"path": "unused.ass"}).code == "failed"
     window._set_lyric_mapping_pending(False)
     assert call(qt_app, endpoint, "state.get")["subtitle"]["revision"] > state["revision"]
