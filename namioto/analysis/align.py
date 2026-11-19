@@ -100,6 +100,7 @@ ONSET_OFFSETS = {
 }
 MIDI_ONSET_PRIOR_WEIGHT = 0.8
 MIDI_ONSET_PRIOR_SIGMA = 0.15
+MIDI_ONSET_PRIOR_REVISION = 2
 # the ways the model's pass can be cut up: one pass over the whole song, fixed-length chunks, or
 # chunks whose seams are pulled into the silences
 SLICE_MODES = ("off", "fixed", "silence")
@@ -286,6 +287,8 @@ def alignment_key(
         "chunk": chunk,
         "onset_priors": onset_priors,
     }
+    if onset_priors:
+        identity["onset_prior_revision"] = MIDI_ONSET_PRIOR_REVISION
     return hashlib.sha1(json.dumps(identity, sort_keys=True).encode("utf-8")).hexdigest()
 
 
@@ -631,9 +634,11 @@ def forced_align(
 
     The graph alternates the blank with each target token; a token may follow itself only across a
     blank. The path is forced to end on the last token (or the blank after it), so every target is
-    visited. An optional Gaussian prior changes only target-entry transitions, not acoustic
-    emissions or returned frame scores. None means the window has fewer frames than the targets
-    and their repeats need.
+    visited. An optional Gaussian-shaped bonus on target entry favours onsets near the MIDI
+    hints. Its maximum is `prior_weight` log-score units per target, so an earlier, incorrect
+    mapping cannot increasingly penalise the acoustic onset as the distance grows. Acoustic
+    emissions and returned frame scores are unchanged. None means the window has fewer frames
+    than the targets and their repeats need.
     """
     frames, count = emission.shape[0], len(tokens)
     if onset_priors is not None and len(onset_priors) != count:
@@ -658,17 +663,18 @@ def forced_align(
     back = np.zeros((frames, states), dtype=np.int8)
     alpha[0, 0] = emission[0, blank_id]
     alpha[0, 1] = emission[0, labels[1]]
-    prior = np.zeros((frames, count), dtype=np.float64)
+    prior = None
     if onset_priors is not None and prior_weight:
+        prior = np.zeros((frames, count), dtype=np.float64)
         frame_times = np.arange(frames, dtype=np.float64) * FRAME_SECONDS
         for target, center in enumerate(onset_priors):
             if center is None:
                 continue
             if not math.isfinite(center):
                 raise ValueError("onset priors must be finite or None")
-            prior[:, target] = -0.5 * prior_weight * ((frame_times - center) / prior_sigma) ** 2
-        if count:
-            alpha[0, 1] += prior[0, 0]
+            distance = (frame_times - center) / prior_sigma
+            prior[:, target] = prior_weight * np.exp(-0.5 * distance**2)
+        alpha[0, 1] += prior[0, 0]
     positions = np.arange(states)
     for t in range(1, frames):
         previous = alpha[t - 1]
@@ -676,7 +682,7 @@ def forced_align(
         step = np.concatenate(([-np.inf], previous[:-1]))
         over = np.full(states, -np.inf)
         over[skip] = previous[positions[skip] - 2]
-        if onset_priors is not None and prior_weight:
+        if prior is not None:
             entry_bias = np.zeros(states, dtype=np.float64)
             entry_bias[1::2] = prior[t]
             step += entry_bias

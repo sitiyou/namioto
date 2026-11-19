@@ -244,6 +244,19 @@ def test_a_soft_onset_prior_resolves_an_acoustically_ambiguous_ctc_path():
     assert np.flatnonzero(path == 1)[0] == 2
 
 
+def test_a_misplaced_midi_prior_does_not_override_a_clear_acoustic_onset():
+    logits = np.zeros((80, 2), dtype=np.float32)
+    logits[:, 0] = 3
+    logits[2, 1] = 1
+    logits[70, 1] = 8
+    emission = align.log_softmax(logits)
+
+    path, scores = align.forced_align(emission, [1], onset_priors=[2 * align.FRAME_SECONDS])
+
+    assert np.flatnonzero(path == 1).tolist() == [70]
+    assert scores[70] == emission[70, 1]
+
+
 def test_forced_align_gives_up_when_the_window_cannot_hold_the_targets():
     emission = align.log_softmax(np.zeros((2, 3), dtype=np.float32))
     assert align.forced_align(emission, [1, 1, 1]) is None
