@@ -335,7 +335,6 @@ CATALOGS: dict[str, dict[str, str]] = {
         "The saved lyric mapping could not be recovered: {error}": "无法恢复已保存的歌词映射：{error}",
         "The lyrics editor could not be started": "无法启动歌词编辑器",
         "Aligned {lines} lines": "已对齐 {lines} 行",
-        "saved alignment reused": "已复用保存的对齐结果",
         "Alignment failed": "对齐失败",
         "Load the audio before aligning the lyrics": "请先载入音频再对齐歌词",
         "Save the project before aligning the lyrics": "请先保存工程，再对齐歌词",

@@ -71,86 +71,6 @@ def test_the_alignment_parameters_are_remembered_and_checked():
         assert align.load_parameters() == align.default_parameters()
 
 
-def test_the_alignment_cache_holds_the_raw_lines_and_reuses_them_by_their_inputs():
-    rows = [[(0.0, 0.5), (0.5, 1.0), (None, None)]]
-    problems = ["あい: empty"]
-    flagged = [True]
-    scores = [[0.8, 0.6, None]]
-    onset_bounds = [[(0.01, 0.03), (0.5, 0.52), None]]
-    align.save_alignment(
-        "/tmp/song.wav", "mms", "cpu", "あい\n", rows, problems, flagged, scores=scores, onset_bounds=onset_bounds
-    )
-
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n") == (
-        rows,
-        problems,
-        flagged,
-        scores,
-        onset_bounds,
-    )
-    assert align.find_alignment("/tmp/song.wav", "yohane", "cpu", "あい\n") is None
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "うえ\n") is None
-
-
-def test_the_alignment_cache_tells_the_cutting_modes_apart():
-    rows = [[(0.0, 0.5)]]
-    align.save_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", rows, [], [], chunk="off")
-
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk="off") == (rows, [], [], [], [])
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n", chunk="silence") is None
-
-
-def test_the_alignment_cache_distinguishes_midi_onset_priors():
-    rows = [[(0.0, 0.5)]]
-    priors = [[0.25]]
-    align.save_alignment("/tmp/song.wav", "mms", "cpu", "あ\n", rows, [], [], onset_priors=priors)
-
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あ\n", onset_priors=priors) == (
-        rows,
-        [],
-        [],
-        [],
-        [],
-    )
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あ\n", onset_priors=[[0.5]]) is None
-
-
-def test_midi_onset_priors_are_assigned_once_per_shared_note():
-    mapped = (((11,), (11,), (12, 13), ()), ((13,), (14,)))
-
-    assert align.midi_onset_priors(mapped, {11: 0.25, 12: 0.5, 13: 0.75, 14: 1.0}) == [
-        [0.25, None, 0.5, None],
-        [None, 1.0],
-    ]
-
-
-def test_non_monotonic_midi_mapping_disables_all_onset_priors():
-    mapped = (((11,), (12,)),)
-
-    assert align.midi_onset_priors(mapped, {11: 1.0, 12: 0.5}) == [[None, None]]
-
-
-def test_an_old_alignment_cache_is_a_miss():
-    target = align._store_path("/tmp/song.wav")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(
-        json.dumps({"version": align.ALIGNMENT_STORE_VERSION - 1, "alignments": {"old": {}}}),
-        encoding="utf-8",
-    )
-
-    assert align.load_alignments("/tmp/song.wav") == {}
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n") is None
-
-
-def test_a_broken_alignment_cache_is_no_alignment():
-    target = align._store_path("/tmp/song.wav")
-    target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text("{not json", encoding="utf-8")
-
-    assert align.load_alignments("/tmp/song.wav") == {}
-    assert align.find_alignment("/tmp/song.wav", "mms", "cpu", "あい\n") is None
-
-
 def test_a_window_under_a_chunk_is_one_pass():
     backend = WindowBackend()
     chunked = align.ChunkedBackend(backend, chunk_seconds=1.0, overlap_seconds=0.2)
@@ -225,36 +145,6 @@ def test_forced_align_visits_every_target_in_order():
     emission = align.log_softmax(np.asarray(LOGITS, dtype=np.float32))
     path, _scores = align.forced_align(emission, [1, 2])
     assert list(path) == [1, 1, 0, 2, 2, 0]
-
-
-def test_a_zero_weight_onset_prior_keeps_the_original_viterbi_path():
-    emission = align.log_softmax(np.asarray(LOGITS, dtype=np.float32))
-
-    expected, _scores = align.forced_align(emission, [1, 2])
-    actual, _scores = align.forced_align(emission, [1, 2], onset_priors=[0.4, 0.1], prior_weight=0.0)
-
-    np.testing.assert_array_equal(actual, expected)
-
-
-def test_a_soft_onset_prior_resolves_an_acoustically_ambiguous_ctc_path():
-    emission = align.log_softmax(np.zeros((5, 3), dtype=np.float32))
-
-    path, _scores = align.forced_align(emission, [1, 2], onset_priors=[0.04, None], prior_sigma=0.02)
-
-    assert np.flatnonzero(path == 1)[0] == 2
-
-
-def test_a_misplaced_midi_prior_does_not_override_a_clear_acoustic_onset():
-    logits = np.zeros((80, 2), dtype=np.float32)
-    logits[:, 0] = 3
-    logits[2, 1] = 1
-    logits[70, 1] = 8
-    emission = align.log_softmax(logits)
-
-    path, scores = align.forced_align(emission, [1], onset_priors=[2 * align.FRAME_SECONDS])
-
-    assert np.flatnonzero(path == 1).tolist() == [70]
-    assert scores[70] == emission[70, 1]
 
 
 def test_forced_align_gives_up_when_the_window_cannot_hold_the_targets():
@@ -525,16 +415,17 @@ def test_resolve_model_downloads_what_is_not_installed(tmp_path, monkeypatch):
 
 
 def test_the_model_pass_is_cached_apart_from_the_lyrics():
+    audio = np.zeros(16000, dtype=np.float32)
+    key = align.emissions_key(audio, "mms", "cpu")
     emission = np.zeros((6, 3), dtype=np.float32)
-    align.save_emissions("/tmp/song.wav", "mms", "cpu", "silence", emission)
+    align.save_emissions(key, emission)
 
-    assert align.has_emissions("/tmp/song.wav", "mms", "cpu", "silence")
-    assert not align.has_emissions("/tmp/song.wav", "yohane", "cpu", "silence")
-    assert not align.has_emissions("/tmp/song.wav", "mms", "cuda", "silence")
-    assert not align.has_emissions("/tmp/song.wav", "mms", "cpu", "off")
-    found = align.load_emissions("/tmp/song.wav", "mms", "cpu", "silence")
-    assert found is not None and found.shape == (6, 3)
-    assert align.load_emissions("/tmp/song.wav", "mms", "cpu", "off") is None
+    np.testing.assert_array_equal(align.load_emissions(align.emissions_key(audio.copy(), "mms", "cpu")), emission)
+    assert align.load_emissions(align.emissions_key(audio, "yohane", "cpu")) is None
+    assert align.load_emissions(align.emissions_key(audio, "mms", "cuda")) is None
+    assert align.load_emissions(align.emissions_key(audio, "mms", "cpu", "off")) is None
+    audio[-1] = 0.5
+    assert align.load_emissions(align.emissions_key(audio, "mms", "cpu")) is None
 
 
 def test_align_whole_matches_a_live_pass_over_the_same_audio():

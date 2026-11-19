@@ -17,27 +17,55 @@ from namioto.ui.align_dialog import AlignDialog, Aligner
 from .helpers import parameter_writer, wait_for_lyric_mapping
 
 
-def test_aligner_applies_onset_priors_to_string_tokens(monkeypatch) -> None:
+def test_aligner_uses_the_same_readings_with_or_without_old_note_groups(monkeypatch) -> None:
     import numpy as np
 
-    observed = {}
+    observed = []
     monkeypatch.setattr(align, "load_audio", lambda _path: np.zeros(16000, dtype=np.float32))
     monkeypatch.setattr(align, "load_emissions", lambda *_args: object())
     monkeypatch.setattr(align, "resolve_model", lambda *_args, **_kwargs: Path("/tmp"))
     monkeypatch.setattr(align, "load_dictionary", lambda _path: ({}, 0))
 
-    def align_whole(_segment, _emission, _dictionary, *, blank_id, onset_priors):
-        observed["priors"] = onset_priors
-        return SimpleNamespace(tokens=[align.Token("a", 0.1, 0.2, 0.9)])
+    def align_whole(segment, _emission, _dictionary, *, blank_id):
+        observed.append(segment.tokens)
+        return SimpleNamespace(tokens=[align.Token(token, 0.1, 0.2, 0.9) for token in segment.tokens])
 
     monkeypatch.setattr(align, "align_whole", align_whole)
-    monkeypatch.setattr(align, "correct_times", lambda rows, _audio: rows)
-    monkeypatch.setattr(align, "calibrate_times", lambda rows, _tokens, _model: rows)
-    monkeypatch.setattr(align, "save_alignment", lambda *_args, **_kwargs: None)
+    for text in ("hello\n", "(hel).1(lo).0\n"):
+        Aligner("vocal.wav", text).load()
 
-    Aligner("vocal.wav", "あ\n", onset_priors=[[0.15]]).load()
+    assert observed == [("hello",), ("hello",)]
 
-    assert observed["priors"] == [pytest.approx(0.15 - align.onset_offset(align.DEFAULT_MODEL, "a"))]
+
+def test_rebuild_uses_the_same_midi_mapping_for_different_old_krc_counts(own_window, tmp_path, monkeypatch) -> None:
+    own_window.project_path = tmp_path / "song.nto"
+    own_window.audio_path = str(tmp_path / "vocal.wav")
+    own_window.transport.bpm.setValue(60)
+    own_window.view.set_notes([(60, 0, 1), (62, 1, 1)])
+    results = []
+    adopt = own_window._adopt_alignment
+    accepted = []
+
+    def adopt_result(*args, **kwargs):
+        accepted.append(True)
+        adopt(*args, **kwargs)
+
+    def rebuild_twice(dialog):
+        assert dialog.text == "hello\n"
+        for _ in range(2):
+            dialog._done(([[(0.0, 2.0)]], "mms", [], []))
+            wait_for_lyric_mapping(own_window)
+            results.append((own_window.lyrics_text, own_window.view.lyric_raw, own_window.view.lyric_mapped))
+
+    monkeypatch.setattr(own_window, "_adopt_alignment", adopt_result)
+    monkeypatch.setattr(AlignDialog, "exec", rebuild_twice)
+    for text in ("hello\n", "(hel).1(lo).0\n"):
+        assert own_window._on_lyrics_saved(text)
+        wait_for_lyric_mapping(own_window)
+        own_window._open_align()
+
+    assert len(accepted) == len(results) == 4
+    assert all(row == ("(hello).2\n", (((0.0, 2.0),),), (((1, 2),),)) for row in results)
 
 
 @pytest.mark.parametrize("text", ["あい\n", "# header\n\nあい  # inline\n# footer\n"])
@@ -134,36 +162,6 @@ def test_the_align_dialog_quantizes_onto_the_offset_grid(own_window) -> None:
     dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append(times))
     dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
     assert got == [[[(0.25, 0.5), (0.75, pytest.approx(0.5))]]]
-
-
-def test_a_cached_alignment_is_reused_and_resnapped(own_window, monkeypatch) -> None:
-    align.save_alignment("/tmp/vocal.wav", "mms", "cpu", "あん\n", [[(0.1, 0.6), (0.6, 1.1)]], [], [])
-    monkeypatch.setattr(align, "align", lambda *args, **kwargs: pytest.fail("must not run the model"))
-    dialog = AlignDialog("/tmp/vocal.wav", "あん\n", 120.0, parent=own_window, offset=0.25)
-    parameter_writer(dialog, "quantize")(1)  # 1/4 notes, one beat
-    got: list = []
-    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append(times))
-
-    dialog._start()
-
-    assert dialog._thread is None  # the model never ran
-    assert got == [[[(0.25, 0.5), (0.75, pytest.approx(0.5))]]]
-    assert "saved alignment reused" in dialog.log.toPlainText()
-
-
-def test_a_cached_whole_song_alignment_is_reused_when_chunking_is_off(own_window, monkeypatch) -> None:
-    align.save_alignment("/tmp/vocal.wav", "mms", "cpu", "あん\n", [[(0.1, 0.6), (0.6, 1.1)]], [], [], chunk="off")
-    monkeypatch.setattr(align, "align", lambda *args, **kwargs: pytest.fail("must not run the model"))
-    dialog = AlignDialog("/tmp/vocal.wav", "あん\n", 120.0, parent=own_window)
-    parameter_writer(dialog, "chunk")("off")
-    got: list = []
-    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append(times))
-
-    dialog._start()
-
-    assert dialog._thread is None
-    assert got == [[[(0.1, 0.5), (0.6, pytest.approx(0.5))]]]
-    assert "saved alignment reused" in dialog.log.toPlainText()
 
 
 def test_the_align_dialog_remembers_what_was_chosen(own_window) -> None:

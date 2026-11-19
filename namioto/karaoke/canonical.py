@@ -21,6 +21,39 @@ from namioto.karaoke.sounds import SoundLine, _base_words, natural_sounds
 from namioto.karaoke.writer import dumps
 
 
+def without_note_mapping(text: str, *, channel: int | None = None) -> str:
+    """Remove old NOTE counts and groups before reading the Sounds for a fresh alignment."""
+    if not text.strip():
+        return text
+    lyrics = parse(text)
+    for chapter in lyrics.chapters:
+        for line in chapter.lines:
+            line.units = _unmapped_units(line.units, channel)
+    return dumps(lyrics, dotted=True)
+
+
+def _unmapped_units(units: list[Unit], channel: int | None) -> list[Unit]:
+    result = []
+    for unit in units:
+        if unit.ruby is None:
+            words = _base_words(unit)
+            if channel is None or all(word.channel == channel for word in words):
+                result.extend(Unit(word) for word in words)
+            else:
+                result.append(unit)
+            continue
+        for part in unit.ruby.parts:
+            part[:] = _unmapped_units(part, channel)
+        reading = [word for part in unit.ruby.parts for inner in part for word in _base_words(inner)]
+        if channel is None or all(word.channel == channel for word in reading):
+            unit.override = None
+            unit.join_previous = False
+            if isinstance(unit.base, Group):
+                unit.base.explicit = False
+        result.append(unit)
+    return result
+
+
 def rebuild(
     text: str,
     operations: Sequence[Operation | NoteRun],
