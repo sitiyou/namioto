@@ -1788,14 +1788,7 @@ class MainWindow(QMainWindow):
         if part is None:
             self.statusBar().showMessage(i18n.tr("The selected channel has no lyric sounds"))
             return
-        dialog = AlignDialog(
-            self.audio_path,
-            text,
-            self.view.bpm,
-            self,
-            offset=self.view.offset,
-            channel=channel,
-        )
+        dialog = AlignDialog(self.audio_path, text, self, channel=channel)
         generation = self._audio_generation
 
         def adopt(raw, model, flagged, scores, onset_bounds):

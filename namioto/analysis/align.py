@@ -103,10 +103,6 @@ ONSET_OFFSETS = {
 SLICE_MODES = ("off", "fixed", "silence")
 SLICE_LABELS = ("Off", "Fixed chunks", "Silence-aware chunks")
 DEFAULT_MODE = "silence"
-# the cells per quarter note the window offers to snap with; a label is the note that cell is
-QUANTIZE_CELLS = (0, 1, 2, 4, 8, 16, 32)
-QUANTIZE_LABELS = ("Off", "1/4", "1/8", "1/16", "1/32", "1/64", "1/128")
-
 # What the alignment window remembers between runs: the last choices, in a file of their own beside
 # settings.json. Nothing else is kept - the times live in the project, the runs in the data side.
 PARAMETER_FILE = "align.json"
@@ -120,15 +116,6 @@ PARAMETERS: tuple[Field, ...] = (
         "Run on the CPU, or on the GPU backend the settings name; the settings window says which",
         choices=devices.RUN_CHOICES,
         labels=devices.RUN_LABELS,
-    ),
-    Field(
-        "quantize",
-        "choice",
-        0,
-        "Quantize",
-        "Snap the times to the beat grid, this many cells per quarter note",
-        choices=QUANTIZE_CELLS,
-        labels=QUANTIZE_LABELS,
     ),
     Field(
         "chunk",

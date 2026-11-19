@@ -310,11 +310,11 @@ def test_channel_alignment_preserves_an_unmapped_other_channel(own_window, tmp_p
 
 
 def test_align_dialog_exposes_rebuild_mapping_without_constraints(own_window, monkeypatch):
-    dialog = AlignDialog("vocal.wav", "あい", 120.0, own_window)
+    dialog = AlignDialog("vocal.wav", "あい", own_window)
     calls = []
     monkeypatch.setattr(dialog, "_start", lambda: calls.append(dialog.parameters()))
     dialog.rebuild.click()
-    assert calls == [{"model": "mms", "device": "cpu", "quantize": 0, "chunk": "silence"}]
+    assert calls == [{"model": "mms", "device": "cpu", "chunk": "silence"}]
     assert not hasattr(dialog, "run")
     assert all(field.name != "use_constraints" for field, _read, _write in dialog._fields)
 

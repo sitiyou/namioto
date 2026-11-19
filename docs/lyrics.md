@@ -73,16 +73,15 @@ the clock button opens **Align** for the selected channel.
 
 - **Auto-map** uses alignment while respecting explicit KRC counts and shared-sound groups.
 - **Align** replaces the current mapping with the structure computed from the vocal.
-- **Quantize** optionally snaps the result onto the BPM grid.
 
 Successful mapping updates KRC in one undo step without automatically saving the project.
 Other channels retain their mapping and alignment evidence. Low-confidence results are marked
 for review; the raw timing overlay lets you inspect evidence without changing it.
 
-Model, device and quantize choices are remembered. Each Align run reads the current lyrics with
+Model, device and chunking choices are remembered. Each Align run reads the current lyrics with
 their NOTE counts and mapping groups removed, finds the sounds in the audio, and assigns them
-to the current MIDI notes. Only the model's pass over the audio is cached. Evidence is saved in
-the `.nto` alongside notes and lyrics.
+to the current MIDI notes using the measured times. Only the model's pass over the audio is
+cached. Evidence is saved in the `.nto` alongside notes and lyrics.
 
 ![Alignment setup for the selected channel](alignment.png)
 

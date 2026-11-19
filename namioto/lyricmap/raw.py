@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: AGPL-3.0-only
 """The evidence for each Sound: an editable onset, a reference duration and an optional score.
 
-The aligner's duration is captured before quantization and never changes when an onset moves.
+The aligner's duration is captured from its span and never changes when an onset moves.
 Only a line's last Sound supplies an end reference, computed as onset plus duration; it is a soft
 mapping comparison, never an editing boundary. Qt-free.
 """
@@ -32,28 +32,10 @@ class Raw(NamedTuple):
 def from_spans(
     times: Sequence[Sequence[tuple[float | None, float | None]]],
 ) -> list[list[tuple[float | None, float | None]]]:
-    """Capture onset and duration from the alignment's spans before quantization."""
+    """Capture onset and duration from the alignment's spans."""
     return [
         [(start, end - start if start is not None and end is not None else None) for start, end in row] for row in times
     ]
-
-
-def snap_to_beats(
-    raw: Sequence[Sequence[tuple[float | None, float | None]]], bpm: float, division: float = 1.0, offset: float = 0.0
-) -> list[list[tuple[float | None, float | None]]]:
-    """Quantize onsets onto the drawn grid, preserving every reference duration.
-
-    A line with missing evidence is left alone. Coincident onsets are allowed; quantization never
-    pushes another Sound away to make room.
-    """
-    step = 60.0 / max(bpm, 1.0) * division
-    rows = []
-    for row in raw:
-        if any(onset is None or length is None for onset, length in row):
-            rows.append([tuple(sound) for sound in row])
-            continue
-        rows.append([(max(0.0, offset + round((onset - offset) / step) * step), length) for onset, length in row])
-    return rows
 
 
 def validate(lines: Sequence[SoundLine], raw: Sequence[Sequence[Raw]]) -> None:

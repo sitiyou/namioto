@@ -98,7 +98,7 @@ def test_the_aligned_times_are_kept_in_the_project(own_window, tmp_path, text) -
 
 
 def test_the_align_dialog_hands_the_times_over(own_window) -> None:
-    dialog = AlignDialog("vocal.wav", "あい\n", 120.0, parent=own_window)
+    dialog = AlignDialog("vocal.wav", "あい\n", parent=own_window)
     got: list = []
     dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append((times, model, scores)))
     dialog._done(([[(0.0, 1.0), (1.0, 2.0)]], "mms", [], [], [[0.8, 0.6]]))
@@ -109,7 +109,7 @@ def test_the_align_dialog_hands_the_times_over(own_window) -> None:
 def test_a_missing_runtime_stops_the_alignment(own_window, monkeypatch) -> None:
     monkeypatch.setattr(devices, "validate", lambda: devices.MISSING_RUNTIME)
     monkeypatch.setattr(Aligner, "start", lambda self: pytest.fail("must not run"))
-    dialog = AlignDialog("vocal.wav", "あい\n", 120.0, parent=own_window)
+    dialog = AlignDialog("vocal.wav", "あい\n", parent=own_window)
 
     dialog._start()
 
@@ -117,91 +117,51 @@ def test_a_missing_runtime_stops_the_alignment(own_window, monkeypatch) -> None:
     assert dialog.rebuild.isEnabled()
 
 
-def test_the_align_dialog_snaps_to_the_beat_grid_when_asked(own_window) -> None:
-    dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
-    parameter_writer(dialog, "quantize")(1)  # 1/4 notes, one beat
-    got: list = []
-    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append(times))
-    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
-    assert got == [[[(0.0, 0.5), (0.5, pytest.approx(0.5))]]]
-
-
-def test_quantization_shifts_the_posterior_onset_bounds_with_the_onsets(own_window) -> None:
-    dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
-    parameter_writer(dialog, "quantize")(1)
-    got: list = []
-    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append((times, bounds)))
-    dialog._done(
-        (
-            [[(0.1, 0.6), (0.6, 1.1)]],
-            "mms",
-            [],
-            [],
-            [[0.8, 0.6]],
-            [[(0.08, 0.12), (0.58, 0.62)]],
-        )
-    )
-    times, bounds = got[0]
-    assert times == [[(0.0, 0.5), (0.5, pytest.approx(0.5))]]
-    assert bounds == [[(-0.02, 0.02), (0.48, 0.52)]]
-
-
-def test_the_align_dialog_can_quantize_to_eighth_notes(own_window) -> None:
-    dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
-    parameter_writer(dialog, "quantize")(2)  # 1/8 notes, half a beat
-    got: list = []
-    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append(times))
-    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
-    assert got == [[[(0.0, 0.5), (0.5, pytest.approx(0.5))]]]
-
-
-def test_the_align_dialog_quantizes_onto_the_offset_grid(own_window) -> None:
-    dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window, offset=0.25)
-    parameter_writer(dialog, "quantize")(1)  # 1/4 notes, one beat
-    got: list = []
-    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append(times))
-    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
-    assert got == [[[(0.25, 0.5), (0.75, pytest.approx(0.5))]]]
-
-
 def test_the_align_dialog_remembers_what_was_chosen(own_window) -> None:
-    dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
+    dialog = AlignDialog("vocal.wav", "あん\n", parent=own_window)
     parameter_writer(dialog, "model")("yohane")
-    parameter_writer(dialog, "quantize")(4)
     parameter_writer(dialog, "chunk")("off")
     dialog.reject()
 
-    again = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
+    again = AlignDialog("vocal.wav", "あん\n", parent=own_window)
     assert again.parameters() == {
         "model": "yohane",
         "device": "cpu",
-        "quantize": 4,
         "chunk": "off",
     }
 
 
 def test_the_align_dialog_runs_chunked_unless_told_otherwise(own_window) -> None:
-    dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
+    dialog = AlignDialog("vocal.wav", "あん\n", parent=own_window)
     assert dialog.parameters()["chunk"] == align.DEFAULT_MODE
 
 
-def test_the_align_dialog_leaves_the_times_alone_by_default(own_window) -> None:
-    dialog = AlignDialog("vocal.wav", "あん\n", 120.0, parent=own_window)
+def test_the_align_dialog_preserves_the_onsets_and_bounds_with_old_quantize_settings(own_window) -> None:
+    config = align.parameter_path()
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text('{"quantize": 4}', encoding="utf-8")
+    dialog = AlignDialog("vocal.wav", "あん\n", parent=own_window)
     got: list = []
-    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append(times))
-    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], []))
-    assert got == [[[(0.1, 0.5), (0.6, pytest.approx(0.5))]]]
+    dialog.aligned.connect(lambda times, model, flagged, scores, bounds: got.append((times, bounds)))
+    bounds = [[(0.08, 0.12), (0.58, 0.62)]]
+
+    dialog._done(([[(0.1, 0.6), (0.6, 1.1)]], "mms", [], [], [[0.8, 0.6]], bounds))
+
+    assert "quantize" not in dialog.parameters()
+    assert got == [([[(0.1, 0.5), (0.6, pytest.approx(0.5))]], bounds)]
+    dialog.reject()
+    assert "quantize" not in config.read_text(encoding="utf-8")
 
 
 def test_the_align_dialog_shows_a_failure(own_window) -> None:
-    dialog = AlignDialog("vocal.wav", "あい\n", 120.0, parent=own_window)
+    dialog = AlignDialog("vocal.wav", "あい\n", parent=own_window)
     dialog._fail("FileNotFoundError: no mms aligner")
     assert "FileNotFoundError" in dialog.log.toPlainText()
     assert dialog.rebuild.isEnabled()
 
 
 def test_the_align_dialog_ignores_legacy_diagnostics(own_window) -> None:
-    dialog = AlignDialog("vocal.wav", "あい\n", 120.0, parent=own_window)
+    dialog = AlignDialog("vocal.wav", "あい\n", parent=own_window)
     dialog.log.setPlainText("Aligning over 204.0s of audio…")
     dialog._done(([[(0.0, 1.0), (1.0, 2.0)]], "mms", ["あい: empty"], [True]))
     assert "Aligning over 204.0s of audio…" in dialog.log.toPlainText()
@@ -226,10 +186,9 @@ def test_the_align_button_opens_the_dialog(own_window, monkeypatch, tmp_path) ->
 
     opened: list = []
     monkeypatch.setattr(AlignDialog, "exec", lambda self: opened.append(self) or 0)
-    own_window.transport.grid_offset.setValue(125)
     own_window._open_align()
     assert len(opened) == 1
-    assert opened[0].offset == 0.125  # the dialog quantises on the grid that is drawn
+    assert opened[0].text == "あん\n"
 
 
 def test_saving_lyrics_lets_align_see_them_at_once(own_window, monkeypatch, tmp_path) -> None:

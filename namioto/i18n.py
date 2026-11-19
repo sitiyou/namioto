@@ -289,7 +289,6 @@ CATALOGS: dict[str, dict[str, str]] = {
         "Reusing the model's pass over the audio…": "复用模型对音频的通过结果…",
         "Which forced-alignment model to use": "使用哪个强制对齐模型",
         "Where the model runs": "模型运行的位置",
-        "Snap the times to the beat grid, this many cells per quarter note": "把时间吸附到节拍网格，四分音符内的格数",
         "Chunked inference": "分块推理",
         "Run the model in overlapping chunks instead of one pass over the whole song, which bounds memory; the silence-aware cut puts the seams in the rests, the fixed one every minute": "用重叠分块跑模型，而不是整首一次前向，以限制内存占用；静音切块把接缝落在停顿处，固定分块每分钟一处",
         "Fixed chunks": "固定分块",

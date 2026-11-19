@@ -6,8 +6,7 @@ audio is read once; the window only starts it, shows the progress, and shows the
 `namioto.analysis.align` reports. Encoder inference may be chunked; its concatenated emissions are
 aligned as one global CTC path because KRC lines have no timestamps. Its choices are
 `align.PARAMETERS`, remembered between runs in the file `align.parameter_path()` names.
-Its Quantize choice (Off / 1/4 / 1/8 / ..., GAME's list) snaps onsets onto the drawn beat grid
-before mapping, preserving the reference durations captured from the alignment.
+MIDI mapping receives the measured alignment times and onset bounds.
 """
 
 from __future__ import annotations
@@ -33,7 +32,7 @@ from namioto.analysis import align, devices
 from namioto.i18n import tr
 from namioto.karaoke.canonical import without_note_mapping
 from namioto.karaoke.sounds import natural_sounds, natural_tokens, split_tokens
-from namioto.lyricmap import from_spans, snap_to_beats
+from namioto.lyricmap import from_spans
 from namioto.lyricmap.channels import split as split_channels
 from namioto.params import Field
 from namioto.ui.form import add_row, field_editor
@@ -143,9 +142,7 @@ class AlignDialog(QDialog):
         self,
         audio: str,
         text: str,
-        tempo: float,
         parent=None,
-        offset: float = 0.0,
         *,
         channel: int | None = None,
     ):
@@ -154,8 +151,6 @@ class AlignDialog(QDialog):
         self.audio = audio
         self.text = text
         self.channel = channel
-        self.tempo = tempo
-        self.offset = offset
         self._thread: Aligner | None = None
         # the choices the last run was made with, straight onto the form
         self._parameters = align.load_parameters()
@@ -248,23 +243,6 @@ class AlignDialog(QDialog):
         scores = optional[0] if optional else []
         onset_bounds = optional[1] if len(optional) > 1 else []
         times = from_spans(spans)
-        cells = self.parameters()["quantize"]  # read now, so a change made while the run went counts
-        if cells:
-            quantized = snap_to_beats(times, self.tempo, 1.0 / cells, self.offset)
-            if onset_bounds:
-                onset_bounds = [
-                    [
-                        None
-                        if bounds is None or before is None or after is None
-                        else (
-                            round(bounds[0] + after[0] - before[0], 3),
-                            round(bounds[1] + after[0] - before[0], 3),
-                        )
-                        for before, after, bounds in zip(old_row, new_row, bound_row, strict=False)
-                    ]
-                    for old_row, new_row, bound_row in zip(times, quantized, onset_bounds, strict=False)
-                ]
-            times = quantized
         self._thread = None
         self.rebuild.setEnabled(True)
         self.progress.setRange(0, 1)
