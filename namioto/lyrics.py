@@ -25,15 +25,17 @@ import sys
 import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping
+from difflib import SequenceMatcher
 from pathlib import Path
 from typing import Any
 
 from namioto import net
+from namioto.i18n import tr
 from namioto.karaoke import KrcError, parse
 from namioto.utils import write_text
 
 SUFFIX = ".krc"
-DEFAULT_PROMPT = """请为输入的日语歌词添加汉字读音，严格遵守以下规则：
+DEFAULT_PROMPT = """请为输入的日语歌词添加汉字和汉字重复符号「々」的读音，严格遵守以下规则：
 只添加注音，不改写、增删或替换原文中的任何字符；保留原有换行和空白。只输出标注后的歌词，不要解释或 Markdown 代码块。
 1. 对于输入的歌词中的汉字，在其后用方括号进行注音。
 示例：
@@ -56,13 +58,21 @@ DEFAULT_PROMPT = """请为输入的日语歌词添加汉字读音，严格遵守
 3. 对于汉字与假名混合的词语，只标注其中连续的汉字部分，保留假名在方括号外，不得为了词语完整性将假名包含在被注音的原文中。
 示例：
 输入：映し出す　気持ちは
-输出：映[うつ]し出[だ]す　気持[きも]ちは
+输出：映[うつ]し出[だ]す　気持[き,も]ちは
 错误输出：映し出す[うつしだす]　気持ち[きもち]は
-4. 平假名、片假名及其他非汉字字符不添加注音。读音使用平假名，并根据歌词上下文选择实际读法。
+4. 「々」表示重复前一个汉字。保留原来的「々」，与前面的汉字一起注音；逐字写出实际读音，包括连浊。
+示例：
+输入：日々を重ねる
+正确输出：日々[ひ,び]を重[かさ]ねる
+错误输出：日[ひ]々を重[かさ]ねる  # 「々」也需要读音
+5. 除「々」外，平假名、片假名及其他非汉字字符不添加注音。读音使用平假名，并根据歌词上下文选择实际读法。
 
 现在请对以下歌词进行注音标注："""
 
 _FENCE = re.compile(r"```[^\n]*\n(?P<body>.*?)\n?```", re.DOTALL)
+_DOTS = re.compile(r"\.+")
+_PUNCTUATION = str.maketrans("#[]()-,{}@", "＃［］（）－，｛｝＠")
+_MAX_DIAGNOSTIC_LOCATIONS = 3
 
 
 def text_key(text: str) -> str:
@@ -90,8 +100,11 @@ def save(path: str | Path, text: str) -> Path:
 
 def normalize_plain_text(text: str) -> str:
     """Make literal lyric punctuation safe for KRC before adding annotations."""
-    text = re.sub(r"\.+", lambda match: "．" if len(match[0]) == 1 else "…" if len(match[0]) < 5 else "……", text)
-    return text.translate(str.maketrans("#[]()-,{}@", "＃［］（）－，｛｝＠"))
+    return _DOTS.sub(lambda match: _normalized_dots(match[0]), text).translate(_PUNCTUATION)
+
+
+def _normalized_dots(dots: str) -> str:
+    return "．" if len(dots) == 1 else "…" if len(dots) < 5 else "……"
 
 
 def build_prompt(lyrics: str, prompt: str = DEFAULT_PROMPT, retry: str = "") -> str:
@@ -118,26 +131,88 @@ def conversion_error(text: str, source: str) -> str:
     The model is asked for the readings alone, never to rewrite, so once the readings and the `.krc`
     markers are taken away the two must carry the same characters; a model that dropped a line,
     changed a word or answered with prose is caught here. Every kanji must also carry a reading: an
-    unread one has no sound to align. Whether the readings themselves are right is the user's to
-    judge.
+    unread one has no sound to align. The kanji repetition mark is treated the same way.
+    Whether the readings themselves are right is the user's to judge.
     """
+    expected = _squeezed(normalize_plain_text(source))
+    if expected and not text.strip():
+        return _changed_lyrics(source, text, expected, "", [])
     try:
         converted = parse(text)
     except KrcError as error:
         return str(error)
-    spoken = "".join(unit.text for chapter in converted.chapters for line in chapter.lines for unit in line.units)
-    if _squeezed(spoken) != _squeezed(normalize_plain_text(source)):
-        return "the answer changed the lyrics instead of annotating them"
-    unread = [
-        unit.text
-        for chapter in converted.chapters
-        for line in chapter.lines
-        for unit in line.units
-        if unit.ruby is None and unit.is_kanji()
-    ]
+    units = [unit for chapter in converted.chapters for line in chapter.lines for unit in line.units]
+    written = "".join(unit.text for unit in units)
+    actual = _squeezed(written)
+    assert converted.source is not None
+    offsets = converted.source.lyric_offsets
+    if expected != actual:
+        krc_offsets = [offset for char, offset in zip(written, offsets, strict=True) if not char.isspace()]
+        return _changed_lyrics(source, text, expected, actual, krc_offsets)
+    unread = []
+    start = 0
+    for unit in units:
+        if unit.ruby is None and unit.is_kanji():
+            unread.append((unit.text, offsets[start]))
+        start += len(unit.text)
     if unread:
-        return f"these kanji have no reading: {' '.join(unread)}"
+        details = [
+            tr("KRC {position} ({excerpt})", position=_position(text, offset), excerpt=_excerpt(chars))
+            for chars, offset in unread[:_MAX_DIAGNOSTIC_LOCATIONS]
+        ]
+        return _diagnostic(tr("These characters have no reading."), details, len(unread))
     return ""
+
+
+def _changed_lyrics(source: str, krc: str, expected: str, actual: str, krc_offsets: list[int]) -> str:
+    # Keep offsets into the editors' text even when comparison ignores whitespace or KRC syntax.
+    source_offsets = [
+        offset
+        for match in re.finditer(r"\.+|[^\s.]+", source)
+        for offset in range(match.start(), match.start() + len(normalize_plain_text(match[0])))
+    ]
+    changes = [
+        (kind, start, end, found, found_end)
+        for kind, start, end, found, found_end in SequenceMatcher(None, expected, actual, autojunk=False).get_opcodes()
+        if kind != "equal"
+    ]
+    details = []
+    for kind, start, end, found, found_end in changes[:_MAX_DIAGNOSTIC_LOCATIONS]:
+        if kind == "delete":
+            description = tr("Missing text")
+        elif kind == "insert":
+            description = tr("Extra text")
+        else:
+            description = tr("Replaced text")
+        details.append(
+            tr(
+                "{change}: source {source_position}, expected {expected}; KRC {krc_position}, got {actual}.",
+                change=description,
+                source_position=_position(source, source_offsets[start] if start < len(source_offsets) else None),
+                expected=_excerpt(expected[start:end]),
+                krc_position=_position(krc, krc_offsets[found] if found < len(krc_offsets) else None),
+                actual=_excerpt(actual[found:found_end]),
+            )
+        )
+    return _diagnostic(tr("The answer changed the lyrics instead of annotating them."), details, len(changes))
+
+
+def _position(text: str, offset: int | None) -> str:
+    position = len(text) if offset is None else offset
+    line, column = text.count("\n", 0, position) + 1, position - text.rfind("\n", 0, position)
+    if offset is None:
+        return tr("end of text (line {line}, column {column})", line=line, column=column)
+    return tr("line {line}, column {column}", line=line, column=column)
+
+
+def _excerpt(text: str) -> str:
+    return repr(text[:24] + "…" if len(text) > 24 else text) if text else tr("(none)")
+
+
+def _diagnostic(summary: str, details: list[str], count: int) -> str:
+    if count > len(details):
+        details.append(tr("More locations: {count}.", count=count - len(details)))
+    return "\n".join([summary, *details])
 
 
 def syntax_error(text: str) -> str:

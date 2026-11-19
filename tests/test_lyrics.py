@@ -160,14 +160,49 @@ def test_the_prompt_carries_the_lyrics_under_it() -> None:
     assert lyrics.build_prompt("君の名は", "注音：") == "注音：\n君の名は"
 
 
+def test_the_prompt_and_validator_treat_the_kanji_repetition_mark_as_part_of_the_word() -> None:
+    assert "日々[ひ,び]" in lyrics.build_prompt("日々")
+    assert lyrics.conversion_error("日々[ひ,び]", "日々") == ""
+    assert "KRC line 1, column 5 ('々')" in lyrics.conversion_error("日[ひ]々", "日々")
+
+
 def test_an_annotated_answer_matches_its_source() -> None:
     assert lyrics.conversion_error("季節[き,せつ]は移[うつ]ろい", "季節は移ろい") == ""
     assert lyrics.conversion_error("季節[き,せつ]は移[うつ]ろい\n", "季節は移ろい") == ""
 
 
-def test_a_rewritten_answer_is_refused() -> None:
-    assert lyrics.conversion_error("春[はる]は移[うつ]ろい", "季節は移ろい")
-    assert lyrics.conversion_error("季節[き,せつ]は移[うつ]ろい\n説明", "季節は移ろい")
+@pytest.mark.parametrize(
+    ("source", "krc", "detail"),
+    [
+        (
+            "\n歌を",
+            "# heading\n@1{歌[うた]が}",
+            "Replaced text: source line 2, column 2, expected 'を'; KRC line 2, column 9, got 'が'.",
+        ),
+        (
+            "うた\n  ない\nこえ",
+            "うた\n---\nこえ",
+            "Missing text: source line 2, column 3, expected 'ない'; KRC line 3, column 1, got (none).",
+        ),
+        (
+            "うた",
+            "うた\nおまけ",
+            "Extra text: source end of text (line 1, column 3), expected (none); KRC line 2, column 1, got 'おまけ'.",
+        ),
+        (
+            "うた.....を",
+            "うた……が",
+            "Replaced text: source line 1, column 8, expected 'を'; KRC line 1, column 5, got 'が'.",
+        ),
+        (
+            "うた",
+            "",
+            "Missing text: source line 1, column 1, expected 'うた'; KRC end of text (line 1, column 1), got (none).",
+        ),
+    ],
+)
+def test_a_rewritten_answer_reports_the_original_and_krc_locations(source, krc, detail) -> None:
+    assert detail in lyrics.conversion_error(krc, source)
 
 
 def test_an_unreadable_answer_is_refused() -> None:

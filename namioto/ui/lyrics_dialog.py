@@ -241,6 +241,7 @@ class LyricsDialog(QDialog):
         self._render_plain()
 
         self.status_label = QLabel()
+        self.status_label.setTextFormat(Qt.TextFormat.PlainText)
         self.status_label.setWordWrap(True)
         self.close_button = QPushButton(tr("Close"))
         self.close_button.clicked.connect(self.reject)
@@ -321,7 +322,7 @@ class LyricsDialog(QDialog):
             self.log.clear()
         self.log.show()
         self._log_kind = None
-        converter = LyricsConverter(self.source.toPlainText().strip(), self.config, self.path, retry=retry, parent=self)
+        converter = LyricsConverter(self.source.toPlainText(), self.config, self.path, retry=retry, parent=self)
         self.converter = converter
         converter.converted.connect(self._converted)
         converter.delta.connect(self._on_delta)
@@ -372,16 +373,17 @@ class LyricsDialog(QDialog):
 
     def _save(self) -> None:
         text = self.result.toPlainText()
-        source = self.source.toPlainText().strip()
-        problem = lyrics.conversion_error(text, source) if source else lyrics.syntax_error(text)
+        source = self.source.toPlainText()
+        has_source = bool(source.strip())
+        problem = lyrics.conversion_error(text, source) if has_source else lyrics.syntax_error(text)
         if problem:
-            if source:
+            if has_source:
                 self._rejected = (text, problem)
             QMessageBox.warning(
                 self,
                 tr("Lyrics"),
                 tr("The lyrics are not the plain text annotated: {error}", error=problem)
-                if source
+                if has_source
                 else tr("The lyrics are not a readable .krc: {error}", error=problem),
             )
             self.status_label.setText(tr("Not saved: {error}", error=problem))

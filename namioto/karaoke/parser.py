@@ -15,8 +15,9 @@ is one word of one mora.
 from __future__ import annotations
 
 import re
+from collections.abc import Iterator
 
-from lark import Lark, Transformer
+from lark import Lark, Transformer, Tree
 from lark.exceptions import LarkError, VisitError
 
 from namioto.karaoke.model import Chapter, Group, KrcError, Line, Lyrics, Ruby, Unit, Word, _has_join
@@ -145,6 +146,16 @@ def _unwrap(text: str) -> tuple[str, list[tuple[int, int | None]], list[int]]:
     return "".join(chars), channels, positions
 
 
+def _lyric_offsets(tree: Tree, positions: list[int]) -> Iterator[int]:
+    """Find the raw KRC offsets of the written lyric characters, excluding rubies and syntax."""
+    for item in tree.children:
+        if isinstance(item, Tree):
+            if item.data != "ruby_line":
+                yield from _lyric_offsets(item, positions)
+        elif item.type == "WORD":
+            yield positions[item.start_pos]
+
+
 def parse(text: str, merge: bool = True) -> Lyrics:
     """Parse a `.krc` into its model; a malformed file raises `KrcError`."""
     unwrapped, channels, positions = _unwrap(text)
@@ -179,5 +190,7 @@ def parse(text: str, merge: bool = True) -> Lyrics:
     ]
     starts.extend(match.start() + match[0].index("-") for match in re.finditer(r"\n+-{3,}\n*", unwrapped))
     line_numbers = tuple(text.count("\n", 0, positions[start]) for start in sorted(starts))
-    lyrics.source = Source(text, _canonical(lyrics, dotted=True, simplify=False), line_numbers)
+    lyrics.source = Source(
+        text, _canonical(lyrics, dotted=True, simplify=False), line_numbers, tuple(_lyric_offsets(tree, positions))
+    )
     return lyrics

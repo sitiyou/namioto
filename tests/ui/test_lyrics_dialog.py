@@ -271,6 +271,23 @@ def test_a_manual_answer_without_readings_is_refused_at_save(lyrics_window, monk
     dialog.close()
 
 
+def test_a_changed_manual_answer_reports_the_visible_editor_positions(lyrics_window, monkeypatch) -> None:
+    warned: list[str] = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda _parent, _title, message: warned.append(message))
+    dialog = lyrics_dialog(lyrics_window)
+    dialog.source.setPlainText("\n歌を")
+    dialog.result.setPlainText("歌[うた]が")
+
+    dialog.save_button.click()
+
+    assert lyrics.load(lyrics_window.lyrics_path()) == ""
+    assert "source line 2, column 2, expected 'を'" in warned[0]
+    assert "KRC line 1, column 6, got 'が'" in warned[0]
+    dialog.copy_button.click()
+    assert warned[0].splitlines()[-1] in QGuiApplication.clipboard().text()
+    dialog.close()
+
+
 def test_a_failed_conversion_shows_why(lyrics_window) -> None:
     dialog = lyrics_dialog(lyrics_window, api_base="https://api.example.com/v1", api_key="k", model="m")
     dialog._failed("HTTP 401 Unauthorized")

@@ -18,6 +18,7 @@ class Source:
     text: str
     canonical: str
     line_numbers: tuple[int, ...]
+    lyric_offsets: tuple[int, ...] = ()
 
 
 def _visible(text: str) -> tuple[str, list[int]]:
