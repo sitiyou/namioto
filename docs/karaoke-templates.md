@@ -8,6 +8,8 @@ A template file defines `register(registry)`. Call `registry.add` with a unique 
 
 The builder receives `(song, values)` and returns a kara-templater `Scene`. The host writes the requested format. `song.sources` contains one structured lyric source per display line, including independently timed readings, colour runs, section identity in `actor`, the vocal role in `style`, and countdown markers. Each singing interval is in absolute seconds. `song.bpm` comes from the input MIDI. Use `default_scene(song)` to reuse the default layout and motions, or create a `Document` and pass the sources and your own tracks to `prepare_tracks`. Register a matching cue preset on tracks displaying marked sources.
 
+For a new design, consult the kara-templater guides to [karaoke layout](https://github.com/sitiyou/python-kara-templater/blob/main/docs/tutorials/karaoke-design.md), [typeface and ruby selection](https://github.com/sitiyou/python-kara-templater/blob/main/docs/guides/fonts-and-preview.md) and [choosing an output backend](https://github.com/sitiyou/python-kara-templater/blob/main/docs/guides/choosing-output.md).
+
 [Runnable template with two editable parameters](../examples/cool_ink.py)
 
 ```sh

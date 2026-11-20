@@ -1236,6 +1236,8 @@ class MainWindow(QMainWindow):
             self._watch_lyrics()
             missing = self._open_audio(project.resolve_audio(self.project_path, opened.audio))
             self.view.set_channels(opened.channels)
+            # Convert at the saved tempo so the minimum beat duration is applied only once.
+            self.view.bpm = opened.settings.tempo.bpm
             loaded = (
                 (note.pitch, self.view.to_beats(note.start), self.view.to_beats(note.duration), note.channel, note.id)
                 for note in opened.notes

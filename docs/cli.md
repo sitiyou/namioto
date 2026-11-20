@@ -197,3 +197,18 @@ Messages are JSON objects, one per line:
 These illustrate request, success, error and pushed-event shapes. Watchers receive events
 without polling. Python integrations can use `namioto.ipc.Client`; query `methods` for the
 running editor's methods and parameters.
+
+For timing a vocal by remote control, load the separated voice and set the project KRC.
+Start a measurement with `namioto-ctl analysis.align model=yohane channel=0`, then poll
+`namioto-ctl analysis.alignment job=ID` on the same instance. The current job keeps the audio
+path and lyrics from submission. The next accepted job replaces its result. A completed job
+returns one row per lyric line on the selected channel, with start/end pairs in seconds,
+scores and onset uncertainty bounds per natural sound. A failed job includes the error.
+The caller can inspect this evidence before editing notes. For the underlying piano-roll
+data, `namioto-ctl spectrum.frames start=16.25 count=24` returns up to 256 consecutive frames.
+Rows begin at the returned audio time, are spaced by `step` seconds and start at MIDI
+`first_pitch`. Gain, contrast and visual latency do not affect these amplitudes.
+
+For melody evidence, start `analysis.transcribe size=large language=ja` on the current
+vocal. Poll `analysis.transcription job=ID` for GAME's raw note list (onset and offset in
+seconds, fractional MIDI pitch). Both analysis commands leave the project's notes untouched.

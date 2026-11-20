@@ -17,9 +17,12 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import json
 import math
+import sys
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from namioto import __version__, ipc, midi, project, subtitle
 from namioto.channels import CHANNEL_COUNT, Channel, free_channel
@@ -110,6 +113,10 @@ class WindowBridge:
         self.server = server
         self.dispatcher = server.dispatcher
         self._connections: list[tuple] = []
+        self._game_process = None
+        self._game_job = {}
+        self._alignment_worker = None
+        self._alignment_job = {}
         self._subtitle_revision = 0
         self._register()
         self._watch()
@@ -231,6 +238,12 @@ class WindowBridge:
             params={"division": "beats or seconds"},
         )
         add(
+            "spectrum.frames",
+            self.spectrum_frames,
+            summary="Read consecutive note-band amplitudes from the loaded spectrum",
+            params={"start": "audio time in seconds", "count?": "up to 256 frames, default 1"},
+        )
+        add(
             "spectrum.set",
             self.set_spectrum,
             summary="Set the spectrum's display values",
@@ -291,6 +304,30 @@ class WindowBridge:
                 "force?": "discard unsaved changes",
             },
         )
+        add(
+            "analysis.transcribe",
+            self.start_transcription,
+            summary="Measure melody notes from the current vocal using GAME",
+            params={"size?": "small, medium or large", "language?": "universal, en, ja, yue or zh"},
+        )
+        add(
+            "analysis.transcription",
+            self.transcription_result,
+            summary="Read the current GAME job's status and unquantized notes",
+            params={"job": "ID returned by analysis.transcribe"},
+        )
+        add(
+            "analysis.align",
+            self.start_alignment,
+            summary="Measure sound onsets from the current vocal and KRC in the background",
+            params={"model?": "mms or yohane", "channel?": "lyric channel, default 0"},
+        )
+        add(
+            "analysis.alignment",
+            self.alignment_result,
+            summary="Read a measurement job's status, times in seconds, scores and onset bounds",
+            params={"job": "ID returned by analysis.align"},
+        )
         add("lyrics.get", self.get_lyrics, summary="The open project's lyrics text")
         add(
             "lyrics.set",
@@ -320,6 +357,11 @@ class WindowBridge:
 
     def close(self) -> None:
         """Take the bridge's signal connections off, so a stopped server is not kept alive by them."""
+        if self._game_process is not None:
+            self._game_process.kill()
+            self._game_process.waitForFinished()
+        if self._alignment_worker is not None:
+            self._alignment_worker.wait()
         for signal, slot in self._connections:
             with contextlib.suppress(TypeError):
                 signal.disconnect(slot)
@@ -808,6 +850,99 @@ class WindowBridge:
         self.window.reset_document(analysis)
         self.window.load_audio(path)
         return self.get_state({})
+
+    def spectrum_frames(self, params: dict) -> dict:
+        from namioto.analysis.spectrum import MIDI_OFFSET
+
+        start = _number(params, "start", low=0)
+        count = _whole(params, "count", required=False, default=1, low=1, high=256)
+        image = self.window.view.spectrum
+        if image is None:
+            raise IpcError("not_ready", "The spectrum is not loaded")
+        spectrum = image.spectrum
+        first = spectrum.frames if start >= spectrum.duration else spectrum.frame_at(start)
+        return {
+            "start": spectrum.time_at(first),
+            "step": spectrum.frame_ms / 1000,
+            "first_pitch": MIDI_OFFSET,
+            "frames": spectrum.table[first : first + count].tolist(),
+        }
+
+    def start_transcription(self, params: dict) -> dict:
+        from PySide6.QtCore import QProcess
+
+        from namioto.analysis.transcription import GAME_SIZES, LANGUAGE_CODES
+
+        if self._game_process is not None and self._game_process.state() != QProcess.ProcessState.NotRunning:
+            raise IpcError("busy", "Transcription is running")
+        if not self.window.audio_path:
+            raise IpcError("missing_input", "Load a vocal first")
+        size = _text(params, "size", required=False, default="small")
+        language = _string(params, "language", required=False, default="universal")
+        if size not in GAME_SIZES or (language != "universal" and language not in LANGUAGE_CODES):
+            raise IpcError("bad_params", "Unknown GAME size or language")
+        job = {"job": uuid4().hex, "status": "running"}
+        process = QProcess()
+        arguments = ["-m", "namioto.analysis.game", self.window.audio_path, "--json", "--size", size]
+        if language and language != "universal":
+            arguments.extend(["--language", language])
+
+        def finished(code, _status):
+            if code:
+                error = bytes(process.readAllStandardError()).decode(errors="replace")
+                job.update(status="failed", error=error[-2000:] or process.errorString())
+                return
+            try:
+                notes = json.loads(bytes(process.readAllStandardOutput()))["notes"]
+            except (KeyError, ValueError) as error:
+                job.update(status="failed", error=str(error))
+                return
+            job.update(status="complete", notes=notes)
+
+        process.finished.connect(finished)
+        process.errorOccurred.connect(lambda _error: job.update(status="failed", error=process.errorString()))
+        if self._game_process is not None:
+            self._game_process.deleteLater()
+        self._game_process = process
+        self._game_job = job
+        process.start(sys.executable, arguments)
+        return dict(job)
+
+    def transcription_result(self, params: dict) -> dict:
+        if _text(params, "job") != self._game_job.get("job"):
+            raise IpcError("unknown_job", "No matching transcription job")
+        return dict(self._game_job)
+
+    def start_alignment(self, params: dict) -> dict:
+        from namioto.analysis import align
+        from namioto.ui.align_dialog import Aligner
+
+        if self._alignment_worker is not None and self._alignment_worker.isRunning():
+            raise IpcError("busy", "Alignment is running")
+        if not self.window.audio_path or not self.window.lyrics_text.strip():
+            raise IpcError("missing_input", "Load a vocal and lyrics first")
+        model = _text(params, "model", required=False, default=align.DEFAULT_MODEL)
+        if model not in align.MODELS:
+            raise IpcError("bad_params", "Unknown alignment model")
+        channel = _whole(params, "channel", required=False, default=0, low=0, high=15)
+        worker = Aligner(self.window.audio_path, self.window.lyrics_text, model, channel=channel)
+        job = {"job": uuid4().hex, "status": "running", "model": model, "channel": channel}
+
+        def aligned(result):
+            times, _, _, _, scores, bounds = result
+            job.update(status="complete", times=times, scores=scores, onset_bounds=bounds)
+
+        worker.aligned.connect(aligned)
+        worker.failed.connect(lambda error: job.update(status="failed", error=error))
+        self._alignment_job = job
+        self._alignment_worker = worker
+        worker.start()
+        return dict(job)
+
+    def alignment_result(self, params: dict) -> dict:
+        if _text(params, "job") != self._alignment_job.get("job"):
+            raise IpcError("unknown_job", "No matching alignment job")
+        return dict(self._alignment_job)
 
     def get_lyrics(self, _params: dict) -> dict:
         window = self.window

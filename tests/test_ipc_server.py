@@ -276,6 +276,16 @@ def test_project_save_and_open_round_trip(qt_app, window, endpoint, tmp_path):
     assert (tmp_path / "named.nto").exists()
 
 
+def test_project_tempo_preserves_short_notes_on_open(qt_app, endpoint, tmp_path):
+    path = str(tmp_path / "short.nto")
+    call(qt_app, endpoint, "transport.set_bpm", {"bpm": 180})
+    call(qt_app, endpoint, "document.add_notes", {"notes": [{"pitch": 72, "start": 1, "duration": 0.025}]})
+    call(qt_app, endpoint, "project.save", {"path": path})
+    call(qt_app, endpoint, "transport.set_bpm", {"bpm": 120})
+    call(qt_app, endpoint, "project.open", {"path": path, "force": True})
+    assert call(qt_app, endpoint, "document.notes")["notes"][0]["duration"] == pytest.approx(0.025)
+
+
 def test_unsaved_changes_need_force(qt_app, window, endpoint, tmp_path):
     target = tmp_path / "other.nto"
     call(qt_app, endpoint, "project.save", {"path": str(target)})
@@ -634,3 +644,52 @@ def test_session_exports_remembered_project_recipe(qt_app, window, endpoint, tmp
         _run(qt_app, lambda: export_cli.main(["--session", "--instance", endpoint.instance, "--out", str(target)])) == 0
     )
     assert r"\1c&H563412&" in target.read_text()
+
+
+def test_alignment_evidence_job(qt_app, window, endpoint, monkeypatch):
+    from namioto.ui.align_dialog import Aligner
+
+    assert failure(qt_app, endpoint, "analysis.align").code == "missing_input"
+    monkeypatch.setattr(window, "audio_path", "voice.wav")
+    call(qt_app, endpoint, "lyrics.set", {"text": "あ"})
+    times = [[(0.1, 0.25)]]
+    monkeypatch.setattr(Aligner, "load", lambda self: self.aligned.emit((times, self.model, [], [], [[0.9]], [[None]])))
+    job = call(qt_app, endpoint, "analysis.align", {"model": "yohane"})["job"]
+    deadline = time.monotonic() + TIMEOUT
+    while time.monotonic() < deadline:
+        result = call(qt_app, endpoint, "analysis.alignment", {"job": job})
+        if result["status"] == "complete":
+            break
+    assert result["times"] == [[[0.1, 0.25]]]
+    assert result["scores"] == [[0.9]]
+    assert failure(qt_app, endpoint, "analysis.alignment", {"job": "old"}).code == "unknown_job"
+
+
+def test_spectrum_frame_window(qt_app, window, endpoint):
+    import numpy as np
+
+    from namioto.analysis.spectrum import MIDI_OFFSET, NoteSpectrum
+
+    assert failure(qt_app, endpoint, "spectrum.frames", {"start": 0}).code == "not_ready"
+    table = np.arange(4 * 84, dtype=float).reshape(4, 84)
+    window.view.set_spectrum(NoteSpectrum(table, 10, 48000, 8192, 480, 440, 1))
+    result = call(qt_app, endpoint, "spectrum.frames", {"start": 0.024, "count": 10})
+    assert result == {"start": 0.02, "step": 0.01, "first_pitch": MIDI_OFFSET, "frames": table[2:].tolist()}
+    assert call(qt_app, endpoint, "spectrum.frames", {"start": 0.04})["frames"] == []
+
+
+def test_transcription_job_crash_is_reported(qt_app, window, endpoint, monkeypatch):
+    import sys
+
+    monkeypatch.setattr(window, "audio_path", None)
+    assert failure(qt_app, endpoint, "analysis.transcribe").code == "missing_input"
+    monkeypatch.setattr(window, "audio_path", "voice.wav")
+    assert failure(qt_app, endpoint, "analysis.transcribe", {"size": "unknown"}).code == "bad_params"
+    monkeypatch.setattr(sys, "executable", "/missing/namioto-test-python")
+    job = call(qt_app, endpoint, "analysis.transcribe")["job"]
+    deadline = time.monotonic() + TIMEOUT
+    while time.monotonic() < deadline:
+        result = call(qt_app, endpoint, "analysis.transcription", {"job": job})
+        if result["status"] == "failed":
+            break
+    assert result["status"] == "failed" and result["error"]
