@@ -104,6 +104,10 @@ MMS conversion uses torch and torchaudio; yohane uses torch and transformers. Bo
 The checkpoints are Meta's MMS forced aligner and
 `NextFire/mms-300m-ForcedAligner-karaoke-ja-Latn`, respectively.
 
+## Karaoke production skill
+
+The [Namioto karaoke skill](../skills/namioto-nicokara/SKILL.md) lives under `skills/` as part of the source tree. Update it alongside changes to the IPC commands, lyric mapping or export workflow that its instructions use.
+
 ## Code map
 
 | Location | Responsibility |
