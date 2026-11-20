@@ -212,3 +212,17 @@ Rows begin at the returned audio time, are spaced by `step` seconds and start at
 For melody evidence, start `analysis.transcribe size=large language=ja` on the current
 vocal. Poll `analysis.transcription job=ID` for GAME's raw note list (onset and offset in
 seconds, fractional MIDI pitch). Both analysis commands leave the project's notes untouched.
+
+Run `analysis.detect_bpm algorithm=wavetone` on the mix or accompaniment and poll
+`analysis.bpm_result job=ID`. The result includes the BPM, WaveTone's ranked
+(BPM, score) candidates and distribution, or the window agreement and residual
+available from the other backends. To compare algorithms, save each result before
+starting another job with `librosa` or `tempocnn`. Select a tempo explicitly with
+`transport.set_bpm bpm=VALUE` in the project where the notes will be edited.
+
+After a GAME job completes, call `analysis.transcription_grid job=ID cells=4 estimate_phase=true`
+to preview sixteenth notes at the editor's current BPM. The result contains snapped
+notes in seconds and the proposed grid offset in milliseconds. Repeat on the same
+job to compare subdivisions. Without phase estimation it uses the current editor
+offset. Apply a chosen offset with `transport.set_grid_offset ms=VALUE`; the
+original GAME result remains available through `analysis.transcription`.

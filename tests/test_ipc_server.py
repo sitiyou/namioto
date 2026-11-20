@@ -693,3 +693,32 @@ def test_transcription_job_crash_is_reported(qt_app, window, endpoint, monkeypat
         if result["status"] == "failed":
             break
     assert result["status"] == "failed" and result["error"]
+
+
+def test_bpm_candidate_selection(qt_app, endpoint, window, monkeypatch):
+    from namioto.analysis import bpm
+
+    monkeypatch.setattr(window, "audio_path", "mix.wav")
+    estimate = bpm.BpmEstimate(90, "wavetone", candidates=((90, 1), (180, 0.8)))
+    monkeypatch.setattr(bpm, "estimate", lambda path, algorithm: estimate)
+    job = call(qt_app, endpoint, "analysis.detect_bpm")["job"]
+    deadline = time.monotonic() + TIMEOUT
+    while time.monotonic() < deadline:
+        result = call(qt_app, endpoint, "analysis.bpm_result", {"job": job})
+        if result["status"] == "complete":
+            break
+    candidate = result["candidates"][1][0]
+    assert call(qt_app, endpoint, "transport.set_bpm", {"bpm": candidate})["bpm"] == 180
+
+
+def test_game_grid_preview_preserves_raw_notes(qt_app, endpoint, window):
+    notes = [{"onset": t, "offset": t + 0.23, "pitch": 65} for t in (0.52, 0.77, 1.02)]
+    window._bridge._game_job = {"job": "sample", "status": "complete", "notes": notes}
+    call(qt_app, endpoint, "transport.set_bpm", {"bpm": 120})
+    params = {"job": "sample", "cells": 2, "estimate_phase": True}
+    grid = call(qt_app, endpoint, "analysis.transcription_grid", params)
+    assert grid["offset_ms"] == 20
+    assert grid["cell_seconds"] == 0.25
+    assert grid["notes"][0]["offset"] == pytest.approx(0.77)
+    assert call(qt_app, endpoint, "analysis.transcription", {"job": "sample"})["notes"] == notes
+    assert window.transport.grid_offset.value() == 0

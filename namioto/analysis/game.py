@@ -190,9 +190,9 @@ def estimate_grid_phase(onsets, unit: float) -> float:
     coarse = np.linspace(0.0, unit, 65, endpoint=False)
     s = [score(p) for p in coarse]
     k = int(np.argmin(s))
-    lo, hi = coarse[(k - 1) % len(coarse)], coarse[(k + 1) % len(coarse)]
-    if lo > hi:
-        lo, hi = hi, lo
+    # Refine across the wrap at zero on the same periodic score surface.
+    step = unit / len(coarse)
+    lo, hi = coarse[k] - step, coarse[k] + step
     for _ in range(20):  # golden section on [lo, hi]
         a = lo + (hi - lo) * 0.382
         b = lo + (hi - lo) * 0.618
@@ -200,7 +200,7 @@ def estimate_grid_phase(onsets, unit: float) -> float:
             hi = b
         else:
             lo = a
-    return (lo + hi) / 2
+    return ((lo + hi) / 2) % unit
 
 
 def estimate_grid_period(onsets, phase: float, unit: float, max_drift: float = 0.05) -> float:
@@ -413,6 +413,17 @@ def quantized(
     snapped = quantize_notes(notes, unit, phase)
     snapped = [(onset + phase, oset + phase, pitch) for onset, oset, pitch in snapped]
     return snapped, unit, phase
+
+
+def editor_grid(notes: Sequence[Note], bpm: float, cells: int, offset: float, estimate_phase: bool):
+    """Snap a stored GAME run using the editor's millisecond grid offset."""
+    if estimate_phase:
+        unit = 60.0 / bpm / cells
+        phase = estimate_grid_phase([note[0] for note in notes], unit)
+        offset = round(phase * 1000) / 1000
+        if round((unit - phase) * 1000) == 0:
+            offset = 0.0
+    return quantized(notes, bpm, cells, phase=offset, offset=offset)
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:

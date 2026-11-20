@@ -113,6 +113,8 @@ class WindowBridge:
         self.server = server
         self.dispatcher = server.dispatcher
         self._connections: list[tuple] = []
+        self._tempo_worker = None
+        self._tempo_job = {}
         self._game_process = None
         self._game_job = {}
         self._alignment_worker = None
@@ -305,6 +307,28 @@ class WindowBridge:
             },
         )
         add(
+            "analysis.detect_bpm",
+            self.detect_bpm,
+            summary="Estimate tempo from the loaded audio",
+            params={"algorithm?": "wavetone (default), librosa or tempocnn"},
+        )
+        add(
+            "analysis.bpm_result",
+            self.bpm_result,
+            summary="Poll for tempo estimates and candidate scores",
+            params={"job": "ID returned by analysis.detect_bpm"},
+        )
+        add(
+            "analysis.transcription_grid",
+            self.transcription_grid,
+            summary="Preview GAME notes on the beat grid",
+            params={
+                "job": "completed GAME job ID",
+                "cells": "subdivisions per quarter note: 1, 2, 4, 8, 16 or 32",
+                "estimate_phase?": "estimate offset from note attacks instead of using the editor offset",
+            },
+        )
+        add(
             "analysis.transcribe",
             self.start_transcription,
             summary="Measure melody notes from the current vocal using GAME",
@@ -360,6 +384,8 @@ class WindowBridge:
         if self._game_process is not None:
             self._game_process.kill()
             self._game_process.waitForFinished()
+        if self._tempo_worker is not None:
+            self._tempo_worker.wait()
         if self._alignment_worker is not None:
             self._alignment_worker.wait()
         for signal, slot in self._connections:
@@ -866,6 +892,64 @@ class WindowBridge:
             "step": spectrum.frame_ms / 1000,
             "first_pitch": MIDI_OFFSET,
             "frames": spectrum.table[first : first + count].tolist(),
+        }
+
+    def detect_bpm(self, params: dict) -> dict:
+        from dataclasses import asdict
+
+        from namioto.analysis import bpm
+        from namioto.ui.bpm_dialog import BpmAnalysisLoader
+
+        if not self.window.audio_path:
+            raise IpcError("missing_input", "Load audio first")
+        algorithm = _text(params, "algorithm", required=False, default=bpm.DEFAULT)
+        if algorithm not in bpm.ALGORITHMS:
+            raise IpcError("bad_params", "Unknown BPM algorithm")
+        if self._tempo_worker is not None and self._tempo_worker.isRunning():
+            raise IpcError("busy", "BPM analysis is running")
+        path = str(self.window.audio_path)
+        worker = BpmAnalysisLoader(path, algorithm)
+        job = {"job": uuid4().hex, "status": "running", "algorithm": algorithm, "audio": path}
+
+        def loaded(_algorithm, estimate, error):
+            if error:
+                job.update(status="failed", error=error)
+            else:
+                job.update(status="complete", **asdict(estimate))
+
+        worker.loaded.connect(loaded)
+        worker.failed.connect(lambda error: job.update(status="failed", error=error))
+        self._tempo_job = job
+        self._tempo_worker = worker
+        worker.start()
+        return dict(job)
+
+    def bpm_result(self, params: dict) -> dict:
+        if _text(params, "job") != self._tempo_job.get("job"):
+            raise IpcError("unknown_job", "No matching BPM job")
+        return dict(self._tempo_job)
+
+    def transcription_grid(self, params: dict) -> dict:
+        from namioto.analysis import game
+
+        job = self.transcription_result(params)
+        if job["status"] != "complete":
+            raise IpcError("not_ready", "A completed transcription is required")
+        cells = _whole(params, "cells")
+        if cells not in (1, 2, 4, 8, 16, 32):
+            raise IpcError("bad_params", "Unsupported subdivisions per quarter note")
+        bpm = self.window.transport.bpm.value()
+        raw = [(n["onset"], n["offset"], n["pitch"]) for n in job["notes"]]
+        notes, unit, phase = game.editor_grid(
+            raw, bpm, cells, self.window.transport.grid_offset.value() / 1000, _flag(params, "estimate_phase")
+        )
+        return {
+            "job": job["job"],
+            "bpm": bpm,
+            "cells": cells,
+            "cell_seconds": unit,
+            "offset_ms": round(phase * 1000),
+            "notes": [{"onset": a, "offset": b, "pitch": pitch} for a, b, pitch in notes],
         }
 
     def start_transcription(self, params: dict) -> dict:
