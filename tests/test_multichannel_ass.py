@@ -113,8 +113,11 @@ def test_multiline_scope_does_not_share_note_cursors():
     assert subtitle.build_ass(text, data) == generate_ass(text, [[(0, 1)], [(2, 3)], [(0, 3)]])
 
 
-def test_more_than_two_simultaneous_lines_have_distinct_positions():
-    scene = default_scene(prepare_song("@1{あ}\n@2{い}\n@3{う}", [[(0, 3)]] * 3, ExportSettings()))
+def test_third_simultaneous_voice_can_use_a_separate_harmony_track():
+    lyrics = "@1{あ}\n@2{い}\n@3{う}"
+    with pytest.raises(ValueError, match="row 0 occupied"):
+        default_scene(prepare_song(lyrics, [[(0, 3)]] * 3, ExportSettings()))
+    scene = default_scene(prepare_song(lyrics, [[(0, 3)]] * 3, ExportSettings(harmony_tracks="3")))
     assert len({p.placement.position.y for p in scene.plans}) == 3
 
 

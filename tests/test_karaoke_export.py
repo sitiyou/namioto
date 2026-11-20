@@ -106,3 +106,15 @@ def test_wide_krc_reading_is_centered_over_its_kanji():
     assert readings[0].left < host.left
     assert readings[-1].right > host.right
     assert (readings[0].left + readings[-1].right) / 2 == pytest.approx(host.center)
+
+
+def test_fast_handoff_keeps_successive_leads_on_opposite_sides():
+    settings = ExportSettings(cue="off")
+    spans = [[(1, 2.26)], [(2, 3.12)], [(3.12, 4.1)], [(4.14, 5)]]
+    scene = default_scene(prepare_song("あ\nい\nう\nえ", spans, settings))
+    places = [plan.placement for plan in scene.plans]
+    assert [p.row for p in places] == [0, 1, 0, 1]
+    for first, following in zip(places, places[2:], strict=False):
+        assert first.display.end <= following.display.start
+    for plan, [(start, end)] in zip(scene.plans, spans, strict=True):
+        assert (plan.input.singing.start, plan.input.singing.end) == (start, end)

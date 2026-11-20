@@ -101,7 +101,7 @@ def test_display_order_can_differ_from_time_order():
 
 
 def test_excess_simultaneous_rows_fail_instead_of_rendering_offscreen():
-    with pytest.raises(ValueError, match="does not fit vertically"):
+    with pytest.raises(ValueError, match="row 0 occupied"):
         generate_ass("\n".join("あ" for _ in range(8)), [[(0, 3)]] * 8)
 
 

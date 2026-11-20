@@ -47,6 +47,18 @@ class VocalRows(Layout):
     top: bool = False
 
     def allocate(self, lines, context):
+        if self.alignment == "alternating":
+            # Keep the two fixed horizontal slots through every page handoff.
+            placements = super().allocate(lines, context)
+            bottom = context.region.top + context.region.height
+            pitch = max(self.gap, max((line.bounds.height for line in lines), default=0))
+            result = []
+            for line, placement in zip(lines, placements, strict=True):
+                y = bottom - line.bounds.height - (self.rows - 1 - placement.row) * pitch
+                if y < context.region.top:
+                    raise ValueError(f"subtitle row {line.id} does not fit vertically")
+                result.append(replace(placement, position=Vec2(placement.position.x, y - line.bounds.top)))
+            return tuple(result)
         lanes = []
         chapter = None
         counter = 0
@@ -81,8 +93,6 @@ class VocalRows(Layout):
                 if y < area.top or y + line.bounds.height > area.top + area.height:
                     raise ValueError(f"subtitle row {line.id} does not fit vertically")
                 align = self.alignment[row % self.rows] if isinstance(self.alignment, tuple) else self.alignment
-                if align == "alternating":
-                    align = "right" if row % 2 else "left"
                 fraction = {"left": 0, "center": 0.5, "right": 1}[align]
                 x = area.left + (area.width - line.bounds.width) * fraction
                 pos = Vec2(x - line.bounds.left, y - line.bounds.top)
@@ -187,6 +197,25 @@ def default_scene(song: Song):
     sung = StatePatch(outline=rgb(settings.overlay_outline_color))
     sources = {s.id: s for s in song.sources}
 
+    # Fades reserve time in kara-templater. Budget them inside the actual
+    # same-side gap before handing the track to its strict row allocator.
+    fades = {}
+    if settings.layout == "double":
+        windows = []
+        for source in song.sources:
+            if source.style == "default":
+                spans = [segment.singing for unit in source.lyrics.units for segment in unit.segments]
+                windows.append((source.id, min(span.start for span in spans), max(span.end for span in spans)))
+        windows.sort(key=lambda item: item[1])
+        fades = {
+            identity: [min(settings.fade_in_ms / 1000, start), settings.fade_out_ms / 1000]
+            for identity, start, _ in windows
+        }
+        for (previous, _, end), (following, start, _) in zip(windows, windows[2:], strict=False):
+            room = max(0, start - end)
+            fades[previous][1] = min(fades[previous][1], room)
+            fades[following][0] = min(fades[following][0], max(0, start - (end + fades[previous][1])))
+
     def decorate(line):
         source = sources[line.id.split("/", 1)[1]]
         colors = song.segment_colors[source.id]
@@ -230,12 +259,14 @@ def default_scene(song: Song):
             base_glow=lambda _, target: glow(target, False),
         )
         line = effect(line)
-        entrance = min(settings.fade_in_ms / 1000, source.display.start)
+        entrance, exit_duration = fades.get(
+            source.id, (min(settings.fade_in_ms / 1000, source.display.start), settings.fade_out_ms / 1000)
+        )
         rules = []
         if entrance:
             rules.append(LyricRule("line", "enter", FadeIn(), duration=entrance))
-        if settings.fade_out_ms:
-            rules.append(LyricRule("line", "exit", FadeOut(), duration=settings.fade_out_ms / 1000))
+        if exit_duration:
+            rules.append(LyricRule("line", "exit", FadeOut(), duration=exit_duration))
         if settings.pulse != 1:
             pulse = ScalePulse(peak=settings.pulse, peak_at=settings.pulse_peak)
             rules.append(LyricRule("character", _body_interval, pulse))
