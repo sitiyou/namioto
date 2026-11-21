@@ -31,8 +31,8 @@ class ExportSettings:
     cue: str = "dots"
     cue_placement: str = "independent"
     cue_direction: Literal["right_to_left", "left_to_right"] = "left_to_right"
-    cue_size_ratio: float = 0.625
-    cue_gap: float = 12
+    cue_size_ratio: float = 0.5
+    cue_gap: float = -1
     harmony_tracks: str = ""
     harmony_ratio: float = 1
     harmony_align: Literal["left", "center", "right"] = "center"
@@ -56,6 +56,7 @@ class ExportSettings:
     base_blur_color: str = ""
     track_style: Mapping[int, str] = field(default_factory=dict)
     channel_colors: Mapping[int, str] | str = ""
+    palt: bool = False
 
     def vocal_roles(self) -> dict[int, str]:
         roles = {}

@@ -137,6 +137,11 @@ Saved user preferences are not a CLI fallback. For example, `--font-size` corres
 `NAMIOTO_ASS_FONT_SIZE`; spacing defaults to 5. `--channel-colors '0=FF0000,1=00FF00'`
 selects red and green highlights. GUI and ctl exports ignore these environment variables.
 
+With a kara-templater build that supports proportional metrics, the default
+template accepts `--palt true` to use a horizontal font’s OpenType proportional
+spacing for body and ruby. The exported ASS carries the measured positions.
+Install the same font for playback on upstream libass.
+
 File mode removes WaveTone's leading MIDI bar by default; pass `--no-wavetone` for ordinary
 MIDI. Session mode follows the editor's compatibility setting.
 
@@ -200,8 +205,9 @@ running editor's methods and parameters.
 
 For timing a vocal by remote control, load the separated voice and set the project KRC.
 Start a measurement with `namioto-ctl analysis.align model=yohane channel=0`, then poll
-`namioto-ctl analysis.alignment job=ID` on the same instance. The current job keeps the audio
-path and lyrics from submission. The next accepted job replaces its result. A completed job
+`namioto-ctl analysis.alignment job=ID` on the same instance. The editor keeps the latest 32 GAME and lyric-alignment jobs in memory, keyed
+by job ID, until remote control stops. Each alignment records its audio path,
+file stamp, channel and lyric signature. A completed job
 returns one row per lyric line on the selected channel, with start/end pairs in seconds,
 scores and onset uncertainty bounds per natural sound. A failed job includes the error.
 The caller can inspect this evidence before editing notes. For the underlying piano-roll
@@ -226,3 +232,57 @@ notes in seconds and the proposed grid offset in milliseconds. Repeat on the sam
 job to compare subdivisions. Without phase estimation it uses the current editor
 offset. Apply a chosen offset with `transport.set_grid_offset ms=VALUE`; the
 original GAME result remains available through `analysis.transcription`.
+
+### Review and edit one phrase
+
+After running GAME or a lyric aligner, call `analysis.phrase line=0 channel=0`.
+The line index counts displayed KRC lines from zero across chapters. The result
+includes the line's notes in seconds, stable note IDs, KRC mapping groups and the
+readings of the surrounding sounds. `context` defaults to one sound on either
+side in the same voice. Context note IDs resolve through `context_notes`.
+
+The result uses the latest completed GAME job for the recording and the latest
+matching MMS and Yohane jobs for that channel's lyrics. It returns both GAME
+note lists over the phrase window, the estimated and current editor grid
+offsets, and the model times, scores and onset bounds for each sound. The
+default grid has two cells per beat (eighth notes). Missing evidence is listed
+in `missing`. With no mapped or aligned times, supply `start` and `end` in
+seconds to select the audio interval.
+
+Request `spectrum=true` for the editor's note bands or `rms=true` for 20 ms
+linear RMS values per source audio channel. These optional arrays have at most
+256 frames each. For a longer interval, request the next page using that
+array's `next_start` and the same end time.
+
+To review a mapping change, pass the line's `revision`, its ordered `notes` and
+its `mapping` to `document.apply_phrase`. The default is a read-only preview
+showing both versions and the next sound's note ownership. With a connected
+Python IPC client, for example, split a sustained vowel on a one-sound,
+one-note first line after confirming the second pitch in the recording:
+
+```python
+row = client.request("analysis.phrase", {"line": 0, "context": 0})
+note, = row["notes"]
+sound, = row["sounds"]
+half = note["duration"] / 2
+edit = {
+    "line": 0,
+    "revision": row["revision"],
+    "notes": [
+        {**note, "duration": half},
+        {"start": note["start"] + half, "duration": half, "pitch": note["pitch"] + 2},
+    ],
+    "mapping": [{"sounds": [sound["index"]], "slots": 2}],
+}
+preview = client.request("document.apply_phrase", edit)
+# After reviewing the preview, submit the original request with preview disabled.
+client.request("document.apply_phrase", {**edit, "preview": False})
+```
+
+Keep the ID when revising an existing note and omit it for a new note.
+Groups cover the selected voice's sound indices in order. A group with zero
+slots consumes no note, multiple sounds with one slot share a note, and one
+sound with multiple slots consumes consecutive notes. An edit that changes
+another line's note ownership is rejected. A stale revision returns
+`conflict`; read the phrase again before revising it. A committed edit of both
+notes and mapping takes one editor undo step.

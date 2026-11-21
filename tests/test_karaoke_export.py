@@ -4,7 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from kara_templater import Document
+from kara_templater import CueMarker, Document
 
 from namioto import export_cli, midi, project
 from namioto.channels import Channel
@@ -78,23 +78,35 @@ def test_default_pulses_each_reading_at_its_own_time_and_pivot():
                 assert state.position == baseline.position
 
 
+@pytest.mark.parametrize("guide", ["bars", "dots"])
 @pytest.mark.parametrize("layout", ["single", "double"])
 @pytest.mark.parametrize("show_ruby", [True, False])
 @pytest.mark.parametrize("top", [True, False])
-def test_dots_clear_the_allocated_lyric_row(layout, show_ruby, top):
-    settings = ExportSettings(layout=layout, show_ruby=show_ruby, ruby_ratio=0.75)
+def test_guides_clear_the_allocated_lyric_row(guide, layout, show_ruby, top):
+    settings = ExportSettings(layout=layout, cue=guide, show_ruby=show_ruby, ruby_ratio=0.75, harmony_ratio=0.75,
+                              harmony_tracks="2" if top else "")
     song = prepare_song("@2{名前[なまえ]}", [[(5, 5.5), (5.5, 6), (6, 7)]], settings)
     if top:
-        song = replace(song, sources=(replace(song.sources[0], style="top"),))
+        source, = song.sources
+        body = replace(source.lyrics.body, cues=(CueMarker("lead", "lead", placement="independent"),))
+        song = replace(song, sources=(replace(source, projection=replace(source.lyrics, body=body)),))
     (plan,) = default_scene(song).plans
     line = plan.line
     (cue,) = line.independent
     lyric_top = line.state.position.y + line.layout.bounds.top
-    diameter = settings.font_size * settings.cue_size_ratio + 2 * settings.border
+    host = line.layout.body.characters[0].bounds.height
+    assert host == pytest.approx(settings.font_size * (settings.harmony_ratio if top else 1))
+    guide_size = int(host * settings.cue_size_ratio + 0.5)
+    diameter = guide_size + (2 * settings.border if guide == "dots" else 0)
+    clearance = host / 8
+    if guide == "dots":
+        lamps = [node for node in cue.children if not node.id.endswith("/sung")]
+        centers = sorted(node.state.position.x for node in lamps)
+        assert centers[1] - centers[0] - diameter == pytest.approx(guide_size * 0.3)
     if top:
-        assert cue.state.position.y >= lyric_top + line.layout.bounds.height + settings.cue_gap
+        assert cue.state.position.y == pytest.approx(lyric_top + line.layout.bounds.height + clearance)
     else:
-        assert cue.state.position.y + diameter <= lyric_top - settings.cue_gap
+        assert cue.state.position.y + diameter == pytest.approx(lyric_top - clearance)
     assert settings.margin_v <= cue.state.position.y <= 1080 - settings.margin_v - diameter
 
 

@@ -100,6 +100,35 @@ def test_display_order_can_differ_from_time_order():
     assert default_scene(song).plans[0].placement.display.end == pytest.approx(3.2)
 
 
+@pytest.mark.parametrize(("size", "row_gap", "pitch"), [(80, 0, 96), (104, 0, 124.8), (104, 200, 200)])
+def test_double_layout_row_spacing(size, row_gap, pitch):
+    settings = ExportSettings(font_size=size, row_gap=row_gap)
+    scene = default_scene(prepare_song("あ\nい", [[(1, 2)], [(2, 3)]], settings))
+    upper, lower = scene.plans
+    assert lower.placement.position.y - upper.placement.position.y == pytest.approx(pitch)
+
+
+def test_only_visible_lower_ruby_consumes_interrow_space():
+    song = prepare_song("あ\nい\nう\n青[あお]", [[(1, 2)], [(2, 3)], [(8, 9)], [(9, 9.5), (9.5, 10)]],
+                        ExportSettings(font_size=104, lead_time_ms=500))
+    plans = default_scene(song).plans
+    for upper, lower in (plans[:2], plans[2:]):
+        upper_bottom = upper.placement.position.y + upper.input.bounds.top + upper.input.bounds.height
+        lower_top = lower.placement.position.y + lower.input.bounds.top
+        assert lower_top - upper_bottom == pytest.approx(20.8)
+    assert plans[2].placement.position.y < plans[0].placement.position.y
+
+
+@pytest.mark.parametrize("placement", ["inline", "independent"])
+def test_double_layout_restarts_each_chapter_on_the_left(placement):
+    settings = ExportSettings(cue_placement=placement)
+    song = prepare_song("あ\n---\nい\nう", [[(5, 6)], [(12, 13)], [(14, 15)]], settings)
+    first, restart, following = default_scene(song).plans
+    assert [p.placement.row for p in (first, restart, following)] == [0, 0, 1]
+    assert first.placement.display.end <= restart.placement.display.start
+    assert restart.placement.position.x + restart.input.bounds.left == settings.margin_h
+
+
 def test_excess_simultaneous_rows_fail_instead_of_rendering_offscreen():
     with pytest.raises(ValueError, match="row 0 occupied"):
         generate_ass("\n".join("あ" for _ in range(8)), [[(0, 3)]] * 8)
@@ -116,6 +145,55 @@ def test_guide_dots_are_positioned_independent_events():
     scene = default_scene(prepare_song("あ", [[(5, 5.5)]], ExportSettings()))
     (cue,) = scene.lines[0].independent
     assert cue.lifetime.start == 2 and cue.lifetime.end == 5
+
+
+@pytest.mark.parametrize("layout", ["single", "double"])
+@pytest.mark.parametrize("cue", ["dots", "bars"])
+@pytest.mark.parametrize("preview,fade", [(5000, 200), (100, 2400)])
+def test_inline_count_in_and_lyric_enter_together(layout, cue, preview, fade):
+    settings = ExportSettings(
+        layout=layout, cue=cue, cue_placement="inline", guide_dot_duration_ms=500,
+        lead_time_ms=preview, fade_in_ms=fade,
+    )
+    scene = default_scene(prepare_song("あ\nい", [[(6, 7)], [(14, 15)]], settings))
+    first, following = scene.lines
+    marker, = (node for node in first.children if "/cue:" in node.id)
+    assert first.lifetime.start == marker.lifetime.start == 4.5
+    assert marker.lifetime.end == 6
+    assert first.lifetime.end >= 7
+    assert following.lifetime.start == 14 - max(preview, fade) / 1000
+
+
+@pytest.mark.parametrize("bpm,step_ms", [(120, 1000), (180, 1333)])
+def test_inline_count_in_keeps_automatic_tempo(bpm, step_ms):
+    scene = default_scene(prepare_song("あ", [[(6, 7)]], ExportSettings(cue_placement="inline"), bpm))
+    line, = scene.lines
+    marker, = (node for node in line.children if "/cue:" in node.id)
+    assert marker.lifetime.start == line.lifetime.start == pytest.approx(6 - 3 * step_ms / 1000)
+    assert all(clip.start > 0 for dot in marker.children for clip in dot.animations)
+
+
+@pytest.mark.parametrize("step_ms,lead", [(0, 3.999), (667, 2.001)])
+def test_chapter_marker_fits_at_the_resolved_countdown_boundary(step_ms, lead):
+    settings = ExportSettings(cue_placement="inline", guide_dot_duration_ms=step_ms)
+    early = prepare_song("あ", [[(lead - .001, lead + 1)]], settings, bpm=180)
+    assert not early.sources[0].lyrics.body.cues
+    scene = default_scene(prepare_song("あ", [[(lead, lead + 1)]], settings, bpm=180))
+    marker, = (node for node in scene.lines[0].children if "/cue:" in node.id)
+    assert marker.lifetime.start == pytest.approx(0)
+    assert marker.lifetime.end == pytest.approx(lead)
+
+
+@pytest.mark.parametrize("bpm", [90, 120, 180])
+def test_volume_marker_and_renderer_share_a_four_beat_count_in(bpm):
+    lead = 4 * 60 / bpm
+    settings = ExportSettings(cue="volume", cue_placement="inline")
+    early = prepare_song("あ", [[(lead - 0.01, lead + 1)]], settings, bpm=bpm)
+    assert not early.sources[0].lyrics.body.cues
+    scene = default_scene(prepare_song("あ", [[(lead, lead + 1)]], settings, bpm=bpm))
+    marker, = (node for node in scene.lines[0].children if "/cue:" in node.id)
+    assert marker.lifetime.start == pytest.approx(0)
+    assert marker.lifetime.end == pytest.approx(lead)
 
 
 def test_first_word_too_soon_gets_no_dots():

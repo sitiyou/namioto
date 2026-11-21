@@ -320,6 +320,7 @@ SECTIONS: tuple[Section, ...] = (
             ),
             Field("offset_ms", "int", 0, "Subtitle offset (ms)", low=-2147483647, high=2147483647),
             Field("font_size", "int", 96, "Font size", low=1, high=2147483647),
+            Field("palt", "bool", False, "Horizontal proportional font metrics"),
             Field("spacing", "float", 5, "Font spacing", low=-2147483647, high=2147483647),
             Field("border", "int", 5, "Text border", high=2147483647),
             Field("border_furi", "int", 3, "Ruby border", high=2147483647),
@@ -340,13 +341,13 @@ SECTIONS: tuple[Section, ...] = (
             Field("show_ruby", "bool", True, "Show ruby"),
             Field("ruby_color", "text", "", "Ruby sung colour (empty inherits channel)"),
             Field("cue_color", "text", "", "Guide colour (empty inherits accent)"),
-            Field("cue", "choice", "dots", "Guide symbol", choices=("dots", "bars", "off")),
+            Field("cue", "choice", "dots", "Guide symbol", choices=("dots", "bars", "volume", "off")),
             Field("cue_placement", "choice", "independent", "Guide placement", choices=("independent", "inline")),
             Field(
                 "cue_direction", "choice", "left_to_right", "Guide order", choices=("left_to_right", "right_to_left")
             ),
-            Field("cue_size_ratio", "float", 0.625, "Guide size ratio", low=0.05, high=3),
-            Field("cue_gap", "float", 12, "Guide gap (px)", high=500),
+            Field("cue_size_ratio", "float", 0.5, "Guide size ratio (relative to lyric font size)", low=0.05, high=3),
+            Field("cue_gap", "float", -1, "Guide gap (px, -1 = automatic)", low=-1, high=500),
             Field("harmony_tracks", "text", "", "Harmony channels (0–15, comma-separated)"),
             Field("harmony_ratio", "float", 1, "Harmony font size ratio", low=0.05, high=3),
             Field(

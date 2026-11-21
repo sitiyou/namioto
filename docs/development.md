@@ -4,7 +4,7 @@
 
 ## Source setup
 
-Install uv, Python 3.14 and a C++17 compiler. uv installs kara-templater 1.0.0 from PyPI. Platforms without a compatible wheel also
+Install uv, Python 3.14 and a C++17 compiler. uv installs the locked kara-templater release from PyPI. Platforms without a compatible wheel also
 need its native font/shaping build dependencies. Development and CI both read Python 3.14 from
 `.python-version`; patch releases can update within that series. The project explicitly uses
 PyPI as its default package index so the lockfile does not depend on a developer's global mirror
@@ -19,6 +19,26 @@ Choose `--extra cuda` or `--extra webgpu` instead if needed; see [devices](cli.m
 The native audio extension is built with meson-python and pybind11. Build isolation is disabled
 for this package, so the development group provides its build tools. Editing native sources
 rebuilds the extension on the next import.
+
+### Develop against a local kara-templater checkout
+
+For joint development, place kara-templater at `../kara-templater` and run the following
+from the Namioto checkout. Use the same runtime extra you normally select.
+
+```bash
+uv sync --locked --extra cpu
+uv pip install --python .venv --no-deps -e ../kara-templater
+uv run --no-sync pytest tests/test_karaoke_ass.py
+uv run --no-sync namioto
+```
+
+The editable install picks up Python edits in the sibling checkout. Use `uv run --no-sync`
+while testing them, since a normal sync can reinstall the locked release. To restore the
+release explicitly, run `uv sync --locked --extra cpu`.
+
+The BPM-aware count-in currently requires the checkout containing `CuePreset.resolve_timing`.
+For the coordinated release, publish kara-templater first, update Namioto's runtime version
+pin and lockfile, then test Namioto against that release in a freshly synchronized environment.
 
 ## Tests and lint
 

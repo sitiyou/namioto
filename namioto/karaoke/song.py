@@ -21,6 +21,7 @@ from kara_templater import (
     TextRun,
 )
 
+from namioto.karaoke.cues import lead_preset
 from namioto.karaoke.export_settings import ExportSettings
 from namioto.karaoke.sounds import natural_sounds
 
@@ -204,6 +205,7 @@ def prepare_song(text, spans, settings: ExportSettings, bpm: float = 120) -> Son
     palettes = {}
     palette = settings.channel_colours()
     roles = settings.vocal_roles()
+    lead, _ = lead_preset(settings).resolve_timing(bpm=bpm)
 
     def color(channel):
         return Color.hex("#" + palette.get(channel, settings.overlay_color).lstrip("#"))
@@ -249,7 +251,7 @@ def prepare_song(text, spans, settings: ExportSettings, bpm: float = 120) -> Son
             units.append(LyricUnit(offset, end, tuple(segments)))
             offset = end
         cues = ()
-        if first and settings.cue != "off" and row.first >= 3 * cue_step_ms(settings, bpm):
+        if first and settings.cue != "off" and row.first / 1000 >= lead:
             placement = "inline" if settings.cue_placement == "inline" else "independent"
             cues = (CueMarker("lead", "lead", placement=placement),)
         body = DocumentText(None, (), tuple(runs), (), cues, ())
@@ -265,10 +267,3 @@ def prepare_song(text, spans, settings: ExportSettings, bpm: float = 120) -> Son
         )
         palettes[identity] = tuple(tuple(color(c) for c in channels) for channels in row.segment_colours)
     return Song(tuple(sources), bpm, settings, palettes)
-
-
-def cue_step_ms(settings: ExportSettings, bpm: float) -> int:
-    if settings.guide_dot_duration_ms:
-        return settings.guide_dot_duration_ms
-    duration = round(240000 / bpm)
-    return duration if duration < 1800 else duration // 2

@@ -713,7 +713,7 @@ def test_bpm_candidate_selection(qt_app, endpoint, window, monkeypatch):
 
 def test_game_grid_preview_preserves_raw_notes(qt_app, endpoint, window):
     notes = [{"onset": t, "offset": t + 0.23, "pitch": 65} for t in (0.52, 0.77, 1.02)]
-    window._bridge._game_job = {"job": "sample", "status": "complete", "notes": notes}
+    window._bridge._remember_job({"job": "sample", "status": "complete", "kind": "game", "notes": notes})
     call(qt_app, endpoint, "transport.set_bpm", {"bpm": 120})
     params = {"job": "sample", "cells": 2, "estimate_phase": True}
     grid = call(qt_app, endpoint, "analysis.transcription_grid", params)
@@ -722,3 +722,113 @@ def test_game_grid_preview_preserves_raw_notes(qt_app, endpoint, window):
     assert grid["notes"][0]["offset"] == pytest.approx(0.77)
     assert call(qt_app, endpoint, "analysis.transcription", {"job": "sample"})["notes"] == notes
     assert window.transport.grid_offset.value() == 0
+
+
+def test_phrase_edit_preview_commit_undo_and_stale_revision(qt_app, window, endpoint):
+    def request(method, **params):
+        return call(qt_app, endpoint, method, params)
+
+    request("lyrics.set", text="あいうえ\nお")
+    request("document.add_notes", notes=[{"start": i, "duration": 0.5, "pitch": 62} for i in range(5)])
+    before = request("analysis.phrase", line=0, context=0)
+    # Drop one sound, share a note, and sing the final vowel on two notes.
+    notes = before["notes"][:3]
+    payload = {
+        "line": 0,
+        "revision": before["revision"],
+        "notes": notes,
+        "mapping": [{"sounds": [0], "slots": 0}, {"sounds": [1, 2], "slots": 1}, {"sounds": [3], "slots": 2}],
+    }
+    depth = window.view.undo_stack.index()
+    preview = request("document.apply_phrase", **payload)
+    assert preview["preview"] and preview["next_sound"]["before"] == preview["next_sound"]["after"]
+    assert window.view.undo_stack.index() == depth
+    request("document.apply_phrase", preview=False, **payload)
+    assert window.view.undo_stack.index() == depth + 1
+    after = request("analysis.phrase", line=0, context=0)
+    ids = [n["id"] for n in notes]
+    assert [s["note_ids"] for s in after["sounds"]] == [[], ids[:1], ids[:1], ids[1:]]
+    assert failure(qt_app, endpoint, "document.apply_phrase", payload).code == "conflict"
+    request("undo")
+    assert request("analysis.phrase", line=0, context=0)["revision"] == before["revision"]
+    request("redo")
+    assert request("analysis.phrase", line=0, context=0)["mapping"] == after["mapping"]
+
+
+def test_phrase_joins_both_alignments_and_reuses_game(qt_app, window, endpoint, monkeypatch):
+    from namioto.ui.align_dialog import Aligner
+
+    monkeypatch.setattr(window, "audio_path", "voice.wav")
+    call(qt_app, endpoint, "lyrics.set", {"text": "あ@1{い}う\nえ"})
+
+    def emit(worker):
+        times = [[(t, t + 0.25)] for t in (1, 2, 3)]
+        worker.aligned.emit((times, worker.model, [], [], [[0.9]] * 3, [[None]] * 3))
+
+    monkeypatch.setattr(Aligner, "load", emit)
+    jobs = {}
+    for model in ("mms", "yohane"):
+        job = call(qt_app, endpoint, "analysis.align", {"model": model})["job"]
+        jobs[model] = job
+        for _ in range(100):
+            if call(qt_app, endpoint, "analysis.alignment", {"job": job})["status"] == "complete":
+                break
+    assert call(qt_app, endpoint, "analysis.alignment", {"job": jobs["mms"]})["model"] == "mms"
+    raw = [{"onset": 0.99, "offset": 1.24, "pitch": 64}]
+    window._bridge._remember_job(
+        {"job": "raw", "audio": "voice.wav", "status": "complete", "notes": raw, "kind": "game"}
+    )
+    row = call(qt_app, endpoint, "analysis.phrase", {"line": 0})
+    assert row["alignment_jobs"] == jobs and row["game"]["raw"] == raw
+    assert row["grid"]["cells"] == 2 and row["grid"]["cell_seconds"] == 0.25
+    assert [(s["reading"], s["alignment"]["mms"]["times"][0]) for s in row["sounds"]] == [
+        ("あ", 1),
+        ("う", 2),
+        ("え", 3),
+    ]
+    call(qt_app, endpoint, "lyrics.set", {"text": "お"})
+    assert set(call(qt_app, endpoint, "analysis.phrase", {"line": 0})["missing"]) == {"mms", "yohane"}
+
+
+def test_phrase_rejects_cross_line_edit_and_pages_signal(qt_app, window, endpoint, tmp_path, monkeypatch):
+    import numpy as np
+    import soundfile as sf
+
+    from namioto.analysis.spectrum import NoteSpectrum
+
+    path = tmp_path / "voice.wav"
+    sf.write(path, np.full((8000 * 7, 2), [0.25, 0.5]), 8000)
+    monkeypatch.setattr(window, "audio_path", str(path))
+    window.view.set_spectrum(NoteSpectrum(np.ones((700, 84)), 10, 8000, 1024, 80, 440, 1))
+    call(qt_app, endpoint, "lyrics.set", {"text": "あ@1{い}\nう"})
+    call(
+        qt_app,
+        endpoint,
+        "document.add_notes",
+        {
+            "notes": [
+                {"start": 1, "duration": 0.3, "pitch": 60},
+                {"start": 2, "duration": 0.3, "pitch": 62},
+                {"start": 1, "duration": 0.4, "pitch": 70, "channel": 1},
+            ]
+        },
+    )
+    row = call(qt_app, endpoint, "analysis.phrase", {"line": 0, "start": 0, "end": 6, "spectrum": True, "rms": True})
+    assert row["rms"]["linear_rms"][0] == pytest.approx([0.25, 0.5])
+    assert row["rms"]["next_start"] == 5.12
+    assert row["spectrum"]["next_start"] == 2.56
+    assert len(row["notes"]) == len(row["context_notes"]) == 1
+    payload = {
+        "line": 0,
+        "revision": row["revision"],
+        "preview": False,
+        "mapping": row["mapping"],
+        "notes": [dict(row["notes"][0], start=3)],
+    }
+    depth = window.view.undo_stack.index()
+    assert failure(qt_app, endpoint, "document.apply_phrase", payload).code == "bad_params"
+    assert window.view.undo_stack.index() == depth
+    payload["notes"][0]["start"] = 1.1
+    call(qt_app, endpoint, "document.apply_phrase", payload)
+    harmony = call(qt_app, endpoint, "analysis.phrase", {"line": 0, "channel": 1})
+    assert harmony["notes"][0]["start"] == 1

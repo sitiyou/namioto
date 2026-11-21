@@ -45,6 +45,7 @@ GROUPS = (
             "font",
             "font_size",
             "spacing",
+            "palt",
             "margin_h",
             "margin_v",
             "row_gap",

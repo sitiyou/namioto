@@ -57,6 +57,8 @@ def validate_settings(settings: ExportSettings) -> None:
             colour = value.lstrip("#")
             if len(colour) != 6 or any(char not in "0123456789abcdefABCDEF" for char in colour):
                 raise ValueError(f"{field.name} must be a six-digit RGB colour")
+    if -1 < settings.cue_gap < 0:
+        raise ValueError("cue_gap must be -1 (automatic) or nonnegative")
     if not settings.font or any(char in settings.font for char in ",\n\r"):
         raise ValueError("font must not be empty or contain commas or line breaks")
     if settings.fade_in_ms > settings.lead_time_ms:

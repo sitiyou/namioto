@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import contextlib
+import hashlib
 import json
 import math
 import sys
@@ -116,9 +117,9 @@ class WindowBridge:
         self._tempo_worker = None
         self._tempo_job = {}
         self._game_process = None
-        self._game_job = {}
         self._alignment_worker = None
-        self._alignment_job = {}
+        self._analysis_jobs = {}
+        self._group_changes = False
         self._subtitle_revision = 0
         self._register()
         self._watch()
@@ -352,6 +353,34 @@ class WindowBridge:
             summary="Read a measurement job's status, times in seconds, scores and onset bounds",
             params={"job": "ID returned by analysis.align"},
         )
+        add(
+            "analysis.phrase",
+            self.phrase,
+            summary="Read one voice on a display line and its analysis evidence",
+            params={
+                "line": "zero-based display line",
+                "channel?": "MIDI channel (default 0)",
+                "context?": "neighboring sounds on each side (default 1)",
+                "cells?": "cells per beat (default 2)",
+                "start?": "audio window start in seconds",
+                "end?": "window end in seconds",
+                "spectrum?": "include pitch bands",
+                "rms?": "include per-channel linear RMS",
+            },
+        )
+        add(
+            "document.apply_phrase",
+            self.apply_phrase,
+            summary="Preview or commit reviewed notes and KRC slots",
+            params={
+                "line": "zero-based display line",
+                "channel?": "MIDI channel",
+                "revision": "from analysis.phrase",
+                "notes": "ordered phrase notes in seconds",
+                "mapping": "ordered {sounds, slots} groups",
+                "preview?": "true by default, false commits one undo step",
+            },
+        )
         add("lyrics.get", self.get_lyrics, summary="The open project's lyrics text")
         add(
             "lyrics.set",
@@ -395,7 +424,18 @@ class WindowBridge:
 
     # --- events -----------------------------------------------------------
 
+    @contextlib.contextmanager
+    def group_changes(self):
+        self._group_changes = True
+        try:
+            yield
+        finally:
+            self._group_changes = False
+            self._changed()
+
     def _changed(self, *_args) -> None:
+        if self._group_changes:
+            return
         self._subtitle_revision += 1
         self.server.broadcast("state", self.get_state({}))
 
@@ -952,6 +992,60 @@ class WindowBridge:
             "notes": [{"onset": a, "offset": b, "pitch": pitch} for a, b, pitch in notes],
         }
 
+    def _remember_job(self, job):
+        job["audio_stamp"] = self.audio_stamp()
+        self._analysis_jobs[job["job"]] = job
+        if len(self._analysis_jobs) > 32:
+            del self._analysis_jobs[next(iter(self._analysis_jobs))]
+
+    def audio_stamp(self):
+        path = self.window.audio_path
+        if path:
+            try:
+                stat = Path(path).stat()
+            except OSError:
+                return None
+            return (stat.st_size, stat.st_mtime_ns)
+        return None
+
+    @staticmethod
+    def alignment_key(text, channel):
+        from namioto.lyricmap.channels import split
+
+        part = split(text).get(channel)
+        rows = (
+            []
+            if part is None
+            else [
+                [(ref.line, ref.index, sound.base, sound.reading) for ref, sound in zip(refs, line.sounds, strict=True)]
+                for refs, line in zip(part.refs, part.lines, strict=True)
+            ]
+        )
+        return hashlib.sha256(json.dumps(rows).encode()).hexdigest()
+
+    def _phrase(self, params):
+        from namioto.ui.ipc_phrase import Phrase
+
+        return Phrase(
+            self.window,
+            _whole(params, "line", low=0),
+            _whole(params, "channel", low=0, high=15, required=False, default=0),
+        )
+
+    def phrase(self, params):
+        try:
+            return self._phrase(params).inspect(
+                self, params, _whole(params, "context", low=0, high=32, required=False, default=1)
+            )
+        except KrcError as error:
+            raise IpcError("bad_params", str(error)) from error
+
+    def apply_phrase(self, params):
+        try:
+            return self._phrase(params).apply(self, params)
+        except KrcError as error:
+            raise IpcError("bad_params", str(error)) from error
+
     def start_transcription(self, params: dict) -> dict:
         from PySide6.QtCore import QProcess
 
@@ -965,7 +1059,7 @@ class WindowBridge:
         language = _string(params, "language", required=False, default="universal")
         if size not in GAME_SIZES or (language != "universal" and language not in LANGUAGE_CODES):
             raise IpcError("bad_params", "Unknown GAME size or language")
-        job = {"job": uuid4().hex, "status": "running"}
+        job = {"job": uuid4().hex, "status": "running", "audio": self.window.audio_path, "kind": "game"}
         process = QProcess()
         arguments = ["-m", "namioto.analysis.game", self.window.audio_path, "--json", "--size", size]
         if language and language != "universal":
@@ -988,14 +1082,16 @@ class WindowBridge:
         if self._game_process is not None:
             self._game_process.deleteLater()
         self._game_process = process
-        self._game_job = job
+        self._remember_job(job)
         process.start(sys.executable, arguments)
         return dict(job)
 
     def transcription_result(self, params: dict) -> dict:
-        if _text(params, "job") != self._game_job.get("job"):
+        key = _text(params, "job")
+        job = self._analysis_jobs.get(key, {})
+        if job.get("kind") != "game":
             raise IpcError("unknown_job", "No matching transcription job")
-        return dict(self._game_job)
+        return dict(job)
 
     def start_alignment(self, params: dict) -> dict:
         from namioto.analysis import align
@@ -1012,21 +1108,25 @@ class WindowBridge:
         worker = Aligner(self.window.audio_path, self.window.lyrics_text, model, channel=channel)
         job = {"job": uuid4().hex, "status": "running", "model": model, "channel": channel}
 
+        job.update(audio=self.window.audio_path, lyrics_key=self.alignment_key(self.window.lyrics_text, channel))
+
         def aligned(result):
             times, _, _, _, scores, bounds = result
             job.update(status="complete", times=times, scores=scores, onset_bounds=bounds)
 
         worker.aligned.connect(aligned)
         worker.failed.connect(lambda error: job.update(status="failed", error=error))
-        self._alignment_job = job
+        self._remember_job(job)
         self._alignment_worker = worker
         worker.start()
         return dict(job)
 
     def alignment_result(self, params: dict) -> dict:
-        if _text(params, "job") != self._alignment_job.get("job"):
+        key = _text(params, "job")
+        job = self._analysis_jobs.get(key, {})
+        if "model" not in job:
             raise IpcError("unknown_job", "No matching alignment job")
-        return dict(self._alignment_job)
+        return dict(job)
 
     def get_lyrics(self, _params: dict) -> dict:
         window = self.window

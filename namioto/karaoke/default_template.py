@@ -1,14 +1,11 @@
 """Namioto's default singing wipe, row allocation and tempo count-in."""
 
 from dataclasses import dataclass, replace
+from itertools import groupby
 
 from kara_templater import (
-    AnimationClip,
-    BarsCue,
     Box,
     Color,
-    CueContent,
-    CuePreset,
     Document,
     FadeIn,
     FadeOut,
@@ -18,22 +15,18 @@ from kara_templater import (
     Lifetime,
     LyricHighlights,
     LyricRule,
-    PathObject,
     Placement,
-    RectangleClip,
-    RectangleKeyframes,
     ScalePulse,
     StatePatch,
     Style,
     TimeSpan,
     Track,
     Vec2,
-    VectorPath,
-    VisualState,
     prepare_tracks,
 )
 
-from namioto.karaoke.song import Song, cue_step_ms
+from namioto.karaoke.cues import lead_preset
+from namioto.karaoke.song import Song
 
 
 def _body_interval(_, target):
@@ -42,22 +35,47 @@ def _body_interval(_, target):
     return (TimeSpan(target.singing[0].start + target.delay, target.singing[-1].end + target.delay),)
 
 
+def _chapter_rows(items, chapter, rows):
+    lanes = [[] for _ in range(rows)]
+    for _, section in groupby(items, key=chapter):
+        for index, item in enumerate(section):
+            lanes[index % rows].append(item)
+    return lanes
+
+
 @dataclass(frozen=True, kw_only=True)
 class VocalRows(Layout):
     top: bool = False
 
     def allocate(self, lines, context):
+        # The inline count-in and its host enter as one row. The reserved
+        # interval already includes the countdown computed by the cue preset.
+        lines = tuple(
+            replace(line, display=Lifetime(line.required.start, line.display.end))
+            if any(cue.placement == "inline" for cue in line.cues)
+            else line
+            for line in lines
+        )
+        layout = self
+        if self.gap is not None:
+            height = max((line.bounds.height for line in lines), default=0)
+            layout = replace(self, gap=max(self.gap, height))
         if self.alignment == "alternating":
             # Keep the two fixed horizontal slots through every page handoff.
-            placements = super().allocate(lines, context)
             bottom = context.region.top + context.region.height
-            pitch = max(self.gap, max((line.bounds.height for line in lines), default=0))
+            lines = tuple(
+                replace(line, lead=True) if i and lines[i - 1].tags != line.tags else line
+                for i, line in enumerate(lines)
+            )
             result = []
+            placements = super().allocate(lines, context)
+            offsets = layout.row_offsets(lines, placements, from_bottom=True)
             for line, placement in zip(lines, placements, strict=True):
-                y = bottom - line.bounds.height - (self.rows - 1 - placement.row) * pitch
+                y = bottom - line.bounds.height - offsets[line.id]
                 if y < context.region.top:
                     raise ValueError(f"subtitle row {line.id} does not fit vertically")
-                result.append(replace(placement, position=Vec2(placement.position.x, y - line.bounds.top)))
+                position = Vec2(placement.position.x, y - line.bounds.top)
+                result.append(replace(placement, position=position))
             return tuple(result)
         lanes = []
         chapter = None
@@ -76,8 +94,6 @@ class VocalRows(Layout):
                 lanes.append([])
             lanes[row].append(line)
         result = []
-        height = max((line.bounds.height for line in lines), default=0)
-        pitch = max(self.gap, height)
         area = context.region
         for row, lane in enumerate(lanes):
             for i, line in enumerate(lane):
@@ -86,68 +102,25 @@ class VocalRows(Layout):
                 if i:
                     start = max(start, min(lane[i - 1].display.end, line.required.start))
                 if self.top:
-                    y = area.top + row * pitch
+                    y = area.top
                 else:
-                    slot = self.rows - 1 - row if row < self.rows else row
-                    y = area.top + area.height - line.bounds.height - slot * pitch
-                if y < area.top or y + line.bounds.height > area.top + area.height:
-                    raise ValueError(f"subtitle row {line.id} does not fit vertically")
+                    y = area.top + area.height - line.bounds.height
                 align = self.alignment[row % self.rows] if isinstance(self.alignment, tuple) else self.alignment
                 fraction = {"left": 0, "center": 0.5, "right": 1}[align]
                 x = area.left + (area.width - line.bounds.width) * fraction
                 pos = Vec2(x - line.bounds.left, y - line.bounds.top)
                 result.append(Placement(line.id, pos, Lifetime(start, end), row))
+        offsets = layout.row_offsets(lines, tuple(result), from_bottom=not self.top)
+        bounds_by_id = {line.id: line.bounds for line in lines}
+        for i, placement in enumerate(result):
+            offset = offsets[placement.id] if self.top else -offsets[placement.id]
+            position = placement.position + Vec2(0, offset)
+            bounds = bounds_by_id[placement.id]
+            y = position.y + bounds.top
+            if y < area.top or y + bounds.height > area.top + area.height:
+                raise ValueError(f"subtitle row {placement.id} does not fit vertically")
+            result[i] = replace(placement, position=position)
         return tuple(result)
-
-
-def _dot_countdown(settings, size, sung):
-    """Three outlined lamps fill on successive beats and leave together."""
-
-    def draw(context):
-        lamps = []
-        radius = size / 2
-        pitch = size * 1.3
-        path = VectorPath.circle(radius)
-        reach = radius + settings.border + 1
-        anchor = context.lifetime.start
-        length = context.lifetime.end - anchor
-        fade_in = min(settings.fade_in_ms / 1000, length / 2)
-        fade_out = min(settings.fade_out_ms / 1000, length - fade_in)
-        fades = tuple(
-            clip
-            for clip in (
-                AnimationClip(0, fade_in, FadeIn()) if fade_in else None,
-                AnimationClip(length - fade_out, fade_out, FadeOut()) if fade_out else None,
-            )
-            if clip is not None
-        )
-        for i, (start, end) in enumerate(zip(context.steps[:-1], context.steps[1:], strict=True)):
-            slot = i if settings.cue_direction == "left_to_right" else len(context.steps) - 2 - i
-            state = VisualState(
-                position=Vec2(settings.border + radius + slot * pitch, settings.border + radius),
-                fill=Color.hex("#" + settings.base_color.lstrip("#")),
-                border=settings.border,
-                outline=Color.hex("#" + settings.base_outline_color.lstrip("#")),
-            )
-            base = PathObject(
-                id=f"{context.id}/dot-{i}", path=path, state=state, lifetime=context.lifetime, animations=fades
-            )
-            keys = RectangleKeyframes(
-                ((start - anchor, (-reach, -reach, -reach, reach)), (end - anchor, (-reach, -reach, reach, reach)))
-            )
-            lit = replace(
-                base,
-                id=base.id + "/sung",
-                layer=1,
-                state=replace(state, fill=sung, outline=Color.hex("#" + settings.overlay_outline_color.lstrip("#"))),
-                clip=RectangleClip(-reach, -reach, reach, reach, space="local", deform=keys),
-            )
-            lamps.extend((base, lit))
-        return CueContent(
-            tuple(lamps), size + (len(context.steps) - 2) * pitch + 2 * settings.border, size + 2 * settings.border
-        )
-
-    return draw
 
 
 def default_scene(song: Song):
@@ -179,20 +152,8 @@ def default_scene(song: Song):
             )
         )
     document = Document.create(width=1920, height=1080, styles=tuple(styles))
-    duration = 3 * cue_step_ms(settings, song.bpm) / 1000
-    cue_color = rgb(settings.cue_color or settings.overlay_color)
-    cue_size = settings.font_size * settings.cue_size_ratio
-    cue = (
-        BarsCue(width=cue_size * 2, height=cue_size, color=cue_color, direction=settings.cue_direction)
-        if settings.cue == "bars"
-        else _dot_countdown(settings, cue_size, cue_color)
-    )
-    preset = CuePreset(
-        factory=cue,
-        lead=duration,
-        duration=duration,
-        gap=settings.cue_gap,
-    )
+    preset = lead_preset(settings)
+    lead, duration = preset.resolve_timing(bpm=song.bpm)
     base = StatePatch(fill=rgb(settings.base_color), outline=rgb(settings.base_outline_color))
     sung = StatePatch(outline=rgb(settings.overlay_outline_color))
     sources = {s.id: s for s in song.sources}
@@ -211,10 +172,12 @@ def default_scene(song: Song):
             identity: [min(settings.fade_in_ms / 1000, start), settings.fade_out_ms / 1000]
             for identity, start, _ in windows
         }
-        for (previous, _, end), (following, start, _) in zip(windows, windows[2:], strict=False):
-            room = max(0, start - end)
-            fades[previous][1] = min(fades[previous][1], room)
-            fades[following][0] = min(fades[following][0], max(0, start - (end + fades[previous][1])))
+        for lane in _chapter_rows(windows, lambda item: sources[item[0]].actor, 2):
+            for (previous, _, end), (following, start, _) in zip(lane, lane[1:], strict=False):
+                cue_lead = lead if sources[following].lyrics.body.cues else 0
+                room = max(0, start - cue_lead - end)
+                fades[previous][1] = min(fades[previous][1], room)
+                fades[following][0] = min(fades[following][0], max(0, start - (end + fades[previous][1])))
 
     def decorate(line):
         source = sources[line.id.split("/", 1)[1]]
@@ -262,6 +225,8 @@ def default_scene(song: Song):
         entrance, exit_duration = fades.get(
             source.id, (min(settings.fade_in_ms / 1000, source.display.start), settings.fade_out_ms / 1000)
         )
+        if any(cue.placement == "inline" for cue in source.lyrics.body.cues):
+            entrance = min(entrance, duration)
         rules = []
         if entrance:
             rules.append(LyricRule("line", "enter", FadeIn(), duration=entrance))
@@ -281,7 +246,7 @@ def default_scene(song: Song):
         allocation = VocalRows(
             rows=rows,
             top=top,
-            gap=settings.row_gap or settings.font_size * 1.5,
+            gap=settings.row_gap or None,
             alignment=settings.harmony_align if top else "alternating" if rows == 2 else "center",
         )
         tracks.append(
@@ -298,4 +263,8 @@ def default_scene(song: Song):
                 effects=(decorate,),
             )
         )
-    return prepare_tracks(document, inputs=song.sources, tracks=tuple(tracks))
+    if settings.palt:
+        if not hasattr(Track, "palt"):
+            raise ValueError("Proportional font metrics require a kara-templater build with Track.palt support")
+        tracks = [replace(track, palt=True) for track in tracks]
+    return prepare_tracks(document, inputs=song.sources, tracks=tuple(tracks), bpm=song.bpm)
