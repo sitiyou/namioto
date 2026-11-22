@@ -8,10 +8,10 @@ For adjacent notes of the same pitch, check the **second onset** for a fresh con
 
 Use an estimated tempo and subdivision phase to flag unusually close attacks for inspection. Keep supported pickups and expressive timing at their performed positions. Compare each phrase's displayed notes with its sung attacks and stable pitch changes; a song-wide note count or grid-error statistic alone cannot establish a good transcription. For a reported visual defect, locate the exact time and verify both the saved MIDI and a delivered video frame there. Also check a rapid phrase, a sustained note and a repeated refrain.
 
-For a requested pitch lane, use the [bundled visualizer](../scripts/midi_visualizer.py) from a configured Namioto source checkout. Supply a reviewed lead-melody MIDI on the lyric timeline and the exported single-pass Namioto lyric hook. The script writes a separate combined hook for this edition. Run it directly on Windows or Unix:
+For a requested pitch lane, use the [bundled visualizer](../scripts/midi_visualizer.py) from a configured Namioto source checkout. Supply a reviewed lead-melody MIDI on the lyric timeline and the compatible single-pass lyric hook supplied by the rendering stage. The script writes a separate combined hook for this edition. Run it directly on Windows or Unix:
 
 ```sh
 uv run python skills/namioto-nicokara/scripts/midi_visualizer.py "song.mid" "lyrics.hook" --fps 60 --out "lyrics-with-pitch.hook"
 ```
 
-Match the hook and render frame rates. Add `--wavetone` if the MIDI export includes the four-beat WaveTone lead-in. Preview the combined hook using the same renderer and check that note attacks reach the marker at the corresponding sung syllables. This helper targets the Namioto single-pass hook format.
+Match the hook and render frame rates. Add `--wavetone` if the MIDI export includes the four-beat WaveTone lead-in. Preview the combined hook using the same renderer and check that note attacks reach the marker at the corresponding sung syllables. Check compatibility with the supplied hook before combining it.

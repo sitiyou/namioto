@@ -159,6 +159,7 @@ def main(argv: list[str] | None = None) -> int:
             krc,
             data,
             settings=settings,
+            project_colors=dict(enumerate(session.get("project_colors", []))),
             wavetone=wavetone,
             format=format,
             template=template,

@@ -309,3 +309,28 @@ def test_atomic_output_failure_preserves_previous_ass(exports, tmp_path, monkeyp
         subtitle.export_song(path, krc, data)
     assert path.read_text() == "previous ASS"
     assert not list(tmp_path.glob("*.tmp"))
+
+
+def test_semantic_external_recipe_keeps_project_facts_and_owns_design():
+    from namioto.karaoke.templates import Registry
+    from namioto.params import Field
+
+    registry = Registry()
+    registry.add(id="outside", title="External design", parameters=(Field("font", "text", "Independent", "Font"),),
+                 semantic=True, build=lambda song, values: (song, values))
+    data = midi.to_bytes((Channel(channel=0),), (project.Note(4, 1, 60, 0),), 120)
+    recipe = registry.get("outside")
+    other = ExportSettings(show_ruby=False, cue="off", font="Changed", channel_colors={0: "ABCDEF"})
+    def build(settings, values=None):
+        return subtitle.build_template_scene(recipe, "木[き]", data, settings=settings, parameters=values,
+                                             project_colors={0: "DECAFB"})
+    original = build(ExportSettings())
+    assert build(other) == original
+    song, values = original
+    assert song.sources[0].chapter == "0"
+    assert values == {"font": "Independent"}
+    assert song.sources[0].lyrics.units[0].segments[0].ruby
+    assert song.channel_colors == {0: "DECAFB"}
+    assert not song.sources[0].lyrics.body.cues
+    assert build(other, {"font": "Alternate"}) == (song, {"font": "Alternate"})
+    assert other.font == "Changed" and not other.show_ruby

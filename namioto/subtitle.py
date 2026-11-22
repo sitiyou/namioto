@@ -19,7 +19,7 @@ from namioto import settings as store
 from namioto.karaoke import ExportSettings
 from namioto.karaoke.default_template import default_scene
 from namioto.karaoke.output import encode_ass
-from namioto.karaoke.song import Song, prepare_song
+from namioto.karaoke.song import Song, TemplateSong, prepare_song
 from namioto.karaoke.sounds import natural_sounds
 from namioto.lyricmap import constraints, faithful
 from namioto.lyricmap.channels import split
@@ -65,8 +65,13 @@ def validate_settings(settings: ExportSettings) -> None:
         raise ValueError("fade_in_ms must not exceed lead_time_ms")
 
 
-def build_song(krc: str, data: bytes, *, settings: ExportSettings | None = None, wavetone: bool = False) -> Song:
+def build_song(
+    krc: str, data: bytes, *, settings: ExportSettings | None = None, wavetone: bool = False, semantic: bool = False
+) -> Song | TemplateSong:
     settings = settings or ExportSettings()
+    if semantic:
+        settings = ExportSettings(offset_ms=settings.offset_ms, track_style=settings.track_style,
+                                  channel_colors=settings.channel_colors)
     validate_settings(settings)
     lines = natural_sounds(krc)
     if not lines or not any(line.sounds for line in lines):
@@ -99,7 +104,7 @@ def build_song(krc: str, data: bytes, *, settings: ExportSettings | None = None,
         for refs, row in zip(part.refs, rows, strict=True):
             for ref, span in zip(refs, row, strict=True):
                 spans[ref.line][ref.index] = span
-    return prepare_song(krc, spans, settings, imported.bpm)
+    return prepare_song(krc, spans, settings, imported.bpm, semantic=semantic)
 
 
 def check_paths(outputs: Sequence[str | Path], inputs: Sequence[str | Path] = ()) -> None:
@@ -122,6 +127,18 @@ def export_path(path: str | Path, format: str) -> Path:
     return target if target.suffix.lower() == "." + format else target.with_name(target.name + "." + format)
 
 
+def build_template_scene(recipe, krc, data, *, settings=None, parameters=None, wavetone=False, project_colors=None):
+    """Resolve the same song and parameter snapshot for fragment and whole-song exports."""
+    settings = settings or ExportSettings()
+    values = recipe.resolve(parameters or {}, settings)
+    if recipe.id == "default":
+        settings = replace(settings, **values)
+    if recipe.semantic:
+        settings = replace(settings, channel_colors=project_colors or {})
+    song = build_song(krc, data, settings=settings, wavetone=wavetone, semantic=recipe.semantic)
+    return recipe.build(song, values)
+
+
 def export_song(
     path: str | Path,
     krc: str,
@@ -130,6 +147,7 @@ def export_song(
     settings: ExportSettings | None = None,
     wavetone: bool = False,
     template: str = "default",
+    project_colors: Mapping[int, str] | None = None,
     parameters: Mapping | None = None,
     scripts: Sequence[str | Path] = (),
     format: str = "ass",
@@ -145,13 +163,9 @@ def export_song(
     recipe = load_templates(scripts).get(template)
     if format not in recipe.formats:
         raise ValueError(f"{template}: unsupported format {format}")
-    settings = settings or ExportSettings()
-    values = recipe.resolve(parameters or {}, settings)
-    if template == "default":
-        settings = replace(settings, **values)
-    song = build_song(krc, data, settings=settings, wavetone=wavetone)
     try:
-        scene = recipe.build(song, values)
+        scene = build_template_scene(recipe, krc, data, settings=settings, parameters=parameters, wavetone=wavetone,
+                                     project_colors=project_colors)
         target.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile(dir=target.parent, suffix=target.suffix, delete=False) as stream:
             temp = Path(stream.name)

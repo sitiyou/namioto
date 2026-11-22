@@ -1184,6 +1184,7 @@ class MainWindow(QMainWindow):
                 krc,
                 data,
                 settings=settings or self._export_settings(),
+                project_colors=dict(enumerate(self.view.lyric_colors)),
                 format=format,
                 template=template,
                 parameters=parameters,

@@ -20,3 +20,20 @@ namioto-cli export --script examples/cool_ink.py --template cool-ink \
 ```
 
 File exports load the scripts named by `--script`. In session mode the CLI reuses the editor’s selected recipe, its parameters and scripts remembered locally for that project. Use `--script` to supply your own copy or `--template default` to select the built-in recipe. Watch mode reloads the selected scripts on edits. A failed build reports the error and preserves the previous file.
+
+## External designs and interactive review
+
+Register a new independent design with `semantic=True`. The builder receives a
+`TemplateSong` with complete timed body and ruby, BPM, chapter (source actor),
+track numbers, per-segment colour channels and the supplied channel palette.
+Add your own cue markers and presets. Export offset applies once to the lyrics.
+Declare font, palette, animations and other design values as recipe fields.
+A fragment compiler may supply `song.preview_interval` in original song seconds.
+Keep the layout and animation context required to match the same frames of a
+whole-song export. An omitted interval requests the full design.
+
+For renderers supporting live palette changes, `palette_parameters=("ink",)`
+declares that this colour replaces its unique default RGB everywhere that colour
+is painted. Use ordinary colour fields for derived colours or shared defaults.
+Existing scripts registered without semantic mode receive the legacy Song and
+editor settings. The built-in recipe continues to use its own editor preferences.

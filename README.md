@@ -43,7 +43,7 @@ separated vocal. These previews show the setup dialogs, not completed inference 
 Export the mapped lyrics as ASS or a libplacebo hook, with timing, font, layout and per-channel highlight options.
 See the [lyrics guide](docs/lyrics.md) for editing and export.
 
-For agent-assisted production, the repository includes a [karaoke production skill](skills/namioto-nicokara/SKILL.md). It covers timing lyrics through editor IPC, choosing line breaks and count-ins, and verifying the rendered subtitles.
+For agent-assisted production, the repository includes a [karaoke production skill](skills/namioto-nicokara/SKILL.md). It covers timing lyrics through editor IPC, verifying note and lyric alignment, and handing off the timed song to a template.
 
 ![ASS subtitle export options](docs/ass-export.png)
 

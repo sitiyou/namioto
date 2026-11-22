@@ -63,10 +63,6 @@ class VocalRows(Layout):
         if self.alignment == "alternating":
             # Keep the two fixed horizontal slots through every page handoff.
             bottom = context.region.top + context.region.height
-            lines = tuple(
-                replace(line, lead=True) if i and lines[i - 1].tags != line.tags else line
-                for i, line in enumerate(lines)
-            )
             result = []
             placements = super().allocate(lines, context)
             offsets = layout.row_offsets(lines, placements, from_bottom=True)
@@ -101,10 +97,7 @@ class VocalRows(Layout):
                 end = min(line.display.end, lane[i + 1].required.start if i + 1 < len(lane) else line.display.end)
                 if i:
                     start = max(start, min(lane[i - 1].display.end, line.required.start))
-                if self.top:
-                    y = area.top
-                else:
-                    y = area.top + area.height - line.bounds.height
+                y = area.top if self.top else area.top + area.height - line.bounds.height
                 align = self.alignment[row % self.rows] if isinstance(self.alignment, tuple) else self.alignment
                 fraction = {"left": 0, "center": 0.5, "right": 1}[align]
                 x = area.left + (area.width - line.bounds.width) * fraction

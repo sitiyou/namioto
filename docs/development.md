@@ -36,9 +36,9 @@ The editable install picks up Python edits in the sibling checkout. Use `uv run 
 while testing them, since a normal sync can reinstall the locked release. To restore the
 release explicitly, run `uv sync --locked --extra cpu`.
 
-The BPM-aware count-in currently requires the checkout containing `CuePreset.resolve_timing`.
-For the coordinated release, publish kara-templater first, update Namioto's runtime version
-pin and lockfile, then test Namioto against that release in a freshly synchronized environment.
+Namioto uses kara-templater 1.0.1 for BPM-aware count-ins and structured lyric
+layout. When upgrading, update the runtime pin and lockfile together and run the
+karaoke tests against the published wheel.
 
 ## Tests and lint
 

@@ -12,7 +12,7 @@ from kara_templater import Color, Scene
 
 from namioto.karaoke.default_template import default_scene
 from namioto.karaoke.export_settings import ExportSettings
-from namioto.karaoke.song import Song
+from namioto.karaoke.song import Song, TemplateSong
 from namioto.params import Field
 from namioto.utils import write_json
 
@@ -51,8 +51,10 @@ class Template:
     title: str
     formats: tuple[str, ...]
     parameters: tuple[Field, ...]
-    build: Callable[[Song, dict], Scene]
+    build: Callable[[Song | TemplateSong, dict], Scene]
     validate: Callable[[dict], None] | None = None
+    semantic: bool = False
+    palette_parameters: tuple[str, ...] = ()
 
     def resolve(self, overrides: Mapping, settings: ExportSettings | None = None) -> dict:
         result = {}
@@ -83,7 +85,10 @@ class Registry:
         self.origins: dict[str, str] = {}
         self.source = "built-in"
 
-    def add(self, *, id, title, build, formats=("ass", "hook"), parameters=(), validate=None):
+    def add(
+        self, *, id, title, build, formats=("ass", "hook"), parameters=(), validate=None,
+        semantic=False, palette_parameters=(),
+    ):
         if not id or id in self.templates:
             raise ValueError(f"duplicate or empty template {id!r}: {self.origins.get(id)} and {self.source}")
         fields = tuple(parameters)
@@ -91,7 +96,12 @@ class Registry:
             raise ValueError(f"{id}: invalid parameters or builder")
         if not formats or set(formats) - {"ass", "hook"}:
             raise ValueError(f"{id}: invalid formats")
-        template = Template(id, title, tuple(formats), fields, build, validate)
+        palette = tuple(palette_parameters)
+        if any(name not in {f.name for f in fields if f.kind == "color"} for name in palette):
+            raise ValueError(f"{id}: palette parameters must name colour fields")
+        if len({str(f.default).lstrip("#").upper() for f in fields if f.name in palette}) != len(palette):
+            raise ValueError(f"{id}: palette parameters require distinct default colours")
+        template = Template(id, title, tuple(formats), fields, build, validate, semantic, palette)
         template.resolve({})
         self.templates[id] = template
         self.origins[id] = self.source

@@ -1,9 +1,11 @@
 ---
 name: namioto-nicokara
-description: Author and verify timed karaoke lyrics with Namioto. Use its editor IPC to inspect vocal alignment, pitch and note mapping, save an editable project, and render a libplacebo hook or an ASS fallback.
+description: Author and verify timed karaoke lyrics with Namioto. Use its editor IPC to inspect vocal alignment, pitch and note mapping, and deliver editable timing sources for kara-templater.
 ---
 
 # Author karaoke with Namioto
+
+Namioto owns the editable notes, readings, chapter boundaries and lyric-to-note mapping. Its deliverable in this workflow is a timed song input. All visual templates, including the basic design, run in the kara-templater stage.
 
 ## Start with the files the user has
 
@@ -11,8 +13,8 @@ Work from the audio, lyric text and any MV or background footage supplied by the
 
 | Available input | Next step |
 | --- | --- |
-| An editable Namioto project (`.nto`) | Open it with its referenced audio available. Review its notes and lyric mapping, then export. |
-| Mapped Namioto KRC lyrics and matching MIDI | Go straight to file export. For ordinary MIDI, run `uv run namioto-cli export --krc "song.krc" --midi "song.mid" --no-wavetone --out "lyrics.hook" --fps 60` from a configured source checkout. Omit `--no-wavetone` for MIDI with a WaveTone lead-in. |
+| An editable Namioto project (`.nto`) | Open it with its referenced audio available. Review its notes and lyric mapping, then save the timing handoff. |
+| Mapped Namioto KRC lyrics and matching MIDI | Verify the recording, MIDI lead-in convention and lyric mapping, then prepare the song input below. |
 | A recording and plain lyrics | Open the recording, prepare the lyrics with readings, and draw or import melody notes. Map the lyrics to those notes in the editor. If an isolated vocal and suitable models are available, use the analysis steps below to refine timing. |
 
 A full mix can serve as the timeline for manual editing. Vocal separation is optional. Use an existing stem or a separator available to the user if the task calls for one. A backing track is necessary only for an instrumental edition. Background video and an encoder enter the workflow when the user asks for a finished video; an editable project or standalone subtitle can be delivered on its own.
@@ -21,9 +23,9 @@ A full mix can serve as the timeline for manual editing. Vocal separation is opt
 
 Use the final recording as the time reference. If a separate vocal is available, check its start and duration against that recording before aligning lyrics. When deriving a vocal from a mix and an official instrumental, measure their offset in several passages and check the residual during instrumental breaks. Different masters may require a vocal separation model.
 
-For the packaged GUI, open the recording or project, use the lyrics editor to import or edit the KRC and review the mapping, then choose **Export karaoke…**. On Windows, extract the full release archive and launch `namioto.exe` from the extracted application folder. The release includes the editor; the command examples here use a [configured source checkout](../../docs/development.md#source-setup). See the [lyrics guide](../../docs/lyrics.md) for the manual route.
+For the packaged GUI, open the recording or project, use the lyrics editor to import or edit the KRC and review the mapping, then save the editable project. On Windows, extract the full release archive and launch `namioto.exe` from the extracted application folder. The release includes the editor; the command examples here use a [configured source checkout](../../docs/development.md#source-setup). See the [lyrics guide](../../docs/lyrics.md) for the manual route.
 
-For agent control from a source checkout, prefix Namioto commands with `uv run`. Start `uv run namioto` in one terminal and issue control commands in another. These entry points work directly from PowerShell or a Unix shell. A project Makefile or a particular vocal separator is optional. List sessions with `namioto-ctl --list` and select one explicitly with `--instance ID`. Inspect `state.get` before editing. Use a fresh session for a new song. Use `project.open` to resume an existing project; `audio.open` starts a new document. Query `methods` to see what the running version supports.
+For agent control from a source checkout, prefix Namioto commands with `uv run`. Run agent-owned IPC editors headlessly as a background process with the Qt platform set to `offscreen` in that process only (POSIX example: `QT_QPA_PLATFORM=offscreen uv run namioto --ipc >namioto-ipc.log 2>&1 &`). Select the newly started instance and confirm the loaded project with `state.get`. File-mode CLI analysis can run directly without an editor. These entry points work directly from PowerShell or a Unix shell. A project Makefile or a particular vocal separator is optional. List sessions with `namioto-ctl --list` and select one explicitly with `--instance ID`. Inspect `state.get` before editing. Use a fresh session for a new song. Use `project.open` to resume an existing project; `audio.open` starts a new document. Query `methods` to see what the running version supports.
 
 ## Prepare display lines in KRC
 
@@ -46,46 +48,28 @@ Prepare the KRC readings and submit them with `lyrics.set`. Run `analysis.align`
 | Phase-aligned GAME grid | Place ordinary attacks on the supported eighth-note grid and count cells across held notes. Small differences in a singer’s attack can share the same musical beat. Recheck conspicuous departures in the context of the phrase. |
 | Raw GAME notes | Recover attacks or rests lost in quantization. Inspect clusters of short fragments around one vowel. A continuous pitch or vibrato with one attack usually belongs to one note. A distinct repeated attack can justify another note even at the same pitch. |
 | Vocal spectrum and energy | Use `spectrum.frames start=SECONDS count=N` around disputed boundaries. Follow harmonic bands for pitch changes, successive attacks and voiced releases. Short-window RMS and a spectrogram help locate energy rises, rests and consonants. Breath, vibrato and instrumental bleed can all produce short GAME fragments. Compare the vocal with the mix and listen through both neighboring syllables. [Audio inspection script](scripts/inspect_audio.py) |
-| Lyric alignment | Use the reading sequence to identify which sound owns each note. When a word falls far from the heard phrase, locate the last clear sound before it and the next clear sound after it, then resolve the intervening attacks in order. Check that the next word still maps correctly. |
+| Lyric alignment | Use MMS for sound ownership and candidate attacks only. Never use its end timestamps to estimate, corroborate or break ties on NOTE releases. Use the reading sequence to identify which sound owns each note. When a word falls far from the heard phrase, locate the last clear sound before it and the next clear sound after it, then resolve the intervening attacks in order. Check that the next word still maps correctly. |
 
 Start with one note per sung sound. For example, if GAME splits a held vowel into three fragments and the spectrum shows continuous harmonics with no new attack or distinct pitch step, keep one note through its audible release. If the vowel carries two clear melodic steps, keep both pitches and give that sound two NOTE slots. Use a shared group for sounds sung together on one note and zero slots for an unsung unit. Preserve displayed punctuation and symbols such as ☆, ♥ and ♪, and check that the following sound still owns its intended note.
 
 Keep the eighth-note grid for passages it explains. Inspect shorter candidates for leakage, unvoiced sounds and ornaments before assigning extra slots. Use a finer subdivision locally when repeated fast syllables or distinct melodic steps support it. Preserve a clearly performed pickup, delayed attack or early release where snapping would obscure the phrasing. Leave breathing gaps. For an echo or overlapping harmony, review the mapping on its own channel. [Backing vocals and sung responses](references/backing-vocals.md)
 
+When a wipe jumps forward and then stalls, inspect adjacent rendered frames around the reported song time, accounting for the export lead. Check both the attack and the duration of each affected NOTE. A short CTC token window can identify a vowel inside a much longer sung note. Estimate the release independently on the vocal spectrogram. Follow the harmonic decay and compare it with raw GAME note-offs and surrounding vocal energy. Carry a continuous gesture into the next attack across short consonant closures. Preserve an audible release followed by a distinct re-entry, including within a lyric line. Extend through the supported release, preserving audible rests and the next attack. During initial import, flag very short notes followed by long gaps within a voiced phrase; inspect the audio before changing them. Recheck the saved MIDI and the same frames in the delivery renderer.
+
 For a local revision, pass the phrase revision, ordered notes and sound groups to `document.apply_phrase`. Check the preview and next sound, then submit the original edit with `preview=false`. Read the phrase again on a conflict. [Phrase IPC example](../../docs/cli.md#review-and-edit-one-phrase). For a full initial import, `document.replace_notes` accepts the entire note list in seconds, including all channels. Save with `project.save`, wait for `subtitle.pending` to clear in `state.get`, then reopen and check the saved BPM and grid offset. Compare the KRC and MIDI from `project.export_source` with the reviewed notes, including short notes, shared groups, zero-count units and phrase handoffs.
 
-## Mark vocal entrances with count-ins
+## Hand off the timed song to kara-templater
 
-Listen or inspect the vocal timeline for the first entrance and re-entries after instrumental breaks. Mark the pickup itself, even if it precedes the downbeat. With Namioto’s default template, place a KRC chapter separator (`---` on its own line) before each selected re-entry. Ordinary line and stanza breaks serve lyric phrasing. In the default double-row layout, the first main-vocal line of each chapter starts on the left and carries a lead cue when there is enough pre-roll. Check each re-entry in the rendered video, particularly after a chapter with an odd number of main-vocal lines.
+Mark the first entrance and re-entries after instrumental breaks in KRC, using a chapter separator (`---` on its own line) before each new section. Check the actual pickup and preserve its NOTE time. The chapter ID travels with each structured lyric source so a template can restart its row order or add a count-in.
 
-Carry the confirmed BPM through export. For file exports, verify the MIDI tempo against the audio estimate; for session exports, verify the saved project tempo and exported MIDI. Use `--guide-dot-duration-ms 0` for automatic timing. Check saved settings and build scripts for a fixed millisecond override. In an external template, pass `song.bpm` to `prepare_tracks` and check available pre-roll with the actual cue preset’s `resolve_timing(bpm=song.bpm)`. For example, at 120 BPM the `--cue volume` preset flashes three times, once per beat, and fills its columns during the fourth beat. Audition the first entrance and each re-entry against the track, allowing for the chosen subtitle lead. File export supplies one song BPM; a tempo change needs section-specific timing in the template.
-
-On the delivery render, inspect the start, middle and end of each planned count-in plus the first sung frame. Verify the symbols visibly progress toward the vocal entrance, clear the lyric on time in each requested edition. Preserve the singer’s note times when adding chapter or line breaks.
-
-## Choose a template and render
-
-Use the built-in default when the user gives no effect direction. For custom effects, author a project-local template using the default as a reference for timing, layout and cues. Select it explicitly for each output with `--script template.py --template RECIPE_ID`. Review the selected recipe’s parameters with `namioto-cli export --template-help` (add `--script` and `--template` for a trusted custom recipe). For palette, typography, layout, effects or a new builder, follow the kara-templater checkout’s `skills/kara-templater/SKILL.md`. [Template authoring skill](https://github.com/sitiyou/python-kara-templater/blob/main/skills/kara-templater/SKILL.md) · [Loading templates in Namioto](../../docs/karaoke-templates.md)
-
-For a custom Namioto recipe, start from the [registration example](../../examples/cool_ink.py). Its script exposes `register(registry)`. Its builder receives `(song, values)` and returns a Scene. When adapting a kara-templater design, pass the song’s timed `song.sources` to the tracks so the export retains readings, voice roles and chapter cues.
-
-For sing-along delivery, start with the sung highlight about 100 ms early. With the default template use `--offset-ms -100` at export. Apply this once, keeping project notes on the musical timeline. Set line preview and count-in duration separately so the singer can read the phrase in advance. Check the visible sweep against the final mix at an entrance, a fast handoff and a late verse. Tune the lead for comfortable anticipation. If only one word feels late, revisit its source mapping before shifting the whole subtitle.
-
-Prefer a standalone libplacebo hook when the template and delivery path support it. Export at the delivery frame rate and render a short singing passage through the actual playback or encoding chain. Verify the time origin, aspect ratio, highlighted text, ruby and any shader effects before rendering the full song.
+Save the editable project. Export one verified revision to a new directory with the [handoff writer](scripts/export_template_input.py). From the source checkout:
 
 ```sh
-namioto-cli export --session --instance ID --out lyrics.hook --fps 60 --offset-ms -100
+uv run namioto-ctl --instance ID project.export_source | uv run python skills/namioto-nicokara/scripts/export_template_input.py song-input --offset-ms -100
 ```
 
-Replace the example frame rate with the target rate. Export ASS as a fallback when the template is ASS-only, the player requires ASS, or the target chain cannot render the hook correctly. Preview the fallback on its target renderer. A shared text-layout error can affect both backends and needs its own diagnosis.
+The writer checks the mapping and saves the matched `lyrics.krc`, decoded `vocal.mid` and an importable `song_input.py`. It carries the snapshot’s MIDI lead-in convention, track roles and project colours. Choose the signed offset for the recording (typically −100 ms for sing-along delivery); leave project notes on the musical timeline. With an existing verified KRC/MIDI pair, copy the [input module](assets/song_input.py) beside it and set the same facts there. Ordinary MIDI uses `WAVETONE = False`.
 
-If the user requests a rendered video, use their existing renderer or an available FFmpeg build. For a background video already containing the intended audio, one possible hook burn-in from the folder containing both files is:
+Call `load_song()` with the project interpreter and check the BPM, chapter boundaries, text, ruby and sung intervals against the reviewed phrases. Deliver the project, KRC/MIDI pair and song input together. This completes a timing-only request. For an optional pitch lane, also supply the reviewed melody MIDI.
 
-```sh
-ffmpeg -init_hw_device vulkan=vk -i "video.mp4" -vf "fps=60,libplacebo=custom_shader_path=lyrics.hook" -c:v libx264 -c:a aac "karaoke.mp4"
-```
-
-This example needs a working Vulkan device and FFmpeg with libplacebo, libx264 and AAC. Match the filter frame rate to the hook export. If the video and audio arrive separately, select the user's intended audio stream when assembling the video. Run the renderer directly; reuse a project build script when the user already has one.
-
-For a finished video, verify stream start times, frame count, audio duration and representative rendered frames. If delivering vocal and instrumental versions, check that their accompaniment and lyric clocks agree.
-
-For a requested pitch-lane edition, export the reviewed melody MIDI and follow the [pitch visualization workflow](references/pitch-visualization.md).
+The external kara-templater recipe receives this song and chooses layout, count-in graphics and effects. The delivery stage renders its Scene and checks it against the final mix. [Template authoring guide](https://github.com/sitiyou/python-kara-templater/blob/main/skills/kara-templater/SKILL.md)

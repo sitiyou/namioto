@@ -338,12 +338,12 @@ wheels = [
 
 [[package]]
 name = "kara-templater"
-version = "1.0.0"
+version = "1.0.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/56/34/80cfbbc0ee89f96d917927d8bdf2f6fa14f8fd6b511c91f91b66847b2938/kara_templater-1.0.0.tar.gz", hash = "sha256:ea82fb346696f5d0234a1acceafe2df8a2e89f21eb50627439396b1607a368a8", size = 7502277, upload-time = "2026-11-19T17:52:22.608Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/03/fc/29ef9136e4d27145f453e110facbe0913cabd1e6e2aecf8463a8572b00e6/kara_templater-1.0.1.tar.gz", hash = "sha256:48c70f88596f25d294be6f178215668fe0bc36cc0b9d6dcfd9ee2cdd8a8eda1a", size = 7737906, upload-time = "2026-11-22T11:00:04.833Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/03/bb/a3d988de8629674d7d61ca44d4f0b8103ce1bcd70554e0f7a0a7dfb783f8/kara_templater-1.0.0-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:43af9ddfcde9769cdca7925dab294f65a01447d82baaf4f7811fe90a6f491a77", size = 981816, upload-time = "2026-11-19T17:52:15.937Z" },
-    { url = "https://files.pythonhosted.org/packages/ae/05/ac33b2db786a340472ecda9d8a573461df0702d058e367b586fbda47fccd/kara_templater-1.0.0-cp314-cp314-win_amd64.whl", hash = "sha256:be48181174ef6965c1512e4b75f2dfd4e9daa7f2e5952ad1d6ce5305d2da86bd", size = 5762047, upload-time = "2026-11-19T17:52:17.641Z" },
+    { url = "https://files.pythonhosted.org/packages/71/9e/f64467cd2ce05d27da7a4c186b41aea29babdfdb4003e7ca7855e3f96810/kara_templater-1.0.1-cp314-cp314-manylinux_2_28_x86_64.whl", hash = "sha256:6f408a37dc93207fe0c4a900fdc6ec71ee19ed835118fbd7ad331a5aaf403769", size = 991553, upload-time = "2026-11-22T10:59:58.225Z" },
+    { url = "https://files.pythonhosted.org/packages/bc/bf/3cfff98cd105cd9250a90f4986366f85490138ac105aff854c09feea7f7d/kara_templater-1.0.1-cp314-cp314-win_amd64.whl", hash = "sha256:ec7ae819e036346c31adc1ff991fd05aa44b7f6f91a785bfa6784f2af8160d59", size = 5802000, upload-time = "2026-11-22T10:59:59.607Z" },
 ]
 
 [[package]]
@@ -600,7 +600,7 @@ export = [
 [package.metadata]
 requires-dist = [
     { name = "janome", specifier = ">=0.5.0" },
-    { name = "kara-templater", specifier = "==1.0.0" },
+    { name = "kara-templater", specifier = "==1.0.1" },
     { name = "lark", specifier = ">=1.3.1" },
     { name = "librosa", specifier = ">=1.0" },
     { name = "mido", specifier = ">=1.3.3" },

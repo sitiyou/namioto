@@ -899,6 +899,7 @@ class WindowBridge:
             "krc": krc,
             "midi": base64.b64encode(data).decode("ascii"),
             "settings": vars(self.window._export_settings()).copy(),
+            "project_colors": list(self.window.view.lyric_colors),
             "wavetone": self.window.settings.midi.wavetone,
             "revision": self._subtitle_revision,
         }

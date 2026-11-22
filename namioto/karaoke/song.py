@@ -199,13 +199,27 @@ class Song:
     segment_colors: Mapping[str, tuple[tuple[Color, ...], ...]]
 
 
-def prepare_song(text, spans, settings: ExportSettings, bpm: float = 120) -> Song:
+@dataclass(frozen=True)
+class TemplateSong:
+    """Song facts for external designs. Owners choose their own appearance and lead cues."""
+
+    sources: tuple[LyricSource, ...]
+    bpm: float
+    tracks: Mapping[str, int]
+    channels: Mapping[str, tuple[tuple[int, ...], ...]]
+    channel_colors: Mapping[int, str]
+    preview_interval: tuple[float, float] | None = None
+
+
+def prepare_song(text, spans, settings: ExportSettings, bpm: float = 120, *, semantic=False) -> Song | TemplateSong:
     sources = []
     chapters = set()
     palettes = {}
+    source_tracks = {}
+    source_channels = {}
     palette = settings.channel_colours()
     roles = settings.vocal_roles()
-    lead, _ = lead_preset(settings).resolve_timing(bpm=bpm)
+    lead = 0 if semantic else lead_preset(settings).resolve_timing(bpm=bpm)[0]
 
     def color(channel):
         return Color.hex("#" + palette.get(channel, settings.overlay_color).lstrip("#"))
@@ -224,17 +238,19 @@ def prepare_song(text, spans, settings: ExportSettings, bpm: float = 120) -> Son
         for unit, channel, channels in zip(row.units, row.colours, row.segment_colours, strict=True):
             end = offset + len(unit.text)
             appearance = TextAppearance(family, color(channel), WHITE, BLACK, BLACK, frozenset(("primary",)))
+            if semantic:
+                appearance = replace(appearance, primary=WHITE, inline_colors=frozenset())
             runs.append(TextRun(unit.text, offset, end, appearance))
             segments = []
             for segment, segment_channel in zip(unit.segments, channels, strict=True):
                 reading = None
-                if segment.ruby and settings.show_ruby:
+                if segment.ruby and (semantic or settings.show_ruby):
                     length = len(segment.ruby)
                     run = TextRun(
                         segment.ruby,
                         0,
                         length,
-                        replace(
+                        appearance if semantic else replace(
                             appearance,
                             primary=Color.hex("#" + settings.ruby_color.lstrip("#"))
                             if settings.ruby_color
@@ -251,7 +267,7 @@ def prepare_song(text, spans, settings: ExportSettings, bpm: float = 120) -> Son
             units.append(LyricUnit(offset, end, tuple(segments)))
             offset = end
         cues = ()
-        if first and settings.cue != "off" and row.first / 1000 >= lead:
+        if not semantic and first and settings.cue != "off" and row.first / 1000 >= lead:
             placement = "inline" if settings.cue_placement == "inline" else "independent"
             cues = (CueMarker("lead", "lead", placement=placement),)
         body = DocumentText(None, (), tuple(runs), (), cues, ())
@@ -262,8 +278,15 @@ def prepare_song(text, spans, settings: ExportSettings, bpm: float = 120) -> Son
                 lyrics,
                 style=family,
                 actor=str(line.chapter),
+                chapter=str(line.chapter),
                 display=Lifetime(row.first / 1000, max(row.first + 1, row.last) / 1000),
             )
         )
+        if semantic:
+            source_tracks[identity] = line.track
+            source_channels[identity] = row.segment_colours
+            continue
         palettes[identity] = tuple(tuple(color(c) for c in channels) for channels in row.segment_colours)
+    if semantic:
+        return TemplateSong(tuple(sources), bpm, source_tracks, source_channels, palette)
     return Song(tuple(sources), bpm, settings, palettes)
