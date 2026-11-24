@@ -634,16 +634,25 @@ def test_session_exports_remembered_project_recipe(qt_app, window, endpoint, tmp
             "id": "cool-ink",
             "scripts": [str(script)],
             "values": {"cool-ink": {"ink": "123456"}},
-            "format": "ass",
+            "format": "hook",
             "fps": 60,
         },
         project,
     )
-    target = tmp_path / "local.ass"
+    target = tmp_path / "local.hook"
     assert (
         _run(qt_app, lambda: export_cli.main(["--session", "--instance", endpoint.instance, "--out", str(target)])) == 0
     )
-    assert r"\1c&H563412&" in target.read_text()
+    assert b"//!HOOK" in target.read_bytes()
+    expected = tmp_path / "explicit.hook"
+    assert _run(
+        qt_app,
+        lambda: export_cli.main([
+            "--session", "--instance", endpoint.instance, "--script", str(script), "--template", "cool-ink",
+            "--set", "ink=123456", "--out", str(expected),
+        ]),
+    ) == 0
+    assert target.read_bytes() == expected.read_bytes()
 
 
 def test_alignment_evidence_job(qt_app, window, endpoint, monkeypatch):

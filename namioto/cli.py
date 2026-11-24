@@ -13,6 +13,7 @@ COMMANDS = {
     "spectrum": "namioto.analysis.spectrum",
     "game": "namioto.analysis.game",
     "align": "namioto.analysis.align",
+    "clip": "namioto.analysis.clip",
     "export": "namioto.export_cli",
 }
 

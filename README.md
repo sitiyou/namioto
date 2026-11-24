@@ -12,7 +12,7 @@ notes against what you hear and see.
 - Import MIDI and edit up to 16 channels with separate instruments, colours and mute controls.
 - Extract singing-voice notes with [GAME](https://github.com/openvpi/GAME).
 - Add lyrics and readings, adjust their note mapping, and export karaoke ASS subtitles or standalone shaders.
-- Save your work as a `.nto` project; export MIDI, KRC lyrics, ASS subtitles or libplacebo hooks.
+- Save lyrics and notes together in an editable `.nto` project.
 - Run analysis and exports from the command line, or control a running editor remotely.
 
 ## Feature previews
@@ -43,15 +43,12 @@ separated vocal. These previews show the setup dialogs, not completed inference 
 Export the mapped lyrics as ASS or a libplacebo hook, with timing, font, layout and per-channel highlight options.
 See the [lyrics guide](docs/lyrics.md) for editing and export.
 
-For agent-assisted production, the repository includes a [karaoke production skill](skills/namioto-nicokara/SKILL.md). It covers timing lyrics through editor IPC, verifying note and lyric alignment, and handing off the timed song to a template.
-
-![ASS subtitle export options](docs/ass-export.png)
+![Karaoke export options](docs/ass-export.png)
 
 ## Install and launch
 
 You need [uv](https://docs.astral.sh/uv/), Python 3.14, and a C++17 compiler.
-For a source checkout, first follow the [source setup prerequisites](docs/development.md#source-setup).
-From the cloned repository directory, run:
+Follow the [source setup guide](docs/development.md#source-setup) for native prerequisites and the local kara-templater option. Once the required kara-templater release is available on PyPI, run these commands from the checkout:
 
 ```bash
 uv sync --extra cpu
@@ -84,11 +81,8 @@ FluidSynth. Without a recognised synth, notes are silent; recording playback sti
    drag a note to move it, or its edge to resize it. Set **Snap** to the note length you need.
 5. Save with `Ctrl+S`. Use **Export → Export MIDI…** when you want to use the notes elsewhere.
 
-The project stores a reference to the audio, not a copy: keep the recording available when
-moving your project. Changing BPM moves the beat grid, not the notes.
-
-**Exchanging MIDI with another application?** Disable **WaveTone compatibility** in Settings.
-It is enabled by default and adds/removes WaveTone's leading bar.
+Keep the referenced recording available when moving your project. Changing BPM
+moves the beat grid while the notes keep their audio times.
 
 ## Guides
 
@@ -96,6 +90,8 @@ It is enabled by default and adds/removes WaveTone's leading bar.
 | --- | --- |
 | [Using the editor](docs/usage.md) | Projects, spectrum, editing shortcuts, playback, channels and settings |
 | [Lyrics and karaoke](docs/lyrics.md) | KRC import, readings, alignment, mapping and karaoke export |
+| [Time lyrics against a recording](skills/namioto-nicokara/references/timing-from-audio.md) | Use GAME and an eighth-note grid to build or revise a project. [Agent skill](skills/namioto-nicokara/SKILL.md) |
+| [Import matched MIDI and KRC](skills/namioto-nicokara/references/import-midi-krc.md) | Bring existing notes and lyric mapping into a project |
 | [Command-line tools](docs/cli.md) | Analysis, subtitle export, watch mode and remote control |
 | [Development](docs/development.md) | Source setup, tests, packaging and model conversion |
 

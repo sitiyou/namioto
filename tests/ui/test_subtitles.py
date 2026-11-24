@@ -234,13 +234,14 @@ def test_project_template_discovery_and_export(subtitle_window, tmp_path, monkey
         assert "broken effect" in dialog.hint.text()
         select_file(script)
         assert dialog.active_id == "cool-ink"
+        assert dialog.format.currentData() == "hook"
         assert dialog.custom_readers
         return QDialog.DialogCode.Accepted
 
     monkeypatch.setattr(ExportDialog, "exec", select)
-    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: (str(tmp_path / "local.ass"), ""))
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *_: (str(tmp_path / "local.hook"), ""))
     assert subtitle_window._on_export_lyrics()
-    assert (tmp_path / "local.ass").is_file()
+    assert (tmp_path / "local.hook").is_file()
     assert read_preferences(project)["id"] == "cool-ink"
     assert str(script) not in read_preferences(tmp_path / "other.nto")["scripts"]
     reopened = ExportDialog(subtitle_window.settings, project_path=project)

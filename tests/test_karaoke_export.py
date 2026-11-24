@@ -1,36 +1,50 @@
-"""Real script registration and both file writers, without a display or audio device."""
+"""External Hook recipe registration and export, without a display or audio device."""
 
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from kara_templater import CueMarker, Document
+from kara_templater import CueMarker
 
 from namioto import export_cli, midi, project
 from namioto.channels import Channel
 from namioto.karaoke import ExportSettings
 from namioto.karaoke.default_template import default_scene
 from namioto.karaoke.song import prepare_song
+from namioto.karaoke.song_input import load_project_input
 from namioto.karaoke.templates import load_templates
 
 EXAMPLE = Path(__file__).resolve().parents[1] / "examples" / "cool_ink.py"
 
 
-def test_script_builds_both_formats_and_failure_preserves_last_export(tmp_path):
+def test_project_input_uses_saved_note_seconds_without_audio_or_midi(tmp_path):
+    path = tmp_path / "song.nto"
+    project.save(project.Project(
+        audio="missing-recording.wav",
+        lyrics=project.Lyrics(text="京[きょう]\n---\n@1{あ}"),
+        notes=(project.Note(4.0001, 0.6, 60, 0), project.Note(4.8, 1, 62, 0), project.Note(7, 1, 64, 1)),
+    ), path)
+    song = load_project_input(path, offset_ms=-100, harmony_tracks="1")
+    first, harmony = song.sources
+    assert first.lyrics.units[0].segments[0].timing.start == pytest.approx(3.9001)
+    assert (first.chapter, harmony.chapter, harmony.style) == ("0", "1", "top")
+    assert list(tmp_path.iterdir()) == [path]
+
+
+def test_script_builds_a_hook_and_failure_preserves_last_export(tmp_path):
     krc, mid = tmp_path / "song.krc", tmp_path / "song.mid"
     krc.write_text("abc", encoding="utf-8")
     midi.write(mid, (Channel(channel=0),), (project.Note(1, 1, 60, 0),), 120)
     args = ["--no-wavetone", "--krc", str(krc), "--midi", str(mid), "--script", str(EXAMPLE), "--template", "cool-ink"]
-    for suffix in ("ass", "hook"):
-        dest = tmp_path / f"out.{suffix}"
-        assert export_cli.main([*args, "--out", str(dest), "--set", "ink=BA9876"]) == 0
-        data = dest.read_bytes()
-        if suffix == "ass":
-            assert any("7698BA&" in e.text for e in Document.load(dest).lines)
-        else:
-            assert b"//!HOOK" in data and b"//!TEXTURE" in data
-        assert export_cli.main([*args, "--out", str(dest), "--set", "pulse=3"]) == 1
-        assert dest.read_bytes() == data
+    dest = tmp_path / "out.hook"
+    assert export_cli.main([*args, "--out", str(dest), "--set", "ink=BA9876"]) == 0
+    data = dest.read_bytes()
+    assert b"//!HOOK" in data and b"//!TEXTURE" in data
+    assert export_cli.main([*args, "--out", str(dest), "--set", "pulse=3"]) == 1
+    assert dest.read_bytes() == data
+    ass = tmp_path / "out.ass"
+    assert export_cli.main([*args, "--out", str(ass)]) == 1
+    assert not ass.exists()
 
 
 def test_registration_errors_identify_the_script_and_can_be_recovered(tmp_path):
@@ -51,7 +65,7 @@ def test_single_double_and_harmony_layout_are_independent_of_singing_clocks():
     spans = [[(0.0003, 1.0004)], [(2.35, 3.1)], [(2.1, 3.001)]]
     song = prepare_song(text, spans, settings)
     assert song.sources[-1].style == "top"
-    assert song.sources[0].lyrics.units[0].segments[0].singing.start == 0.0003
+    assert song.sources[0].lyrics.units[0].segments[0].timing.start == 0.0003
     for mode, expected in (("single", [0, 0]), ("double", [0, 1])):
         scene = default_scene(replace(song, settings=replace(settings, layout=mode)))
         main = [plan for plan in scene.plans if plan.track_id == "default"]
@@ -94,7 +108,7 @@ def test_guides_clear_the_allocated_lyric_row(guide, layout, show_ruby, top):
     line = plan.line
     (cue,) = line.independent
     lyric_top = line.state.position.y + line.layout.bounds.top
-    host = line.layout.body.characters[0].bounds.height
+    host = line.layout.body.characters[0].object.font_size
     assert host == pytest.approx(settings.font_size * (settings.harmony_ratio if top else 1))
     guide_size = int(host * settings.cue_size_ratio + 0.5)
     diameter = guide_size + (2 * settings.border if guide == "dots" else 0)
@@ -129,4 +143,4 @@ def test_fast_handoff_keeps_successive_leads_on_opposite_sides():
     for first, following in zip(places, places[2:], strict=False):
         assert first.display.end <= following.display.start
     for plan, [(start, end)] in zip(scene.plans, spans, strict=True):
-        assert (plan.input.singing.start, plan.input.singing.end) == (start, end)
+        assert (plan.layout_request.timing.start, plan.layout_request.timing.end) == (start, end)

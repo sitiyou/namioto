@@ -87,6 +87,9 @@ jobs:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
     needs: build
     runs-on: ubuntu-24.04
+    concurrency:
+      group: release-${{ github.ref }}
+      cancel-in-progress: false
     permissions:
       contents: write
     steps:
@@ -100,12 +103,24 @@ jobs:
           mkdir -p release
           cp artifacts/namioto-Linux-x86_64/namioto-linux-x86_64.AppImage release/
           python scripts/package_release.py windows --app artifacts/namioto-Windows-x86_64 --output release
-      - name: Create draft release
+      - name: Publish GitHub Release
+        working-directory: release
+        shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          cd release
-          sha256sum ./*.AppImage ./*.zip > SHA256SUMS
-          gh release create "$RELEASE_TAG" ./* --verify-tag --draft --generate-notes --title "$RELEASE_TAG"
+          packages=(namioto-linux-x86_64.AppImage namioto-windows-x86_64.zip)
+          sha256sum -- "${packages[@]}" > SHA256SUMS
+          if draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)"; then
+            if [[ "$draft" == true ]]; then
+              gh release upload "$RELEASE_TAG" "${packages[@]}" SHA256SUMS --clobber
+              gh release edit "$RELEASE_TAG" --draft=false
+            else
+              printf 'Release %s is already published.\n' "$RELEASE_TAG"
+            fi
+          else
+            gh release create "$RELEASE_TAG" "${packages[@]}" SHA256SUMS \
+              --verify-tag --generate-notes --title "$RELEASE_TAG"
+          fi

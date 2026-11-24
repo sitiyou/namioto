@@ -2,8 +2,7 @@
 
 [README](../README.md) · [Editor guide](usage.md) · [Lyrics](lyrics.md)
 
-Examples below assume the source checkout and `uv sync --extra cpu` setup. Prefix commands
-with `uv run` in that environment. `namioto-cli` runs tasks without a GUI; `namioto-ctl`
+Examples below use a configured Namioto checkout. Use `uv run` with a resolved lockfile, or `uv run --no-sync` if you installed a local kara-templater wheel. [Source setup](development.md#source-setup) `namioto-cli` runs tasks without a GUI; `namioto-ctl`
 controls an already running editor.
 
 ```bash
@@ -98,16 +97,53 @@ The default model is Meta's MMS; `yohane` is a karaoke fine-tune. `--dir` or
 `$NAMIOTO_ALIGN_MODEL` selects a converted model. See [development](development.md#model-conversion)
 for conversion tools.
 
+## Inspect an audio clip
+
+`namioto-cli clip` runs independently of the editor and saved project. For a
+small passage, give the window in seconds within the input file. To compare
+readings with MMS or Yohane, pass the KRC for that passage. Use the same
+surrounding words in each candidate and change only the reading in question.
+
+```sh
+uv run namioto-cli clip vocal.wav --start 42.1 --end 44.6 --model mms \
+  --candidate '宇宙[う,ちゅう]をこえて' --candidate '宇宙[そら]をこえて'
+```
+
+Both candidates use the same acoustic model output. A greater
+`ctc_log_probability` indicates a better fit to that clip under the chosen
+model. Read it alongside the candidate sounds' placement and onset bounds.
+Compare scores within the same model and audio window. The score measures
+acoustic fit and can favor the wrong reading. A missing score is returned as
+`null`. Token ends are alignment evidence for the text.
+
+You can also analyze a processed vocal or a clip already cut from the recording.
+If file time zero corresponds to 42.1 seconds in the recording, pass that as
+`--audio-origin` so GAME's raw note times line up with the original recording.
+The same parameter applies to MMS and Yohane. Use audio whose time scale
+matches the original recording.
+
+```sh
+uv run namioto-cli clip processed-voice.wav --model game --audio-origin 42.1
+```
+
+Scripts can call `namioto.analysis.clip.analyze_clip()` with the same inputs.
+Results are returned as data without updating project notes or lyric mapping.
+
 ## Export karaoke
 
+Share the saved `.nto` to hand off the timed lyrics. The Namioto
+[project reader](../namioto/karaoke/song_input.py) validates the saved KRC against
+the project notes at their stored precision.
+
+The editor-compatible export commands work with exchanged files or a live editing session.
+
 ```bash
-uv run namioto-cli export --krc song.krc --midi song.mid --out song.ass
-uv run namioto-cli export --krc song.krc --midi song.mid --out song.ass --watch
+uv run namioto-cli export --krc song.krc --midi song.mid --no-wavetone --out song.ass
 uv run namioto-cli export --session --out song.ass --watch
 uv run namioto-cli export --session --out song.ass --save-krc song.krc --save-midi song.mid
 ```
 
-The output suffix selects standard ASS or a standalone libplacebo hook. For example:
+The output suffix selects standard ASS or a standalone libplacebo Hook. `--format` selects the format explicitly. The built-in ASS template uses native, hard-edged wipes and centisecond timing. The built-in Hook template supports `--feather` and `--pulse`. For example:
 
 ```bash
 namioto-cli export --session --template default --set layout=single --out song.hook --fps 60
@@ -118,9 +154,9 @@ ffmpeg -init_hw_device vulkan=vk -i video.mp4 -vf 'fps=60,libplacebo=custom_shad
 Use the hook on video with the same aspect ratio and time origin. FFmpeg's filter frame rate must match the export rate. Fonts are resolved at export. Ordinary ASS uses the playback machine's fonts.
 See [Python templates](karaoke-templates.md) for registration, parameters and script reloading.
 
-File mode uses the mapping already in KRC. Session mode uses the editor's current mapping
-and connects automatically to the first running editor with remote control enabled. Intermediate KRC/MIDI files are
-written only when requested. Session CLI outputs are written on the CLI machine.
+KRC/MIDI file mode uses the mapping encoded in the exchanged KRC. Session mode snapshots
+the running editor's current mapping. Use `--save-krc` and `--save-midi` with `--session`
+to write the exchange files. Session CLI outputs are written on the CLI machine.
 
 `--watch` builds immediately and rebuilds after changes settle. Invalid inputs leave the
 last successful output intact. A disconnected session exits instead of selecting another
@@ -137,12 +173,9 @@ Saved user preferences are not a CLI fallback. For example, `--font-size` corres
 `NAMIOTO_ASS_FONT_SIZE`; spacing defaults to 5. `--channel-colors '0=FF0000,1=00FF00'`
 selects red and green highlights. GUI and ctl exports ignore these environment variables.
 
-With a kara-templater build that supports proportional metrics, the default
-template accepts `--palt true` to use a horizontal font’s OpenType proportional
-spacing for body and ruby. The exported ASS carries the measured positions.
-Install the same font for playback on upstream libass.
+Set `--palt true` on the default template to use a horizontal font’s OpenType proportional spacing for body and ruby. ASS carries the measured positions. Install the same font on the playback machine.
 
-File mode removes WaveTone's leading MIDI bar by default; pass `--no-wavetone` for ordinary
+KRC/MIDI file mode removes WaveTone's leading MIDI bar by default. Pass `--no-wavetone` for ordinary
 MIDI. Session mode follows the editor's compatibility setting.
 
 ## Remote control
@@ -151,6 +184,8 @@ Local remote control starts by default. `--no-ipc` disables it for one run; `--i
 enables it. The old Remote settings value is ignored.
 Multiple editors may run at once; clients automatically select the first surviving instance
 in startup order. Use `--list` to see instance IDs and `--instance ID` to select another editor.
+For an agent-owned headless editor, start a separate process with `QT_QPA_PLATFORM=offscreen`
+set for that process alone. Use `state.get` on the selected instance to confirm the project.
 
 ```bash
 uv run namioto-ctl status
@@ -226,12 +261,13 @@ available from the other backends. To compare algorithms, save each result befor
 starting another job with `librosa` or `tempocnn`. Select a tempo explicitly with
 `transport.set_bpm bpm=VALUE` in the project where the notes will be edited.
 
-After a GAME job completes, call `analysis.transcription_grid job=ID cells=4 estimate_phase=true`
-to preview sixteenth notes at the editor's current BPM. The result contains snapped
-notes in seconds and the proposed grid offset in milliseconds. Repeat on the same
-job to compare subdivisions. Without phase estimation it uses the current editor
-offset. Apply a chosen offset with `transport.set_grid_offset ms=VALUE`; the
-original GAME result remains available through `analysis.transcription`.
+After a GAME job completes, call `analysis.transcription_grid job=ID cells=2 estimate_phase=true`
+to preview eighth-note quantization at the editor's current BPM. The result contains
+snapped starts and ends in seconds and the proposed grid offset in milliseconds.
+Set a chosen offset with `transport.set_grid_offset ms=VALUE` and preview the same
+job without `estimate_phase` to use the editor's offset. The preview leaves the
+document's notes alone, and the raw result remains available through
+`analysis.transcription`. [Grid fit check](../skills/namioto-nicokara/references/timing-from-audio.md#check-the-eighth-note-grid)
 
 ### Review and edit one phrase
 

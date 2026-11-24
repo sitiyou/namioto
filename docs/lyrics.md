@@ -25,6 +25,30 @@ for the project's KRC. The API key is stored in plain text in the settings file.
 
 ![Project lyrics editor with KRC and readings](lyrics-editor.png)
 
+## Write KRC
+
+Write the lyric text in UTF-8. Add kana readings in square brackets after the
+kanji. Use commas when the reading maps to individual characters, as in
+`季節[き,せつ]` and `日々[ひ,び]`. Give a word a single reading when it cannot
+be split character by character, as in `明日[あした]`. Keep kana already in
+the lyric outside the brackets, as in `移[うつ]ろい`.
+
+```text
+季節[き,せつ]は移[うつ]ろい
+---
+明日[あした]をえがく
+```
+
+Each lyric line becomes a display line. Use `---` on its own line to start a
+new chapter. Keep the lyric wording and check readings against the performance.
+Write the initial text and readings first, then [map them to notes](#map-lyrics-to-notes).
+
+Paste the result into **Project lyrics (.krc)**, import it as a `.krc` file,
+or send the text with `lyrics.set` over IPC. For assisted conversion, use
+[Copy prompt or Convert with the API](#add-project-lyrics). The app's
+[`DEFAULT_PROMPT`](../namioto/lyrics.py) contains the full reading rules and
+more examples.
+
 ## Edit externally
 
 **Open in external editor** opens a temporary UTF-8 `.krc` copy with the configured editor,
@@ -68,17 +92,15 @@ Incomplete mappings can be saved and edited, but cannot be exported as subtitles
 
 ## Align against a vocal
 
-Use a separated singing voice for alignment, not a full mix. With lyrics and audio loaded,
-the clock button opens **Align** for the selected channel.
-
-- **Auto-map** uses alignment while respecting explicit KRC counts and shared-sound groups.
-- **Align** replaces the current mapping with the structure computed from the vocal.
+Use a separated singing voice for alignment. With lyrics, notes and audio loaded,
+open the alignment dialog with the clock button. **Rebuild mapping** uses the vocal
+to replace the selected channel's KRC mapping against its existing notes.
 
 Successful mapping updates KRC in one undo step without automatically saving the project.
 Other channels retain their mapping and alignment evidence. Low-confidence results are marked
 for review; the raw timing overlay lets you inspect evidence without changing it.
 
-Model, device and chunking choices are remembered. Each Align run reads the current lyrics with
+Model, device and chunking choices are remembered. Each run reads the current lyrics with
 their NOTE counts and mapping groups removed, finds the sounds in the audio, and assigns them
 to the current MIDI notes using the measured times. Only the model's pass over the audio is
 cached. Evidence is saved in the `.nto` alongside notes and lyrics.
@@ -109,13 +131,13 @@ Different channels can sing simultaneously.
 
 Use **Export → Export lyrics (.krc)…** for mapped KRC, or **Export karaoke…** for styled lyrics. Choose the default template, single or alternating double rows, and ASS or hook output. The next export opens with the format of the last successful export. The editor takes a KRC/MIDI snapshot and uses the same mapping as file export. Independent words on one line can sing simultaneously. Multiple readings of a shared base retain their own ordered time intervals.
 
-The sweep follows the measured text during its singing interval. The engine handles outlines and halos automatically. Sweep transition width sets the width of the colour blend at the moving edge in canvas pixels.
+The sweep follows the measured text during its singing interval. The engine handles outlines and halos automatically. For Hook output, sweep transition width sets the size of the colour blend at the moving edge in canvas pixels. Standard ASS uses a hard edge and native fades on its centisecond clock. Independently timed readings retain their own colours, and the shared body uses its lyric source colour.
 
 The default uses white lettering, channel-coloured highlights, outlines and a halo. Turn off **Use project channel colours** to override the sung colour or individual channels for this export. Ruby size is relative to the main font; its gap is measured between visible outlines. Preview controls how early a line appears, and hold extends its tail before the line fades as a group. In the default double-row layout, each KRC chapter starts on the left and subsequent main-vocal lines alternate sides. Automatic row spacing leaves 20% of the track’s largest body font size between the measured boxes of rows visible together. Only readings present on those rows take up space. Each row stays in place for its full display interval. The section count-in can use three filling dots, descending bars or flashing volume columns. A lyric row with an inline count-in appears when its first countdown step begins and stays visible as singing starts. An independent count-in reserves space above its main lyric row, including any ruby. Guide size follows the authored lyric font size at the marker. A ratio of 0.5 gives a 50 px dot diameter or bar height at size 100, and 40 px at size 80. Automatic guide clearance is one eighth of the authored font size. Set the guide gap to -1 for automatic spacing, or enter a distance in pixels. A per-symbol duration of zero follows MIDI tempo.
 
 A KRC bracket starts a reading group that may extend on both sides of its base. Comma-separated parts inside one bracket keep their own timings and share the group. This corresponds to Aegisub’s float-left marker at the start of a word.
 
-The default singing pulse scales the body glyphs around their own centers over the lyric unit. Each ruby glyph pulses around its own center as the wipe reaches its part of the reading. Other ruby glyphs stay in place, including during gaps between readings. Set the singing scale multiplier to 1 to turn off both pulses.
+In Hook output, the default pulse scales the body glyphs around their own centers over the lyric unit. Each ruby glyph pulses around its own center as the wipe reaches its part of the reading. Other ruby glyphs stay in place, including during gaps between readings. Set the scale multiplier to 1 to turn off both pulses.
 
 ![Karaoke export settings](ass-export.png)
 

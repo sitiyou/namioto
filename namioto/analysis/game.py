@@ -33,6 +33,7 @@ except ImportError:  # the extractor itself only needs numpy; the file loader an
     librosa = None
 
 from namioto.analysis import devices, model_store
+from namioto.analysis.audio_window import AudioWindow
 from namioto.analysis.slicing import Slicer
 
 MODEL_SIZES = ("small", "medium", "large")
@@ -311,6 +312,7 @@ def extract(
     backend: OnnxBackend,
     path: str | pathlib.Path,
     *,
+    window: AudioWindow | None = None,
     language: str | None = None,
     batch_size: int = 4,
     seg_threshold: float = 0.2,
@@ -325,7 +327,8 @@ def extract(
     """Extract the notes of one audio file as (onset, offset, pitch) in seconds.
 
     The audio is loaded at the sample rate the model wants and cut into chunks, which are then run
-    through the pipeline in batches; the notes of all chunks come back merged.
+    through the pipeline in batches; the notes of all chunks come back merged. A window limits the
+    decoded audio and places the returned notes on its recording clock.
     """
     if librosa is None:
         raise RuntimeError("librosa is required to load the audio and to convert pitch names")
@@ -342,7 +345,9 @@ def extract(
     presence_threshold = np.array(est_threshold, dtype=np.float32)
     slicer = Slicer(sr=backend.sr, threshold=-40.0, min_length=1000, min_interval=200, max_sil_kept=100)
 
-    waveform, _ = librosa.load(path, sr=backend.sr, mono=True)
+    waveform = (
+        librosa.load(path, sr=backend.sr, mono=True)[0] if window is None else window.load(path, backend.sr)
+    )
     if waveform.size == 0:
         return []
     chunks = [{"offset": 0, "waveform": waveform}] if not silence_slice else slicer.slice(waveform)
@@ -390,7 +395,10 @@ def extract(
             )
         if progress is not None:
             progress(min(start + len(batch), len(chunks)), len(chunks))
-    return merge_notes(notes)
+    merged = merge_notes(notes)
+    if window is None:
+        return merged
+    return [(onset + window.onset, offset + window.onset, pitch) for onset, offset, pitch in merged]
 
 
 def quantized(

@@ -26,7 +26,7 @@ def _surface(event):
 
 def test_untimed_leading_ruby_does_not_pull_line_start_to_zero():
     scene = default_scene(prepare_song("想[お.0も]い", [[None, (62, 62.3), (62.4, 63)]], ExportSettings()))
-    assert scene.plans[0].input.singing.start >= 62
+    assert scene.plans[0].layout_request.timing.start >= 62
     assert scene.plans[0].placement.display.start >= 57
 
 
@@ -59,7 +59,7 @@ def test_one_base_has_separate_ruby_times(text, expected):
     song = prepare_song(text, [[(0, 1), (1.5, 2)]], ExportSettings())
     (unit,) = song.sources[0].lyrics.units
     assert [s.ruby.source.text if s.ruby else None for s in unit.segments] == expected
-    assert [(s.singing.start, s.singing.end) for s in unit.segments] == [(0, 1), (1.5, 2)]
+    assert [(s.timing.start, s.timing.end) for s in unit.segments] == [(0, 1), (1.5, 2)]
 
 
 def test_shared_base_overlap_is_rejected_with_line_and_surface():
@@ -69,7 +69,7 @@ def test_shared_base_overlap_is_rejected_with_line_and_surface():
 
 def test_zero_duration_borrows_time_without_removing_the_rest():
     song = prepare_song("あい", [[(0, 0.5), (0.8, 0.8)]], ExportSettings())
-    assert [(s.singing.start, s.singing.end) for u in song.sources[0].lyrics.units for s in u.segments] == [
+    assert [(s.timing.start, s.timing.end) for u in song.sources[0].lyrics.units for s in u.segments] == [
         (0, 0.42),
         (0.72, 0.8),
     ]
@@ -96,16 +96,23 @@ def test_borrowed_display_times(text, spans, expected):
 def test_display_order_can_differ_from_time_order():
     song = prepare_song("あい", [[(2, 3), (0, 1)]], ExportSettings())
     assert song.sources[0].text == "あい"
-    assert [u.segments[0].singing.start for u in song.sources[0].lyrics.units] == [2, 0]
+    assert [u.segments[0].timing.start for u in song.sources[0].lyrics.units] == [2, 0]
     assert default_scene(song).plans[0].placement.display.end == pytest.approx(3.2)
 
 
-@pytest.mark.parametrize(("size", "row_gap", "pitch"), [(80, 0, 96), (104, 0, 124.8), (104, 200, 200)])
-def test_double_layout_row_spacing(size, row_gap, pitch):
+@pytest.mark.parametrize(("size", "row_gap"), [(80, 0), (104, 0), (104, 200)])
+def test_double_layout_row_spacing(size, row_gap):
     settings = ExportSettings(font_size=size, row_gap=row_gap)
     scene = default_scene(prepare_song("あ\nい", [[(1, 2)], [(2, 3)]], settings))
     upper, lower = scene.plans
-    assert lower.placement.position.y - upper.placement.position.y == pytest.approx(pitch)
+    if row_gap:
+        assert lower.placement.position.y - upper.placement.position.y == pytest.approx(row_gap)
+    else:
+        upper_box = upper.layout_request.bounds
+        lower_box = lower.layout_request.bounds
+        upper_bottom = upper.placement.position.y + upper_box.top + upper_box.height
+        lower_top = lower.placement.position.y + lower_box.top
+        assert lower_top - upper_bottom == pytest.approx(size * 0.2)
 
 
 def test_only_visible_lower_ruby_consumes_interrow_space():
@@ -113,8 +120,8 @@ def test_only_visible_lower_ruby_consumes_interrow_space():
                         ExportSettings(font_size=104, lead_time_ms=500))
     plans = default_scene(song).plans
     for upper, lower in (plans[:2], plans[2:]):
-        upper_bottom = upper.placement.position.y + upper.input.bounds.top + upper.input.bounds.height
-        lower_top = lower.placement.position.y + lower.input.bounds.top
+        upper_bottom = upper.placement.position.y + upper.layout_request.bounds.top + upper.layout_request.bounds.height
+        lower_top = lower.placement.position.y + lower.layout_request.bounds.top
         assert lower_top - upper_bottom == pytest.approx(20.8)
     assert plans[2].placement.position.y < plans[0].placement.position.y
 
@@ -126,7 +133,7 @@ def test_double_layout_restarts_each_chapter_on_the_left(placement):
     first, restart, following = default_scene(song).plans
     assert [p.placement.row for p in (first, restart, following)] == [0, 0, 1]
     assert first.placement.display.end <= restart.placement.display.start
-    assert restart.placement.position.x + restart.input.bounds.left == settings.margin_h
+    assert restart.placement.position.x + restart.layout_request.bounds.left == settings.margin_h
 
 
 def test_excess_simultaneous_rows_fail_instead_of_rendering_offscreen():
@@ -139,6 +146,14 @@ def test_times_use_ass_centiseconds():
     near = _events("あ", [[(1, 1.27)]], settings)
     far = _events("あ", [[(3661.23, 3661.5)]], settings)
     assert min(event.start_time for event in far) - min(event.start_time for event in near) == 3660230
+
+
+def test_ass_preserves_native_fades_and_wipes_for_fractional_midi_times():
+    settings = ExportSettings(fade_in_ms=805, fade_out_ms=203, cue="off")
+    events = _events("あ", [[(1.003, 1.276)]], settings)
+    assert events
+    assert any(r"\clip(" in event.text and r"\t(" in event.text for event in events)
+    assert all(event.start_time % 10 == 0 and event.end_time % 10 == 0 for event in events)
 
 
 def test_guide_dots_are_positioned_independent_events():
@@ -287,7 +302,7 @@ def test_zero_borders_and_blur_are_supported():
 def test_positive_offset_moves_lyrics_and_dots_without_mutating_spans():
     spans = [[(5, 5.5)]]
     scene = default_scene(prepare_song("あ", spans, ExportSettings(offset_ms=2000)))
-    assert scene.plans[0].input.singing.start == 7
+    assert scene.plans[0].layout_request.timing.start == 7
     assert scene.lines[0].independent[0].lifetime.start == 4
     assert spans == [[(5, 5.5)]]
 

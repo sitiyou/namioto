@@ -90,7 +90,7 @@ def lead_preset(settings: ExportSettings) -> CuePreset:
     preset = CuePreset(factory=factory, gap=None if settings.cue_gap == -1 else settings.cue_gap)
     if settings.cue == "volume":
         preset = replace(preset, factory=VolumeCue(size_ratio=settings.cue_size_ratio,
-                                                   sung=color if settings.cue_color else None),
+                                                   after=color if settings.cue_color else None),
                          steps=(0, 0.25, 0.5, 0.75, 1))
     if settings.guide_dot_duration_ms:
         duration = settings.guide_dot_duration_ms * (len(preset.steps) - 1) / 1000

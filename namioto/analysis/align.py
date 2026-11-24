@@ -157,6 +157,7 @@ class AlignedSegment:
     start: float
     end: float
     tokens: tuple[Token, ...]
+    ctc_log_probability: float | None = None
 
 
 def _check(model: str, language: str) -> None:
@@ -475,9 +476,17 @@ def ctc_onset_posteriors(
     sums every valid forced path, so a broad row means the model did not localize that token's onset
     reliably. `None` means no complete path can visit all targets.
     """
+    evidence = _ctc_evidence(emission, tokens, blank_id)
+    return evidence[0] if evidence is not None else None
+
+
+def _ctc_evidence(
+    emission: np.ndarray, tokens: Sequence[int], blank_id: int
+) -> tuple[np.ndarray, float] | None:
+    """Return onset posteriors and the log probability of the complete transcript."""
     frames, count = emission.shape[0], len(tokens)
     if count == 0:
-        return np.empty((0, frames), dtype=np.float64)
+        return np.empty((0, frames), dtype=np.float64), float(emission[:, blank_id].sum())
     repeats = sum(earlier == later for earlier, later in zip(tokens, tokens[1:], strict=False))
     if frames < count + repeats:
         return None
@@ -511,6 +520,8 @@ def ctc_onset_posteriors(
         beta[frame] = np.logaddexp(np.logaddexp(following, step), over)
 
     total = np.logaddexp(alpha[-1, -1], alpha[-1, -2])
+    if not np.isfinite(total):
+        return None
     posterior = np.zeros((count, frames), dtype=np.float64)
     for token in range(count):
         state = 2 * token + 1
@@ -522,7 +533,7 @@ def ctc_onset_posteriors(
         posterior[token, 1:] = np.exp(
             entered + emission[1:, labels[state]] + beta[1:, state] - total
         )
-    return posterior
+    return posterior, float(total)
 
 
 def merge_tokens(path: np.ndarray, scores: np.ndarray, blank_id: int = 0) -> list[tuple[int, int, int, float]]:
@@ -648,8 +659,12 @@ def _align_emission(
         wildcard = emission.shape[1] - 1
         codes = [wildcard if missing else code for code, missing in zip(codes, unknown, strict=True)]
     found = forced_align(emission, codes, blank_id)
+    probability = None
     if found is not None:
-        onset = ctc_onset_posteriors(emission, codes, blank_id)
+        evidence = _ctc_evidence(emission, codes, blank_id)
+        onset = evidence[0] if evidence is not None else None
+        if evidence is not None and codes and not any(unknown):
+            probability = evidence[1]
         spans = merge_tokens(found[0], found[1], blank_id)
         if len(spans) == len(codes):
             at = 0
@@ -671,7 +686,7 @@ def _align_emission(
                 tokens[index] = Token(
                     segment.tokens[index], round(start, 3), round(end, 3), round(score, 3), interval
                 )
-    return AlignedSegment(segment.start, segment.end, tuple(tokens))
+    return AlignedSegment(segment.start, segment.end, tuple(tokens), probability)
 
 
 def _window(segment: Segment, audio: np.ndarray) -> tuple[np.ndarray | None, float]:

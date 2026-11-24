@@ -10,7 +10,6 @@ from pathlib import Path
 
 from kara_templater import Color, Scene
 
-from namioto.karaoke.default_template import default_scene
 from namioto.karaoke.export_settings import ExportSettings
 from namioto.karaoke.song import Song, TemplateSong
 from namioto.params import Field
@@ -113,10 +112,16 @@ class Registry:
 
 
 def load_templates(scripts: Iterable[str | Path] = ()) -> Registry:
-    from namioto.subtitle import ASS_FIELDS
+    from namioto.karaoke.song_input import ASS_FIELDS
+
+    def build_default(song: Song | TemplateSong, _values: dict) -> Scene:
+        from namioto.karaoke.default_template import default_scene
+
+        assert isinstance(song, Song)
+        return default_scene(song)
 
     registry = Registry()
-    registry.add(id="default", title="Default", parameters=ASS_FIELDS, build=lambda song, _: default_scene(song))
+    registry.add(id="default", title="Default", parameters=ASS_FIELDS, build=build_default)
     for path in map(Path, scripts):
         if path.suffix.lower() != ".py":
             raise ValueError(f"{path}: expected a Python template file (.py)")

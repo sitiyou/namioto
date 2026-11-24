@@ -1,4 +1,4 @@
-"""An external recipe using Namioto's timed default scene and the project's sung colours."""
+"""A Hook recipe using Namioto’s default layout and the project’s channel colours."""
 
 from dataclasses import replace
 
@@ -15,9 +15,10 @@ def register(registry):
     registry.add(
         id="cool-ink",
         title="Cool ink",
+        formats=("hook",),
         parameters=(
-            Field("ink", "color", "CDEEFF", "Unsung fill colour"),
-            Field("pulse", "float", 1.04, "Singing scale multiplier", low=1, high=1.3),
+            Field("ink", "color", "CDEEFF", "Fill before the wipe"),
+            Field("pulse", "float", 1.04, "Scale during the wipe", low=1, high=1.3),
         ),
         build=build,
     )

@@ -4,11 +4,11 @@
 
 ## Source setup
 
-Install uv, Python 3.14 and a C++17 compiler. uv installs the locked kara-templater release from PyPI. Platforms without a compatible wheel also
-need its native font/shaping build dependencies. Development and CI both read Python 3.14 from
+Install uv, Python 3.14 and a C++17 compiler. Namioto requires kara-templater 1.1.0. Platforms without a compatible wheel also
+need its native font and shaping build dependencies. Development and CI both read Python 3.14 from
 `.python-version`; patch releases can update within that series. The project explicitly uses
 PyPI as its default package index so the lockfile does not depend on a developer's global mirror
-configuration. Then run from the repository root:
+configuration. Once the required release is available on PyPI and the lock is current, run from the repository root:
 
 ```bash
 uv sync --extra cpu
@@ -23,11 +23,10 @@ rebuilds the extension on the next import.
 ### Develop against a local kara-templater checkout
 
 For joint development, place kara-templater at `../kara-templater` and run the following
-from the Namioto checkout. Use the same runtime extra you normally select.
+from an existing Namioto environment created with your preferred runtime extra.
 
 ```bash
-uv sync --locked --extra cpu
-uv pip install --python .venv --no-deps -e ../kara-templater
+uv pip install --python .venv -e ../kara-templater
 uv run --no-sync pytest tests/test_karaoke_ass.py
 uv run --no-sync namioto
 ```
@@ -36,9 +35,7 @@ The editable install picks up Python edits in the sibling checkout. Use `uv run 
 while testing them, since a normal sync can reinstall the locked release. To restore the
 release explicitly, run `uv sync --locked --extra cpu`.
 
-Namioto uses kara-templater 1.0.1 for BPM-aware count-ins and structured lyric
-layout. When upgrading, update the runtime pin and lockfile together and run the
-karaoke tests against the published wheel.
+During release preparation, an existing Namioto environment can also use a wheel built from the sibling checkout. Install it with `uv pip install --python .venv <wheel>` and run Namioto with `uv run --no-sync`. Regenerate the PyPI lockfile once the required release is published.
 
 ## Tests and lint
 
@@ -77,16 +74,17 @@ The CI workflow runs lint and the default headless tests on Ubuntu 24.04 for pul
 main-branch commits, version tags and manual runs. Slow tests are excluded.
 
 Every run builds the CPU-only GUI on Ubuntu 24.04 x86_64 and Windows x64 after checks pass,
-and uploads it as an Actions artifact: the AppImage for Linux, the frozen application directory
-for Windows (extract the downloaded artifact and run `namioto.exe`). Only a `v*` tag push creates
-a GitHub Release **draft** containing:
+and uploads the AppImage for Linux and the frozen application directory for Windows as Actions
+artifacts. Push a new version tag such as `v0.1.0` to publish a GitHub Release after both builds
+pass. The release includes generated notes and these assets.
 
 - `namioto-linux-x86_64.AppImage`
 - `namioto-windows-x86_64.zip` (extract the entire archive and run `namioto/namioto.exe`)
 - `SHA256SUMS`
 
-Review the draft and manually test the applications before publishing. The workflow verifies
-build/package success, not application startup, desktop interaction or audio-device operation.
+On a retry, the workflow refreshes an existing draft's assets before publishing it. It reuses
+the release if that tag is already published. CI verifies packaging. Test application
+startup, desktop interaction and audio devices before pushing a release tag.
 Windows builds are unsigned and may trigger SmartScreen. Linux builds target Ubuntu 24.04 and
 newer compatible systems; older glibc distributions such as Ubuntu 22.04 are not supported.
 AppImage execution normally requires FUSE; where unavailable, use its
@@ -112,8 +110,8 @@ Neither wheels nor frozen builds bundle analysis models. Model publishing uses
 
 ## Model conversion
 
-The aligner runs converted ONNX models; conversion requires dependencies outside the normal
-runtime:
+The aligner runs converted ONNX models. The separate conversion group uses the official
+PyTorch CPU wheel index for torch and torchaudio.
 
 ```bash
 uv run --group export scripts/export_align_model.py --model mms

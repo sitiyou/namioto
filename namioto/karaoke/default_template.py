@@ -1,4 +1,4 @@
-"""Namioto's default singing wipe, row allocation and tempo count-in."""
+"""Namioto's default lyric wipe, row allocation and tempo count-in."""
 
 from dataclasses import dataclass, replace
 from itertools import groupby
@@ -22,7 +22,7 @@ from kara_templater import (
     TimeSpan,
     Track,
     Vec2,
-    prepare_tracks,
+    build_lyric_scene,
 )
 
 from namioto.karaoke.cues import lead_preset
@@ -30,9 +30,9 @@ from namioto.karaoke.song import Song
 
 
 def _body_interval(_, target):
-    if not target.singing:
+    if not target.timing:
         return ()
-    return (TimeSpan(target.singing[0].start + target.delay, target.singing[-1].end + target.delay),)
+    return (TimeSpan(target.timing[0].start + target.delay, target.timing[-1].end + target.delay),)
 
 
 def _chapter_rows(items, chapter, rows):
@@ -51,7 +51,7 @@ class VocalRows(Layout):
         # The inline count-in and its host enter as one row. The reserved
         # interval already includes the countdown computed by the cue preset.
         lines = tuple(
-            replace(line, display=Lifetime(line.required.start, line.display.end))
+            replace(line, requested_display=Lifetime(line.required_display.start, line.requested_display.end))
             if any(cue.placement == "inline" for cue in line.cues)
             else line
             for line in lines
@@ -83,7 +83,10 @@ class VocalRows(Layout):
             counter += 1
             candidates = [row, *(i for i in range(len(lanes)) if i != row)]
             row = next(
-                (i for i in candidates if i >= len(lanes) or lanes[i][-1].required.end <= line.required.start),
+                (
+                    i for i in candidates
+                    if i >= len(lanes) or lanes[i][-1].required_display.end <= line.required_display.start
+                ),
                 len(lanes),
             )
             if row == len(lanes):
@@ -93,10 +96,12 @@ class VocalRows(Layout):
         area = context.region
         for row, lane in enumerate(lanes):
             for i, line in enumerate(lane):
-                start = max(line.display.start, lane[i - 1].required.end if i else 0)
-                end = min(line.display.end, lane[i + 1].required.start if i + 1 < len(lane) else line.display.end)
+                start = max(line.requested_display.start, lane[i - 1].required_display.end if i else 0)
+                end = line.requested_display.end
+                if i + 1 < len(lane):
+                    end = min(end, lane[i + 1].required_display.start)
                 if i:
-                    start = max(start, min(lane[i - 1].display.end, line.required.start))
+                    start = max(start, min(lane[i - 1].requested_display.end, line.required_display.start))
                 y = area.top if self.top else area.top + area.height - line.bounds.height
                 align = self.alignment[row % self.rows] if isinstance(self.alignment, tuple) else self.alignment
                 fraction = {"left": 0, "center": 0.5, "right": 1}[align]
@@ -116,7 +121,8 @@ class VocalRows(Layout):
         return tuple(result)
 
 
-def default_scene(song: Song):
+def default_scene(song: Song, *, for_ass: bool = False):
+    """Build the default scene with native wipes for ASS and pulse and feather for Hook."""
     settings = song.settings
 
     def rgb(value):
@@ -148,7 +154,7 @@ def default_scene(song: Song):
     preset = lead_preset(settings)
     lead, duration = preset.resolve_timing(bpm=song.bpm)
     base = StatePatch(fill=rgb(settings.base_color), outline=rgb(settings.base_outline_color))
-    sung = StatePatch(outline=rgb(settings.overlay_outline_color))
+    after_paint = StatePatch(outline=rgb(settings.overlay_outline_color))
     sources = {s.id: s for s in song.sources}
 
     # Fades reserve time in kara-templater. Budget them inside the actual
@@ -158,7 +164,7 @@ def default_scene(song: Song):
         windows = []
         for source in song.sources:
             if source.style == "default":
-                spans = [segment.singing for unit in source.lyrics.units for segment in unit.segments]
+                spans = [segment.timing for unit in source.lyrics.units for segment in unit.segments]
                 windows.append((source.id, min(span.start for span in spans), max(span.end for span in spans)))
         windows.sort(key=lambda item: item[1])
         fades = {
@@ -178,15 +184,15 @@ def default_scene(song: Song):
         units = source.lyrics.units
 
         by_span = {
-            seg.singing: color
+            seg.timing: color
             for unit, palette in zip(units, colors, strict=True)
             for seg, color in zip(unit.segments, palette, strict=True)
         }
 
-        def glow(target, sung_side):
+        def glow(target, after_wipe):
             if not settings.blur and not settings.blur_scale:
                 return None
-            span = target.singing[0] if target.singing else None
+            span = target.timing[0] if target.timing else None
             color = source.lyrics.body.runs[0].appearance.primary
             if span:
                 color = by_span.get(span, color)
@@ -194,23 +200,18 @@ def default_scene(song: Song):
             after, before = replace(settings, overlay_color=code).blur_colours()
             border = settings.border_furi if target.role == "ruby" else settings.border
             return Glow(
-                color=rgb(after if sung_side else before),
+                color=rgb(after if after_wipe else before),
                 blur=settings.blur,
                 border=border * settings.blur_scale,
                 opacity=0.8,
             )
 
-        segment_colors = {
-            (i, j): color for i, palette in enumerate(colors) if len(palette) > 1 for j, color in enumerate(palette)
-        }
-        effect = LyricHighlights.from_singing(
-            sung,
+        effect = LyricHighlights.from_timing(
+            after_paint,
             base_paint=base,
-            hook_feather=settings.feather,
-            segment_colors=segment_colors,
+            hook_feather=0 if for_ass else settings.feather,
             ruby_fill=rgb(settings.ruby_color) if settings.ruby_color else None,
             blend_glow=False,
-            ass_feather_bands=6,
             glow=lambda _, target: glow(target, True),
             base_glow=lambda _, target: glow(target, False),
         )
@@ -225,7 +226,7 @@ def default_scene(song: Song):
             rules.append(LyricRule("line", "enter", FadeIn(), duration=entrance))
         if exit_duration:
             rules.append(LyricRule("line", "exit", FadeOut(), duration=exit_duration))
-        if settings.pulse != 1:
+        if not for_ass and settings.pulse != 1:
             pulse = ScalePulse(peak=settings.pulse, peak_at=settings.pulse_peak)
             rules.append(LyricRule("character", _body_interval, pulse))
             rules.append(LyricRule("ruby", HighlightArrival(highlights=effect.highlights), pulse))
@@ -252,12 +253,9 @@ def default_scene(song: Song):
                 preview=settings.lead_time_ms / 1000,
                 tail=(settings.hold_ms + settings.fade_out_ms) / 1000,
                 ruby_gap=settings.ruby_offset,
+                palt=settings.palt,
                 cues={"lead": replace(preset, line_edge="below" if top else "above")},
                 effects=(decorate,),
             )
         )
-    if settings.palt:
-        if not hasattr(Track, "palt"):
-            raise ValueError("Proportional font metrics require a kara-templater build with Track.palt support")
-        tracks = [replace(track, palt=True) for track in tracks]
-    return prepare_tracks(document, inputs=song.sources, tracks=tuple(tracks), bpm=song.bpm)
+    return build_lyric_scene(document, inputs=song.sources, tracks=tuple(tracks), bpm=song.bpm)

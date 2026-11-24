@@ -16,9 +16,9 @@ from kara_templater import (
     LyricSource,
     LyricUnit,
     RubyText,
-    SingingSpan,
     TextAppearance,
     TextRun,
+    TimedTextSpan,
 )
 
 from namioto.karaoke.cues import lead_preset
@@ -262,7 +262,7 @@ def prepare_song(text, spans, settings: ExportSettings, bpm: float = 120, *, sem
                         (LyricMapping(0, length, 0, length),),
                         "join" if unit.ruby_continuation or segments else "spill",
                     )
-                clock = SingingSpan(offset, end, segment.start_ms / 1000, segment.end_ms / 1000, "k")
+                clock = TimedTextSpan(offset, end, segment.start_ms / 1000, segment.end_ms / 1000, "k")
                 segments.append(LyricSegment(clock, offset, end, reading))
             units.append(LyricUnit(offset, end, tuple(segments)))
             offset = end

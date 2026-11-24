@@ -28,7 +28,7 @@ def test_inline_overlapping_channels_keep_exact_animation_times_and_colours():
     )
     assert "0000FF&" in result and "00FF00&" in result
     (source,) = subtitle.build_song(text, data).sources
-    assert [u.segments[0].singing.start for u in source.lyrics.units] == [0, 1, 4]
+    assert [u.segments[0].timing.start for u in source.lyrics.units] == [0, 1, 4]
 
 
 @pytest.mark.parametrize("explicit", [False, True])
@@ -123,18 +123,18 @@ def test_third_simultaneous_voice_can_use_a_separate_harmony_track():
 
 def test_ruby_gap_preserves_separate_times_without_continuous_sweep():
     song = prepare_song("@1{字[あい]}", [[(0, 1), (2, 3)]], ExportSettings())
-    assert [(t.singing[0].start, t.singing[0].end) for t in default_scene(song).lines[0].query("ruby")] == [
+    assert [(t.timing[0].start, t.timing[0].end) for t in default_scene(song).lines[0].query("ruby")] == [
         (0, 1),
         (2, 3),
     ]
 
 
-def test_shared_base_can_change_colour_between_nonoverlapping_readings():
+def test_nonoverlapping_readings_keep_independent_colours():
     result = generate_ass(
         "字[@c1{あ}@c2{い}]", [[(0, 1), (2, 3)]], settings=ExportSettings(channel_colors={1: "FF0000", 2: "00FF00"})
     )
     events = Document.parse(result).lines
-    for glyph, colour in (("字", "0000FF"), ("字", "00FF00"), ("あ", "0000FF"), ("い", "00FF00")):
+    for glyph, colour in (("字", "0000FF"), ("あ", "0000FF"), ("い", "00FF00")):
         assert any(_surface(e) == glyph and colour + "&" in e.text for e in events)
 
 
@@ -142,7 +142,7 @@ def test_ruby_colour_overrides_both_singing_segments_without_recolouring_the_bas
     settings = ExportSettings(channel_colors={1: "FF0000", 2: "00FF00"}, ruby_color="9966CC")
     result = generate_ass("字[@c1{あ}@c2{い}]", [[(0, 1), (2, 3)]], settings=settings)
     events = Document.parse(result).lines
-    for glyph, colour in (("字", "0000FF"), ("字", "00FF00"), ("あ", "CC6699"), ("い", "CC6699")):
+    for glyph, colour in (("字", "0000FF"), ("あ", "CC6699"), ("い", "CC6699")):
         assert any(_surface(e) == glyph and colour + "&" in e.text for e in events)
 
 

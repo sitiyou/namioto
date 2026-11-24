@@ -1,0 +1,8 @@
+# Import a matched MIDI and Namioto KRC pair
+
+Use this workflow when the MIDI already contains the note times and the Namioto KRC describes how its sounds consume those notes. Bring the matching recording if the timing needs to be checked by ear.
+
+1. **Create or open the destination project.** Open the matching recording to create a `.nto`, or open a suitable existing project. With only the pair, start an empty editor and use **Save As** to create a `.nto` before importing MIDI.
+2. **Import the MIDI with its original convention.** In Settings, enable **WaveTone compatibility** for MIDI with its leading bar and disable it for ordinary MIDI. Open the MIDI from the destination project. If it already has notes, use the import dialog to choose **Replace** or **Merge** intentionally. Check that the imported channels match the KRC's `@N{...}` wrappers. [MIDI import](../../../docs/usage.md#midi-channels-and-import)
+3. **Import the KRC in the lyrics window.** Keep the existing readings, groups and NOTE counts. Use the lyrics strip to check that phrases, shared notes and sustained sounds land on the expected notes in each channel. Fix slot counts or note timing where the pair disagrees. [KRC import](../../../docs/lyrics.md#add-project-lyrics) · [Mapping controls](../../../docs/lyrics.md#map-lyrics-to-notes)
+4. **Save the `.nto`.** Check the first mapped phrase, a later entrance and each lyric channel. If the recording is available, also listen to those passages. When only the pair is available, report that the mapping was checked against the MIDI and that listening still needs the recording.
