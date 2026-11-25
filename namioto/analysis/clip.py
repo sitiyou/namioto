@@ -69,12 +69,11 @@ def _compare_readings(
     directory: Path | None,
 ) -> list[dict]:
     from namioto.analysis import align
-    from namioto.karaoke.canonical import without_note_mapping
     from namioto.karaoke.sounds import natural_sounds, natural_tokens
 
     if isinstance(candidates, str) or not candidates:
         raise ValueError("supply one or more KRC candidates for the selected window")
-    readings = [(text, tuple(natural_tokens(natural_sounds(without_note_mapping(text))))) for text in candidates]
+    readings = [(text, tuple(natural_tokens(natural_sounds(text)))) for text in candidates]
     if any(not tokens for _, tokens in readings):
         raise ValueError("every KRC candidate must contain lyric sounds")
 

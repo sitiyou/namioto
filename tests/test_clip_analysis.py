@@ -44,15 +44,16 @@ def test_readings_share_one_model_pass_and_preserve_recording_time(audio, monkey
         start=0.25,
         end=0.5,
         audio_origin=42.0,
-        candidates=("宇宙[う,ちゅう]", "宇宙[そら]"),
+        candidates=("宇宙[う,ちゅう]", "宇宙[そら]", "(so).1(ra).1"),
     )
 
-    standard, alternative = result["candidates"]
+    standard, alternative, split_latin = result["candidates"]
     assert waveform_lengths == [4000]
     assert alternative["ctc_log_probability"] > standard["ctc_log_probability"]
     assert [token["text"] for token in alternative["tokens"]] == ["so", "ra"]
     assert alternative["tokens"][0]["start"] == pytest.approx(42.27)
     assert alternative["tokens"][1]["end"] <= 42.5
+    assert [token["text"] for token in split_latin["tokens"]] == ["so", "ra"]
 
 
 def test_game_uses_processed_clip_without_resetting_its_recording_time(audio, monkeypatch):

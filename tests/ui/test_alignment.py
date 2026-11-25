@@ -17,7 +17,8 @@ from namioto.ui.align_dialog import AlignDialog, Aligner
 from .helpers import parameter_writer, wait_for_lyric_mapping
 
 
-def test_aligner_uses_the_same_readings_with_or_without_old_note_groups(monkeypatch) -> None:
+@pytest.mark.parametrize("channel", [None, 0])
+def test_aligner_preserves_the_supplied_latin_sound_boundaries(monkeypatch, channel) -> None:
     import numpy as np
 
     observed = []
@@ -32,9 +33,9 @@ def test_aligner_uses_the_same_readings_with_or_without_old_note_groups(monkeypa
 
     monkeypatch.setattr(align, "align_whole", align_whole)
     for text in ("hello\n", "(hel).1(lo).0\n"):
-        Aligner("vocal.wav", text).load()
+        Aligner("vocal.wav", text, channel=channel).load()
 
-    assert observed == [("hello",), ("hello",)]
+    assert observed == [("hello",), ("hel", "lo")]
 
 
 def test_rebuild_uses_the_same_midi_mapping_for_different_old_krc_counts(own_window, tmp_path, monkeypatch) -> None:

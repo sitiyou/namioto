@@ -30,7 +30,6 @@ from PySide6.QtWidgets import (
 
 from namioto.analysis import align, devices
 from namioto.i18n import tr
-from namioto.karaoke.canonical import without_note_mapping
 from namioto.karaoke.sounds import natural_sounds, natural_tokens, split_tokens
 from namioto.lyricmap import from_spans
 from namioto.lyricmap.channels import split as split_channels
@@ -42,7 +41,7 @@ LOG_HEIGHT = 120
 
 
 class Aligner(LoadingThread):
-    """One pass of the forced aligner over the whole audio."""
+    """One pass of the forced aligner over the sound sequence in the supplied KRC."""
 
     progress = Signal(int, int)
     aligned = Signal(object)
@@ -69,8 +68,9 @@ class Aligner(LoadingThread):
 
     def load(self) -> None:
         started = time.monotonic()
-        text = without_note_mapping(self.text, channel=self.channel)
-        lines = natural_sounds(text) if self.channel is None else split_channels(text)[self.channel].lines
+        lines = (
+            natural_sounds(self.text) if self.channel is None else list(split_channels(self.text)[self.channel].lines)
+        )
         sounds = sum(len(line.sounds) for line in lines)
         self.message.emit(tr("Read {lines} lines, {sounds} sounds", lines=len(lines), sounds=sounds))
         audio = align.load_audio(self.path)

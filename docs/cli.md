@@ -103,6 +103,8 @@ for conversion tools.
 small passage, give the window in seconds within the input file. To compare
 readings with MMS or Yohane, pass the KRC for that passage. Use the same
 surrounding words in each candidate and change only the reading in question.
+Keep any explicit Latin sound divisions in the passage so the returned token
+rows match the project's Sounds.
 
 ```sh
 uv run namioto-cli clip vocal.wav --start 42.1 --end 44.6 --model mms \
@@ -245,7 +247,8 @@ by job ID, until remote control stops. Each alignment records its audio path,
 file stamp, channel and lyric signature. A completed job
 returns one row per lyric line on the selected channel, with start/end pairs in seconds,
 scores and onset uncertainty bounds per natural sound. A failed job includes the error.
-The caller can inspect this evidence before editing notes. For the underlying piano-roll
+Existing sound divisions in the KRC are preserved in these rows. The caller can inspect
+this evidence before editing notes. For the underlying piano-roll
 data, `namioto-ctl spectrum.frames start=16.25 count=24` returns up to 256 consecutive frames.
 Rows begin at the returned audio time, are spaced by `step` seconds and start at MIDI
 `first_pitch`. Gain, contrast and visual latency do not affect these amplitudes.

@@ -12,7 +12,7 @@ Use the confirmed recording as the clock. For GAME, use a vocal stem aligned to 
 
 ## Check the eighth-note grid
 
-Start from the estimated offset and compare attacks and releases in phrases near the beginning, middle and end. Adjust the offset when the snapped notes are consistently early or late. If the error grows through the song, recheck BPM before trying another offset. Check a quick phrase, a held note and a repeated refrain. A good fit preserves the phrasing, including distinct attacks and breathing gaps.
+Start from the estimated offset and compare attacks and releases in phrases near the beginning, middle and end. Check the grid against the beat in the mix or accompaniment. GAME's acoustic attacks can lean consistently ahead of or behind that beat. Adjust the offset when the snapped notes are consistently early or late. If the error grows through the song, recheck BPM before trying another offset. Check a quick phrase, a held note and a repeated refrain. A good fit preserves the phrasing, including distinct attacks and breathing gaps.
 
 **Keep exact eighth-note lengths as the normal result.** For a passage that fits, keep both note boundaries on the confirmed grid. Each note lasts one eighth note or a whole multiple of it. At 120 BPM, one grid cell is 250 ms.
 
@@ -28,7 +28,7 @@ To initialize an empty roll from a checked GAME grid, set the BPM and grid offse
 
 Save with `Ctrl+S` or `project.save` and let the lyric mapping finish. Over IPC, check `subtitle.pending` in `state.get`. Reopen the saved `.nto` and verify the BPM, grid offset, KRC line breaks, readings and chapter entrances.
 
-- **KRC mapping.** Most lyrics should use the default note-slot counts. Review clusters of `.N` overrides, zero-slot sounds and shared groups by line and voice. Each exception should reflect how the phrase is sung. When many overrides pile up, check the first misplaced note or sound and the following phrase before adjusting individual counts. `.N` changes how many notes a unit takes. The notes carry the durations.
+- **KRC mapping.** Most lyrics should use the default note-slot counts. Compare NOTE coverage and requested slots on each vocal channel. `document.notes` includes the full note stream, and `analysis.phrase` gives the slot groups and owned note IDs for each line. Check unmatched notes at chapter gaps and the end, and review clusters of `.N`, zero slots and shared groups using the [phrase review checks](timing-analysis.md#resolve-an-uncertain-phrase).
 - **Timing and pitch.** In the piano roll, look for brief same-pitch restarts, short notes followed by long gaps inside a phrase, isolated octave jumps and same-voice overlaps. Check held vowels, pickups and breathing gaps. Compare repeated phrases for consistent note shapes and lyric ownership, while allowing performed variations. Use the agreed grid for sections that fit.
 - **Phrase transitions.** Check the first entrance, places where the song resumes after a break, revised line breaks and overlapping voices. With a preview available, watch the timing at normal speed and check whether rapid wipes, stalls or late line changes reflect the phrase. Listen when audio can be reviewed.
 
