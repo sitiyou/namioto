@@ -4,14 +4,13 @@
 
 ## Source setup
 
-Install uv, Python 3.14 and a C++17 compiler. Namioto requires kara-templater 1.1.0. Platforms without a compatible wheel also
-need its native font and shaping build dependencies. Development and CI both read Python 3.14 from
-`.python-version`; patch releases can update within that series. The project explicitly uses
-PyPI as its default package index so the lockfile does not depend on a developer's global mirror
-configuration. Once the required release is available on PyPI and the lock is current, run from the repository root:
+Install uv, Python 3.14 and a C++17 compiler. Namioto requires kara-templater 1.1.1.
+Building it from source also requires its native font and shaping dependencies.
+Development and CI both read Python 3.14 from `.python-version`. The lockfile uses
+PyPI for kara-templater. From the repository root, run
 
 ```bash
-uv sync --extra cpu
+uv sync --locked --extra cpu
 uv run namioto
 ```
 
@@ -35,7 +34,8 @@ The editable install picks up Python edits in the sibling checkout. Use `uv run 
 while testing them, since a normal sync can reinstall the locked release. To restore the
 release explicitly, run `uv sync --locked --extra cpu`.
 
-During release preparation, an existing Namioto environment can also use a wheel built from the sibling checkout. Install it with `uv pip install --python .venv <wheel>` and run Namioto with `uv run --no-sync`. Regenerate the PyPI lockfile once the required release is published.
+An existing Namioto environment can also use a wheel built from the sibling checkout.
+Install it with `uv pip install --python .venv <wheel>` and run Namioto with `uv run --no-sync`.
 
 ## Tests and lint
 
