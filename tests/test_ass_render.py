@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Optional headless libass integration with a fixed font and independent highlights."""
+"""Optional headless libass integration with a one line-timed event."""
 
 import shutil
 import subprocess
@@ -7,37 +7,16 @@ import subprocess
 import numpy as np
 import pytest
 
-from namioto.karaoke import ExportSettings, generate_ass
+from namioto.karaoke import generate_ass
 
 
-def test_two_words_sweep_simultaneously_in_libass(tmp_path):
-    if not shutil.which("ffmpeg") or not shutil.which("fc-match"):
-        pytest.skip("ffmpeg and fontconfig are required for the render check")
-    font = subprocess.run(
-        ["fc-match", "-f", "%{family}", "DejaVu Sans"],
-        capture_output=True,
-        text=True,
-        check=True,
-    ).stdout
-    if font != "DejaVu Sans":
-        pytest.skip("the fixed DejaVu Sans font is unavailable")
+def test_plain_ass_displays_only_during_its_interval(tmp_path):
+    if not shutil.which("ffmpeg"):
+        pytest.skip("ffmpeg is required for the render check")
     filters = subprocess.run(["ffmpeg", "-filters"], capture_output=True, text=True, check=True).stdout
     if " ass " not in filters:
         pytest.skip("ffmpeg was built without libass")
-    settings = ExportSettings(
-        font="DejaVu Sans",
-        channel_colors={1: "FF0000", 2: "00FF00"},
-        border=0,
-        border_furi=0,
-        blur=0,
-        blur_scale=0,
-        fade_in_ms=0,
-        fade_out_ms=0,
-    )
-    (tmp_path / "lyrics.ass").write_text(
-        generate_ass("@1{AAAA }@2{BBBB}", [[(0, 2), (1, 3)]], settings=settings),
-        encoding="utf-8",
-    )
+    (tmp_path / "lyrics.ass").write_text(generate_ass("Lyrics", [[(1, 2)]]), encoding="utf-8")
     counts = []
     for timestamp in (0.5, 1.5, 2.5):
         result = subprocess.run(
@@ -66,12 +45,6 @@ def test_two_words_sweep_simultaneously_in_libass(tmp_path):
             check=True,
         )
         pixels = np.frombuffer(result.stdout, dtype=np.uint8).reshape(1080, 1920, 3)
-        red = (pixels[:, :, 0] > 180) & (pixels[:, :, 1] < 60) & (pixels[:, :, 2] < 60)
-        green = (pixels[:, :, 1] > 180) & (pixels[:, :, 0] < 60) & (pixels[:, :, 2] < 60)
-        counts.append((red.sum(), green.sum()))
-    assert counts[0][0] > 500
-    assert counts[0][1] == 0
-    assert counts[1][0] > counts[0][0] + 500
-    assert counts[1][1] > 500
-    assert counts[2][0] > counts[1][0] + 500
-    assert counts[2][1] > counts[1][1] + 500
+        counts.append((pixels > 180).all(axis=2).sum())
+    assert counts[0] == counts[2] == 0
+    assert counts[1] > 500

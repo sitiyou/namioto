@@ -10,7 +10,6 @@ import pytest
 from namioto import export_cli, ipc, midi, project, subtitle
 from namioto.channels import Channel
 from namioto.karaoke import ExportSettings, generate_ass
-from namioto.karaoke.default_template import default_scene
 
 
 @pytest.fixture
@@ -39,55 +38,31 @@ def test_unrenderable_input_is_rejected(exports, krc):
         subtitle.build_ass(krc, midi.to_bytes(channels, notes, 60))
 
 
-@pytest.mark.parametrize(("bpm", "duration"), [(60, 2000), (80, 1500), (120, 1000), (160, 1500)])
-def test_guide_dot_default_duration_follows_midi_tempo(bpm, duration):
-    channels = (Channel(channel=0),)
-    notes = (project.Note(10, 1, 60, 0),)
-    song = subtitle.build_song("あ", midi.to_bytes(channels, notes, bpm))
-    (cue,) = default_scene(song).lines[0].independent
-    assert cue.lifetime.end - cue.lifetime.start == pytest.approx(3 * duration / 1000)
-
-
-def test_explicit_guide_dot_duration_overrides_tempo():
-    channels = (Channel(channel=0),)
-    notes = (project.Note(10, 1, 60, 0),)
-    settings = ExportSettings(guide_dot_duration_ms=750)
-    song = subtitle.build_song("あ", midi.to_bytes(channels, notes, 60), settings=settings)
-    (cue,) = default_scene(song).lines[0].independent
-    assert cue.lifetime.end - cue.lifetime.start == pytest.approx(3 * 750 / 1000)
-
-
 def test_overlapping_notes_are_not_silently_filtered():
     data = midi.to_bytes((Channel(channel=0),), (project.Note(0, 2, 60, 0), project.Note(1, 2, 62, 0)), 60)
     with pytest.raises(ValueError, match="conflict"):
         subtitle.build_ass("あい", data)
 
 
-def test_settings_precedence_and_hardcoded_defaults(monkeypatch, tmp_path):
+def test_offset_precedence_and_hardcoded_defaults(monkeypatch, tmp_path):
     parser = export_cli.build_parser()
-    args = parser.parse_args(["--out", "out.ass", "--spacing", "9"])
-    monkeypatch.setenv("NAMIOTO_ASS_SPACING", "not a number")
-    monkeypatch.setenv("NAMIOTO_ASS_FONT_SIZE", "72")
-    settings = export_cli.resolve_settings(args, {"spacing": 3, "font": "Session Font", "font_size": 48})
-    assert (settings.spacing, settings.font_size, settings.font) == (9, 72, "Session Font")
-    args.spacing = None
-    monkeypatch.setenv("NAMIOTO_ASS_SPACING", "7.5")
-    assert export_cli.resolve_settings(args, {"spacing": 3}).spacing == 7.5
-    monkeypatch.delenv("NAMIOTO_ASS_SPACING")
-    assert export_cli.resolve_settings(args, {"spacing": 3}).spacing == 3
-    monkeypatch.delenv("NAMIOTO_ASS_FONT_SIZE")
+    args = parser.parse_args(["--out", "out.ass", "--offset-ms", "90"])
+    monkeypatch.setenv("NAMIOTO_ASS_OFFSET_MS", "bad")
+    assert export_cli.resolve_settings(args, {"offset_ms": 30}).offset_ms == 90
+    args.offset_ms = None
+    monkeypatch.setenv("NAMIOTO_ASS_OFFSET_MS", "-75")
+    assert export_cli.resolve_settings(args, {"offset_ms": 30}).offset_ms == -75
+    monkeypatch.delenv("NAMIOTO_ASS_OFFSET_MS")
+    assert export_cli.resolve_settings(args, {"offset_ms": 30}).offset_ms == 30
     config = tmp_path / "settings.json"
-    config.write_text('{"ass":{"spacing":99,"font":"Saved Font"}}')
+    config.write_text('{"ass":{"offset_ms":99}}')
     monkeypatch.setenv("NAMIOTO_SETTINGS", str(config))
     assert export_cli.resolve_settings(args) == ExportSettings()
 
 
-@pytest.mark.parametrize(
-    ("option", "value"),
-    [("SPACING", "nan"), ("FONT_SIZE", "0"), ("FONT_SIZE", "bad"), ("OVERLAY_COLOR", "xyz"), ("FONT", "a,b")],
-)
-def test_invalid_environment_settings_are_rejected(monkeypatch, option, value):
-    monkeypatch.setenv(f"NAMIOTO_ASS_{option}", value)
+@pytest.mark.parametrize("value", ["nan", "0.5", "bad", "2147483648"])
+def test_invalid_offset_environment_settings_are_rejected(monkeypatch, value):
+    monkeypatch.setenv("NAMIOTO_ASS_OFFSET_MS", value)
     args = export_cli.build_parser().parse_args(["--out", "out.ass"])
     with pytest.raises(ValueError):
         export_cli.resolve_settings(args)
@@ -99,10 +74,10 @@ def test_file_cli_keeps_previous_ass_on_failure_and_uses_explicit_settings(expor
     lyrics.write_text(krc)
     source = midi.write(tmp_path / "song.mid", channels, notes, 60, wavetone=True)
     target = tmp_path / "song.ass"
-    args = ["--krc", str(lyrics), "--midi", str(source), "--out", str(target), "--spacing", "8"]
+    args = ["--krc", str(lyrics), "--midi", str(source), "--out", str(target), "--offset-ms", "800"]
     assert export_cli.main(args) == 0
     before = target.read_bytes()
-    assert b",100,100,8,0,1," in before
+    assert b"0:00:00.80,0:00:03.80" in before
     lyrics.write_text("あ.10い")
     assert export_cli.main(args) == 1
     assert target.read_bytes() == before
@@ -175,13 +150,13 @@ def test_session_cli_builds_locally_and_saves_exact_intermediate_exports(exports
             return {
                 "krc": krc,
                 "midi": base64.b64encode(data).decode(),
-                "settings": {"spacing": 2, "font": "GUI Font"},
+                "settings": {"offset_ms": 200},
                 "wavetone": True,
             }
 
     monkeypatch.setattr(ipc, "Client", Client)
     monkeypatch.setattr(ipc, "resolve_endpoint", lambda instance: ipc.Endpoint("unix", "internal", instance))
-    monkeypatch.setenv("NAMIOTO_ASS_SPACING", "7")
+    monkeypatch.setenv("NAMIOTO_ASS_OFFSET_MS", "700")
     target, saved_krc, saved_midi = (tmp_path / name for name in ("out.ass", "out.krc", "out.mid"))
     assert (
         export_cli.main(
@@ -195,8 +170,8 @@ def test_session_cli_builds_locally_and_saves_exact_intermediate_exports(exports
                 str(saved_krc),
                 "--save-midi",
                 str(saved_midi),
-                "--spacing",
-                "9",
+                "--offset-ms",
+                "900",
             ]
         )
         == 0
@@ -204,7 +179,7 @@ def test_session_cli_builds_locally_and_saves_exact_intermediate_exports(exports
     assert calls == ["project.export_source"]
     assert saved_krc.read_text() == krc
     assert saved_midi.read_bytes() == data
-    expected = subtitle.build_ass(krc, data, settings=ExportSettings(font="GUI Font", spacing=9), wavetone=True)
+    expected = subtitle.build_ass(krc, data, settings=ExportSettings(offset_ms=900), wavetone=True)
     assert target.read_text() == expected
 
 
@@ -309,28 +284,3 @@ def test_atomic_output_failure_preserves_previous_ass(exports, tmp_path, monkeyp
         subtitle.export_song(path, krc, data)
     assert path.read_text() == "previous ASS"
     assert not list(tmp_path.glob("*.tmp"))
-
-
-def test_semantic_external_recipe_keeps_project_facts_and_owns_design():
-    from namioto.karaoke.templates import Registry
-    from namioto.params import Field
-
-    registry = Registry()
-    registry.add(id="outside", title="External design", parameters=(Field("font", "text", "Independent", "Font"),),
-                 semantic=True, build=lambda song, values: (song, values))
-    data = midi.to_bytes((Channel(channel=0),), (project.Note(4, 1, 60, 0),), 120)
-    recipe = registry.get("outside")
-    other = ExportSettings(show_ruby=False, cue="off", font="Changed", channel_colors={0: "ABCDEF"})
-    def build(settings, values=None):
-        return subtitle.build_template_scene(recipe, "木[き]", data, settings=settings, parameters=values,
-                                             project_colors={0: "DECAFB"})
-    original = build(ExportSettings())
-    assert build(other) == original
-    song, values = original
-    assert song.sources[0].chapter == "0"
-    assert values == {"font": "Independent"}
-    assert song.sources[0].lyrics.units[0].segments[0].ruby
-    assert song.channel_colors == {0: "DECAFB"}
-    assert not song.sources[0].lyrics.body.cues
-    assert build(other, {"font": "Alternate"}) == (song, {"font": "Alternate"})
-    assert other.font == "Changed" and not other.show_ruby

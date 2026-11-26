@@ -30,7 +30,6 @@ from namioto.channels import CHANNEL_COUNT, Channel, free_channel
 from namioto.channels import set_field as channel_set_field
 from namioto.ipc import IpcError
 from namioto.karaoke import KrcError
-from namioto.karaoke.templates import read_preferences
 from namioto.ui.roll import PITCH_MAX, PITCH_MIN
 
 MATCH_SECONDS = 1e-3  # how close two notes have to be to count as the same one when removing
@@ -281,13 +280,9 @@ class WindowBridge:
         add(
             "project.export_lyrics",
             self.export_lyrics,
-            summary="Export ASS or a libplacebo hook from the current lyrics and MIDI",
+            summary="Export line-timed ASS from the current lyric mapping",
             params={
-                "path": "the .ass or .hook file",
-                "format?": "ass or hook",
-                "fps?": "hook frame rate",
-                "template?": "registered template ID",
-                "parameters?": "template overrides",
+                "path": "the .ass file",
                 "save_krc?": "KRC export path",
                 "save_midi?": "MIDI export path",
             },
@@ -859,28 +854,14 @@ class WindowBridge:
 
     def export_lyrics(self, params: dict) -> dict:
         path = Path(_text(params, "path"))
-        fmt = params.get("format", "hook" if path.suffix.lower() == ".hook" else "ass")
+        if params.get("format", "ass") != "ass" or any(key in params for key in ("fps", "template", "parameters")):
+            raise IpcError("bad_params", "subtitle export only supports plain ASS")
         try:
-            path = subtitle.export_path(path, fmt)
+            path = subtitle.export_path(path)
         except ValueError as error:
             raise IpcError("failed", str(error)) from error
-        saved = read_preferences(self.window.project_path)
-        template = params.get("template", saved.get("id", "default"))
-        if not isinstance(template, str):
-            raise IpcError("failed", "template must be a string")
-        parameters = params.get("parameters", {})
-        if not isinstance(parameters, dict):
-            raise IpcError("failed", "parameters must be an object")
         paths = {name: _text(params, name) for name in ("save_krc", "save_midi") if name in params}
-        if not self.window.export_lyrics(
-            path,
-            format=fmt,
-            fps=params.get("fps", saved.get("fps", 60)),
-            template=template,
-            scripts=saved.get("scripts", ()) if template != "default" else (),
-            parameters={**saved.get("values", {}).get(template, {}), **parameters},
-            **paths,
-        ):
+        if not self.window.export_lyrics(path, **paths):
             raise IpcError("failed", self.window.statusBar().currentMessage())
         return {"path": str(path), **paths}
 
@@ -889,13 +870,8 @@ class WindowBridge:
             krc, data = self.window.export_source()
         except (KrcError, ValueError, OSError) as error:
             raise IpcError("failed", str(error)) from error
-        saved = read_preferences(self.window.project_path)
-        template = saved.get("id", "default")
         return {
             "project": str(self.window.project_path.resolve()) if self.window.project_path else None,
-            "template": template,
-            "parameters": saved.get("values", {}).get(template, {}),
-            "fps": saved.get("fps", 60),
             "krc": krc,
             "midi": base64.b64encode(data).decode("ascii"),
             "settings": vars(self.window._export_settings()).copy(),

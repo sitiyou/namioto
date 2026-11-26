@@ -233,7 +233,6 @@ def test_project_colour_pickers_validate_and_leave_preferences_untouched(own_win
     assert own_window.view.lyric_color(1).name() == "#ff0000"
     assert own_window.view.lyric_color(2).name() == "#00ff00"
     assert own_window.view.channel_color(1) == original_midi
-    assert own_window._export_settings().channel_colours()[1] == "FF0000"
     dialog.color_editors[1].setText("invalid")
     assert picker.icon().isNull()
     assert not dialog._buttons.button(QDialogButtonBox.StandardButton.Apply).isEnabled()

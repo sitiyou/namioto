@@ -23,7 +23,6 @@ pyinstaller_common=(
     --noconfirm
     --clean
     --specpath build
-    --additional-hooks-dir scripts/pyinstaller-hooks
 )
 
 build_wheel() {

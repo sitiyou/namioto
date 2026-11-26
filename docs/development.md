@@ -4,10 +4,8 @@
 
 ## Source setup
 
-Install uv, Python 3.14 and a C++17 compiler. Namioto requires kara-templater 1.1.1.
-Building it from source also requires its native font and shaping dependencies.
-Development and CI both read Python 3.14 from `.python-version`. The lockfile uses
-PyPI for kara-templater. From the repository root, run
+Install uv, Python 3.14 and a C++17 compiler. Development and CI both read
+Python 3.14 from `.python-version`. From the repository root, run
 
 ```bash
 uv sync --locked --extra cpu
@@ -18,24 +16,6 @@ Choose `--extra cuda` or `--extra webgpu` instead if needed; see [devices](cli.m
 The native audio extension is built with meson-python and pybind11. Build isolation is disabled
 for this package, so the development group provides its build tools. Editing native sources
 rebuilds the extension on the next import.
-
-### Develop against a local kara-templater checkout
-
-For joint development, place kara-templater at `../kara-templater` and run the following
-from an existing Namioto environment created with your preferred runtime extra.
-
-```bash
-uv pip install --python .venv -e ../kara-templater
-uv run --no-sync pytest tests/test_karaoke_ass.py
-uv run --no-sync namioto
-```
-
-The editable install picks up Python edits in the sibling checkout. Use `uv run --no-sync`
-while testing them, since a normal sync can reinstall the locked release. To restore the
-release explicitly, run `uv sync --locked --extra cpu`.
-
-An existing Namioto environment can also use a wheel built from the sibling checkout.
-Install it with `uv pip install --python .venv <wheel>` and run Namioto with `uv run --no-sync`.
 
 ## Tests and lint
 
@@ -65,8 +45,6 @@ for the enforced boundaries.
 ./build.sh all
 ./build.sh clean
 ```
-
-Frozen CLI/GUI builds collect `kara-templater`'s native text metrics and package license metadata.
 
 ### GitHub Actions and releases
 

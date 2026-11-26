@@ -1,333 +1,48 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Final ASS events, structured timing, ruby layout and export settings."""
-
-import re
+"""The basic ASS exporter writes one event per timed lyric line."""
 
 import pytest
-from kara_templater import Document
 
 from namioto.karaoke import ExportSettings, generate_ass
-from namioto.karaoke.default_template import default_scene
-from namioto.karaoke.song import _convert, prepare_song
-from namioto.karaoke.sounds import natural_sounds
 
 
-def _source(text, spans, settings=None):
-    return _convert(natural_sounds(text)[0], spans, settings or ExportSettings(), 0)
+def dialogue(output):
+    return [line.removeprefix("Dialogue: ").split(",", 9) for line in output.splitlines()
+            if line.startswith("Dialogue: ")]
 
 
-def _events(text, spans, settings=None):
-    return Document.parse(generate_ass(text, spans, settings=settings)).lines
-
-
-def _surface(event):
-    return re.sub(r"\{[^}]*\}", "", event.text)
-
-
-def test_untimed_leading_ruby_does_not_pull_line_start_to_zero():
-    scene = default_scene(prepare_song("想[お.0も]い", [[None, (62, 62.3), (62.4, 63)]], ExportSettings()))
-    assert scene.plans[0].layout_request.timing.start >= 62
-    assert scene.plans[0].placement.display.start >= 57
-
-
-def test_an_entirely_untimed_ruby_line_is_omitted():
-    assert not _events("青[あお]", [[None, None]])
-
-
-def test_final_output_has_styles_but_no_templates_or_timing_protocol():
-    result = generate_ass("あ", [[(0, 0.5)]])
-    assert result.count("[Events]") == 1
-    assert Document.parse(result).lines
-    assert "template syl" not in result
-
-
-@pytest.mark.parametrize("spacing", [5, 0, -2.5, 7.5])
-def test_font_spacing_reaches_every_style(spacing):
-    doc = Document.parse(generate_ass("青[あお]", [[(0, 0.5), (0.5, 1)]], settings=ExportSettings(spacing=spacing)))
-    assert all(doc.styles[s].spacing == spacing for s in ("default", "top", "default-furigana", "top-furigana"))
-
-
-@pytest.mark.parametrize("text,duration", [("abc", 1), ("abc", 0.02), ("きょ", 1.01), ("abc[あ]", 1)])
-def test_multicharacter_sound_retains_its_exact_time(text, duration):
-    unit = _source(text, [(0, duration)]).units[0]
-    assert unit.text == ("abc" if text.startswith("abc") else "きょ")
-    assert [(s.start_ms, s.end_ms) for s in unit.segments] == [(0, round(duration * 1000))]
-
-
-@pytest.mark.parametrize("text,expected", [("青[あお]", ["あ", "お"]), ("京[きょう]", ["きょ", "う"])])
-def test_one_base_has_separate_ruby_times(text, expected):
-    song = prepare_song(text, [[(0, 1), (1.5, 2)]], ExportSettings())
-    (unit,) = song.sources[0].lyrics.units
-    assert [s.ruby.source.text if s.ruby else None for s in unit.segments] == expected
-    assert [(s.timing.start, s.timing.end) for s in unit.segments] == [(0, 1), (1.5, 2)]
-
-
-def test_shared_base_overlap_is_rejected_with_line_and_surface():
-    with pytest.raises(ValueError, match="lyric line 1:.*青"):
-        generate_ass("青[あお]", [[(0, 2), (1, 3)]])
-
-
-def test_zero_duration_borrows_time_without_removing_the_rest():
-    song = prepare_song("あい", [[(0, 0.5), (0.8, 0.8)]], ExportSettings())
-    assert [(s.timing.start, s.timing.end) for u in song.sources[0].lyrics.units for s in u.segments] == [
-        (0, 0.42),
-        (0.72, 0.8),
+def test_one_default_style_and_one_event_per_timed_line():
+    output = generate_ass("京[きょう]、\n---\n@1{あ}", [[(1.0, 1.5), (2.0, 2.4)], [(1.2, 1.9)]])
+    assert output.count("\nStyle: ") == 1
+    assert dialogue(output) == [
+        ["0", "0:00:01.00", "0:00:02.40", "Default", "", "0", "0", "0", "", "京、"],
+        ["0", "0:00:01.20", "0:00:01.90", "Default", "", "0", "0", "0", "", "あ"],
     ]
 
 
-@pytest.mark.parametrize(
-    "text,spans,expected",
-    [
-        ("あい.0", [(0, 1), (1, 1)], [(0, 920), (920, 1000)]),
-        ("あ.0い", [(0, 0), (0, 1)], [(0, 80), (80, 1000)]),
-        ("あ.0", [(1, 1)], [(1000, 1010)]),
-        ("@0{あ}@1{い.0}", [(0, 1), (1, 1)], [(0, 1000), (1000, 1010)]),
-        ("青[あお]", [(0, 1), (1, 1)], [(0, 920), (920, 1000)]),
-        ("あ@c1{い.0}", [(0, 1), (1, 1)], [(0, 920), (920, 1000)]),
-    ],
-)
-def test_borrowed_display_times(text, spans, expected):
-    original = list(spans)
-    source = _source(text, spans)
-    assert [(s.start_ms, s.end_ms) for u in source.units for s in u.segments] == expected
-    assert spans == original
+def test_untimed_lines_and_sounds_do_not_extend_the_subtitle():
+    rows = dialogue(generate_ass("幸[し.0あ]せ\nあ.0", [[None, (1.2, 1.6), (2.0, 2.2)], [None]]))
+    assert len(rows) == 1
+    assert rows[0][1:3] == ["0:00:01.20", "0:00:02.20"]
+    assert rows[0][-1] == "幸せ"
 
 
-def test_display_order_can_differ_from_time_order():
-    song = prepare_song("あい", [[(2, 3), (0, 1)]], ExportSettings())
-    assert song.sources[0].text == "あい"
-    assert [u.segments[0].timing.start for u in song.sources[0].lyrics.units] == [2, 0]
-    assert default_scene(song).plans[0].placement.display.end == pytest.approx(3.2)
+@pytest.mark.parametrize(("offset", "expected"), [
+    (-350, [("0:00:00.00", "0:00:00.15", "い")]),
+    (300, [("0:00:00.35", "0:00:00.50", "あ"), ("0:00:00.55", "0:00:00.80", "い")]),
+])
+def test_offset_clips_at_the_recording_start(offset, expected):
+    rows = dialogue(generate_ass("あ\nい", [[(0.05, 0.2)], [(0.25, 0.5)]], settings=ExportSettings(offset)))
+    assert [tuple(row[1:3] + row[-1:]) for row in rows] == expected
 
 
-@pytest.mark.parametrize(("size", "row_gap"), [(80, 0), (104, 0), (104, 200)])
-def test_double_layout_row_spacing(size, row_gap):
-    settings = ExportSettings(font_size=size, row_gap=row_gap)
-    scene = default_scene(prepare_song("あ\nい", [[(1, 2)], [(2, 3)]], settings))
-    upper, lower = scene.plans
-    if row_gap:
-        assert lower.placement.position.y - upper.placement.position.y == pytest.approx(row_gap)
-    else:
-        upper_box = upper.layout_request.bounds
-        lower_box = lower.layout_request.bounds
-        upper_bottom = upper.placement.position.y + upper_box.top + upper_box.height
-        lower_top = lower.placement.position.y + lower_box.top
-        assert lower_top - upper_bottom == pytest.approx(size * 0.2)
+def test_ass_uses_centiseconds_and_keeps_short_lines_visible():
+    row, = dialogue(generate_ass("あ", [[(3660.502, 3660.503)]]))
+    assert row[1:3] == ["1:01:00.50", "1:01:00.51"]
 
 
-def test_only_visible_lower_ruby_consumes_interrow_space():
-    song = prepare_song("あ\nい\nう\n青[あお]", [[(1, 2)], [(2, 3)], [(8, 9)], [(9, 9.5), (9.5, 10)]],
-                        ExportSettings(font_size=104, lead_time_ms=500))
-    plans = default_scene(song).plans
-    for upper, lower in (plans[:2], plans[2:]):
-        upper_bottom = upper.placement.position.y + upper.layout_request.bounds.top + upper.layout_request.bounds.height
-        lower_top = lower.placement.position.y + lower.layout_request.bounds.top
-        assert lower_top - upper_bottom == pytest.approx(20.8)
-    assert plans[2].placement.position.y < plans[0].placement.position.y
-
-
-@pytest.mark.parametrize("placement", ["inline", "independent"])
-def test_double_layout_restarts_each_chapter_on_the_left(placement):
-    settings = ExportSettings(cue_placement=placement)
-    song = prepare_song("あ\n---\nい\nう", [[(5, 6)], [(12, 13)], [(14, 15)]], settings)
-    first, restart, following = default_scene(song).plans
-    assert [p.placement.row for p in (first, restart, following)] == [0, 0, 1]
-    assert first.placement.display.end <= restart.placement.display.start
-    assert restart.placement.position.x + restart.layout_request.bounds.left == settings.margin_h
-
-
-def test_excess_simultaneous_rows_fail_instead_of_rendering_offscreen():
-    with pytest.raises(ValueError, match="row 0 occupied"):
-        generate_ass("\n".join("あ" for _ in range(8)), [[(0, 3)]] * 8)
-
-
-def test_times_use_ass_centiseconds():
-    settings = ExportSettings(lead_time_ms=0, fade_in_ms=0, cue="off")
-    near = _events("あ", [[(1, 1.27)]], settings)
-    far = _events("あ", [[(3661.23, 3661.5)]], settings)
-    assert min(event.start_time for event in far) - min(event.start_time for event in near) == 3660230
-
-
-def test_ass_preserves_native_fades_and_wipes_for_fractional_midi_times():
-    settings = ExportSettings(fade_in_ms=805, fade_out_ms=203, cue="off")
-    events = _events("あ", [[(1.003, 1.276)]], settings)
-    assert events
-    assert any(r"\clip(" in event.text and r"\t(" in event.text for event in events)
-    assert all(event.start_time % 10 == 0 and event.end_time % 10 == 0 for event in events)
-
-
-def test_guide_dots_are_positioned_independent_events():
-    scene = default_scene(prepare_song("あ", [[(5, 5.5)]], ExportSettings()))
-    (cue,) = scene.lines[0].independent
-    assert cue.lifetime.start == 2 and cue.lifetime.end == 5
-
-
-@pytest.mark.parametrize("layout", ["single", "double"])
-@pytest.mark.parametrize("cue", ["dots", "bars"])
-@pytest.mark.parametrize("preview,fade", [(5000, 200), (100, 2400)])
-def test_inline_count_in_and_lyric_enter_together(layout, cue, preview, fade):
-    settings = ExportSettings(
-        layout=layout, cue=cue, cue_placement="inline", guide_dot_duration_ms=500,
-        lead_time_ms=preview, fade_in_ms=fade,
-    )
-    scene = default_scene(prepare_song("あ\nい", [[(6, 7)], [(14, 15)]], settings))
-    first, following = scene.lines
-    marker, = (node for node in first.children if "/cue:" in node.id)
-    assert first.lifetime.start == marker.lifetime.start == 4.5
-    assert marker.lifetime.end == 6
-    assert first.lifetime.end >= 7
-    assert following.lifetime.start == 14 - max(preview, fade) / 1000
-
-
-@pytest.mark.parametrize("bpm,step_ms", [(120, 1000), (180, 1333)])
-def test_inline_count_in_keeps_automatic_tempo(bpm, step_ms):
-    scene = default_scene(prepare_song("あ", [[(6, 7)]], ExportSettings(cue_placement="inline"), bpm))
-    line, = scene.lines
-    marker, = (node for node in line.children if "/cue:" in node.id)
-    assert marker.lifetime.start == line.lifetime.start == pytest.approx(6 - 3 * step_ms / 1000)
-    assert all(clip.start > 0 for dot in marker.children for clip in dot.animations)
-
-
-@pytest.mark.parametrize("step_ms,lead", [(0, 3.999), (667, 2.001)])
-def test_chapter_marker_fits_at_the_resolved_countdown_boundary(step_ms, lead):
-    settings = ExportSettings(cue_placement="inline", guide_dot_duration_ms=step_ms)
-    early = prepare_song("あ", [[(lead - .001, lead + 1)]], settings, bpm=180)
-    assert not early.sources[0].lyrics.body.cues
-    scene = default_scene(prepare_song("あ", [[(lead, lead + 1)]], settings, bpm=180))
-    marker, = (node for node in scene.lines[0].children if "/cue:" in node.id)
-    assert marker.lifetime.start == pytest.approx(0)
-    assert marker.lifetime.end == pytest.approx(lead)
-
-
-@pytest.mark.parametrize("bpm", [90, 120, 180])
-def test_volume_marker_and_renderer_share_a_four_beat_count_in(bpm):
-    lead = 4 * 60 / bpm
-    settings = ExportSettings(cue="volume", cue_placement="inline")
-    early = prepare_song("あ", [[(lead - 0.01, lead + 1)]], settings, bpm=bpm)
-    assert not early.sources[0].lyrics.body.cues
-    scene = default_scene(prepare_song("あ", [[(lead, lead + 1)]], settings, bpm=bpm))
-    marker, = (node for node in scene.lines[0].children if "/cue:" in node.id)
-    assert marker.lifetime.start == pytest.approx(0)
-    assert marker.lifetime.end == pytest.approx(lead)
-
-
-def test_first_word_too_soon_gets_no_dots():
-    assert not prepare_song("あ", [[(1, 1.5)]], ExportSettings()).sources[0].lyrics.body.cues
-
-
-def test_mapping_override_does_not_change_natural_sounds():
-    source = _source("(幾千)[いくせん].1あ", [(0, 0.25), (0.25, 0.5), (0.5, 0.75), (0.75, 1), (1, 1.5)])
-    assert [u.text for u in source.units] == ["幾千", "あ"]
-    assert [s.ruby for s in source.units[0].segments] == ["い", "く", "せ", "ん"]
-
-
-@pytest.mark.parametrize("text", ["情熱[じょう,ねつ]", "行先[ゆく,さき]"])
-def test_comma_separated_ruby_is_one_layout_group(text):
-    song = prepare_song(text, [[(0, 0.5), (0.5, 1), (1, 1.5), (1.5, 2)]], ExportSettings())
-    first, second = song.sources[0].lyrics.units
-    assert first.segments[0].ruby is not None
-    assert second.segments[0].ruby is not None
-    assert first.segments[0].ruby.mode == "spill"
-    assert second.segments[0].ruby.mode == "join"
-    assert len(default_scene(song).lines[0].layout.ruby) == 4
-
-
-def test_separate_ruby_words_keep_separate_layout_groups():
-    source = _source("情[じょう]熱[ねつ]", [(0, 0.5), (0.5, 1), (1, 1.5), (1.5, 2)])
-    assert all(not u.ruby_continuation for u in source.units)
-
-
-def test_ruby_parts_have_distinct_bases():
-    source = _source("胡椒[こ,しょう]", [(0, 0.5), (0.5, 1), (1, 1.5)])
-    assert [u.text for u in source.units] == ["胡", "椒"]
-    assert [[s.ruby for s in u.segments] for u in source.units] == [["こ"], ["しょ", "う"]]
-
-
-@pytest.mark.parametrize("text", ["(あい).1", "泣[な]い.+"])
-def test_merge_keeps_sound_times(text):
-    source = _source(text, [(0, 0.5), (0.5, 1)])
-    assert [(s.start_ms, s.end_ms) for u in source.units for s in u.segments] == [(0, 500), (500, 1000)]
-
-
-def test_font_and_rgb_colour_reach_final_output():
-    output = generate_ass("あ", [[(0, 0.5)]], settings=ExportSettings(font="Test Font", overlay_color="FF0000"))
-    assert Document.parse(output).styles["default"].fontname == "Test Font"
-    assert "0000FF&" in output
-
-
-def test_unknown_track_style_is_refused():
-    with pytest.raises(ValueError, match="track style"):
-        generate_ass("あ", [[(0, 0.5)]], settings=ExportSettings(track_style={0: "nowhere"}))
-
-
-def test_no_time_or_mismatched_spans_omits_line():
-    assert not _events("あ", [[(None, None)]])
-    assert not _events("あ", [[]])
-
-
-def test_layout_and_effect_options_reach_final_events():
-    settings = ExportSettings(
-        font_size=72,
-        blur=8,
-        border=7,
-        border_furi=4,
-        base_outline_color="123456",
-        overlay_outline_color="ABCDEF",
-        overlay_blur_color="102030",
-        base_blur_color="405060",
-    )
-    output = generate_ass("字[じ]", [[(5, 6)]], settings=settings)
-    assert Document.parse(output).styles["default-furigana"].fontsize == 36
-    for tag in (r"\bord7", r"\bord4", r"\blur8", "563412&", "EFCDAB&", "302010&", "605040&"):
-        assert tag in output
-
-
-def test_zero_borders_and_blur_are_supported():
-    result = generate_ass(
-        "字[じ]",
-        [[(1, 2)]],
-        settings=ExportSettings(
-            border=0,
-            border_furi=0,
-            blur=0,
-            blur_scale=0,
-            ruby_offset=0,
-        ),
-    )
-    assert r"\bord0" in result
-    assert r"\blur0" in result
-    assert "nan" not in result.lower()
-
-
-def test_positive_offset_moves_lyrics_and_dots_without_mutating_spans():
-    spans = [[(5, 5.5)]]
-    scene = default_scene(prepare_song("あ", spans, ExportSettings(offset_ms=2000)))
-    assert scene.plans[0].layout_request.timing.start == 7
-    assert scene.lines[0].independent[0].lifetime.start == 4
-    assert spans == [[(5, 5.5)]]
-
-
-def test_negative_offset_clips_elapsed_segments_without_borrowing():
-    source = _source("青[あお]い", [(0, 1), (1, 2), (2.5, 3)], ExportSettings(offset_ms=-1500))
-    assert [(s.start_ms, s.end_ms) for u in source.units for s in u.segments] == [(0, 0), (0, 500), (1000, 1500)]
-    assert [s.ruby for s in source.units[0].segments] == ["あ", "お"]
-
-
-def test_partial_syllable_keeps_only_time_after_zero():
-    source = _source("あい", [(0, 1), (1, 2)], ExportSettings(offset_ms=-250))
-    assert [(s.start_ms, s.end_ms) for u in source.units for s in u.segments] == [(0, 750), (750, 1750)]
-
-
-def test_lines_fully_before_zero_are_omitted():
-    events = _events("あ\nい", [[(0, 1)], [(3, 4)]], ExportSettings(offset_ms=-2000))
-    assert {_surface(e) for e in events} == {"い"}
-
-
-def test_auto_base_blur_follows_manual_overlay_blur():
-    settings = ExportSettings(overlay_blur_color="123456")
-    overlay, base = settings.blur_colours()
-    assert overlay == "123456"
-    assert base != ExportSettings().blur_colours()[1]
-    result = generate_ass("あ", [[(0, 1)]], settings=settings)
-    assert r"\3c&H563412&" in result
-    assert rf"\3c&H{base[4:] + base[2:4] + base[:2]}&" in result
+def test_bad_intervals_are_rejected():
+    with pytest.raises(ValueError, match="reversed"):
+        generate_ass("あ", [[(2, 1)]])
+    with pytest.raises(ValueError, match="match"):
+        generate_ass("あい", [[(1, 2)]])

@@ -11,7 +11,7 @@ notes against what you hear and see.
 - Transcribe by hand with a pitch spectrum, slowed-down playback and a snap grid.
 - Import MIDI and edit up to 16 channels with separate instruments, colours and mute controls.
 - Extract singing-voice notes with [GAME](https://github.com/openvpi/GAME).
-- Add lyrics and readings, adjust their note mapping, and export karaoke ASS subtitles or standalone shaders.
+- Add lyrics and readings, adjust their note mapping, and export line-timed ASS subtitles.
 - Save lyrics and notes together in an editable `.nto` project.
 - Run analysis and exports from the command line, or control a running editor remotely.
 
@@ -38,17 +38,15 @@ separated vocal. These previews show the setup dialogs, not completed inference 
 | --- | --- |
 | ![GAME transcription options](docs/transcription.png) | ![Lyrics alignment options](docs/alignment.png) |
 
-### Export karaoke subtitles
+### Export timed subtitles
 
-Export the mapped lyrics as ASS or a libplacebo hook, with timing, font, layout and per-channel highlight options.
-See the [lyrics guide](docs/lyrics.md) for editing and export.
-
-![Karaoke export options](docs/ass-export.png)
+Export one ASS event for each timed lyric line. The editable project keeps the underlying note mapping and readings.
+See the [lyrics guide](docs/lyrics.md#export-lyrics-and-subtitles) for editing and export.
 
 ## Install and launch
 
 You need [uv](https://docs.astral.sh/uv/), Python 3.14, and a C++17 compiler.
-Follow the [source setup guide](docs/development.md#source-setup) for native prerequisites and the local kara-templater option. Once the required kara-templater release is available on PyPI, run these commands from the checkout:
+Follow the [source setup guide](docs/development.md#source-setup) for native prerequisites. From the checkout, run:
 
 ```bash
 uv sync --extra cpu

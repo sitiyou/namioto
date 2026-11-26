@@ -129,16 +129,11 @@ Different channels can sing simultaneously.
 
 ## Export lyrics and subtitles
 
-Use **Export → Export lyrics (.krc)…** for mapped KRC, or **Export karaoke…** for styled lyrics. Choose the default template, single or alternating double rows, and ASS or hook output. The next export opens with the format of the last successful export. The editor takes a KRC/MIDI snapshot and uses the same mapping as file export. Independent words on one line can sing simultaneously. Multiple readings of a shared base retain their own ordered time intervals.
+Use **Export → Export lyrics (.krc)…** for mapped KRC, or **Export ASS…** for
+line-timed subtitles. Set a subtitle offset if the destination uses a different
+time origin. The ASS uses one default style and one event per timed lyric line.
+It shows the main lyric text from the first timed sound through the last.
 
-The sweep follows the measured text during its singing interval. The engine handles outlines and halos automatically. For Hook output, sweep transition width sets the size of the colour blend at the moving edge in canvas pixels. Standard ASS uses a hard edge and native fades on its centisecond clock. Independently timed readings retain their own colours, and the shared body uses its lyric source colour.
-
-The default uses white lettering, channel-coloured highlights, outlines and a halo. Turn off **Use project channel colours** to override the sung colour or individual channels for this export. Ruby size is relative to the main font; its gap is measured between visible outlines. Preview controls how early a line appears, and hold extends its tail before the line fades as a group. In the default double-row layout, each KRC chapter starts on the left and subsequent main-vocal lines alternate sides. Automatic row spacing leaves 20% of the track’s largest body font size between the measured boxes of rows visible together. Only readings present on those rows take up space. Each row stays in place for its full display interval. The section count-in can use three filling dots, descending bars or flashing volume columns. A lyric row with an inline count-in appears when its first countdown step begins and stays visible as singing starts. An independent count-in reserves space above its main lyric row, including any ruby. Guide size follows the authored lyric font size at the marker. A ratio of 0.5 gives a 50 px dot diameter or bar height at size 100, and 40 px at size 80. Automatic guide clearance is one eighth of the authored font size. Set the guide gap to -1 for automatic spacing, or enter a distance in pixels. A per-symbol duration of zero follows MIDI tempo.
-
-A KRC bracket starts a reading group that may extend on both sides of its base. Comma-separated parts inside one bracket keep their own timings and share the group. This corresponds to Aegisub’s float-left marker at the start of a word.
-
-In Hook output, the default pulse scales the body glyphs around their own centers over the lyric unit. Each ruby glyph pulses around its own center as the wipe reaches its part of the reading. Other ruby glyphs stay in place, including during gaps between readings. Set the scale multiplier to 1 to turn off both pulses.
-
-![Karaoke export settings](ass-export.png)
-
-See [CLI export](cli.md#export-karaoke) for file and session exports and [Python templates](karaoke-templates.md) for custom recipes.
+Save the `.nto` to keep the editable mapping, individual sound times, readings,
+chapters, tempo and vocal channels. See [CLI export](cli.md#export-ass) for
+exporting a saved project, matched files or the running editor.

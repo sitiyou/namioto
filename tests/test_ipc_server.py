@@ -459,11 +459,11 @@ def _ready_ass(app, window):
 
 def test_export_source_and_ctl_share_the_gui_export_pipeline(qt_app, window, endpoint, tmp_path, monkeypatch):
     _ready_ass(qt_app, window)
-    monkeypatch.setattr(window.settings.ass, "spacing", 3)
-    monkeypatch.setenv("NAMIOTO_ASS_SPACING", "99")
+    monkeypatch.setattr(window.settings.ass, "offset_ms", 300)
+    monkeypatch.setenv("NAMIOTO_ASS_OFFSET_MS", "990")
     source = call(qt_app, endpoint, "project.export_source")
     assert source["krc"] == window._verification().canonical
-    assert source["settings"]["spacing"] == 3
+    assert source["settings"] == {"offset_ms": 300}
     data = base64.b64decode(source["midi"])
     assert len(midi.read_bytes(data, wavetone=source["wavetone"]).notes) == 2
     expected = subtitle.build_ass(
@@ -510,8 +510,8 @@ def test_session_cli_matches_file_cli_with_saved_exports(qt_app, window, endpoin
                     str(saved_krc),
                     "--save-midi",
                     str(saved_midi),
-                    "--spacing",
-                    "8",
+                    "--offset-ms",
+                    "800",
                 ]
             ),
         )
@@ -527,12 +527,8 @@ def test_session_cli_matches_file_cli_with_saved_exports(qt_app, window, endpoin
                 str(saved_midi),
                 "--out",
                 str(file_ass),
-                "--overlay-color",
-                window._export_settings().overlay_color,
-                "--channel-colors",
-                window._export_settings().channel_colors,
-                "--spacing",
-                "8",
+                "--offset-ms",
+                "800",
                 compatibility,
             ]
         )
@@ -619,40 +615,21 @@ def test_ass_revision_tracks_mapping_readiness_but_not_playback(qt_app, window, 
     assert call(qt_app, endpoint, "state.get")["subtitle"]["revision"] > state["revision"]
 
 
-def test_session_exports_remembered_project_recipe(qt_app, window, endpoint, tmp_path):
-    from pathlib import Path
-
-    from namioto.karaoke.templates import save_preferences
-
+def test_editor_exports_ass_without_loading_a_project_template(qt_app, window, endpoint, tmp_path):
     _ready_ass(qt_app, window)
-    project = tmp_path / "local.nto"
-    assert window.save_project(project)
-    script = tmp_path / "template.py"
-    script.write_text((Path(__file__).parents[1] / "examples/cool_ink.py").read_text())
-    save_preferences(
-        {
-            "id": "cool-ink",
-            "scripts": [str(script)],
-            "values": {"cool-ink": {"ink": "123456"}},
-            "format": "hook",
-            "fps": 60,
-        },
-        project,
-    )
-    target = tmp_path / "local.hook"
-    assert (
-        _run(qt_app, lambda: export_cli.main(["--session", "--instance", endpoint.instance, "--out", str(target)])) == 0
-    )
-    assert b"//!HOOK" in target.read_bytes()
-    expected = tmp_path / "explicit.hook"
-    assert _run(
-        qt_app,
-        lambda: export_cli.main([
-            "--session", "--instance", endpoint.instance, "--script", str(script), "--template", "cool-ink",
-            "--set", "ink=123456", "--out", str(expected),
-        ]),
-    ) == 0
-    assert target.read_bytes() == expected.read_bytes()
+    assert window.save_project(tmp_path / "local.nto")
+    marker = tmp_path / "executed"
+    (tmp_path / "template.py").write_text(f"from pathlib import Path\nPath({str(marker)!r}).touch()\n")
+
+    target = tmp_path / "local.ass"
+    result = call(qt_app, endpoint, "project.export_lyrics", {"path": str(target)})
+    assert result["path"] == str(target) and "Dialogue:" in target.read_text()
+    assert not marker.exists()
+
+    hook = tmp_path / "local.hook"
+    rejected = failure(qt_app, endpoint, "project.export_lyrics", {"path": str(hook), "format": "hook"})
+    assert rejected.code == "bad_params"
+    assert not hook.exists()
 
 
 def test_alignment_evidence_job(qt_app, window, endpoint, monkeypatch):

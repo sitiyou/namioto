@@ -88,16 +88,6 @@ def test_color_tags_preserve_mapping_and_roundtrip(text):
     assert rebuild(text, result.operations) == text
 
 
-def test_color_tag_ass_uses_color_channel_without_changing_track():
-    from namioto.karaoke.ass import ExportSettings, generate_ass
-
-    output = generate_ass("@c2{あ}", [[(0.0, 1.0)]], settings=ExportSettings(channel_colors={2: "123456"}))
-    assert r"\1c&H563412&" in output
-    from namioto.karaoke.song import prepare_song
-
-    assert prepare_song("@c2{あ}", [[(0, 1)]], ExportSettings()).sources[0].style == "default"
-
-
 @pytest.mark.parametrize("text", ["@c16{あ}", "@c2{あ", "@c1{@2{あ}}"])
 def test_invalid_color_tags(text):
     from namioto.karaoke.model import KrcError

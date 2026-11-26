@@ -110,7 +110,7 @@ def test_the_gpu_row_says_whether_its_runtime_is_installed(qt_app, monkeypatch) 
 
 
 def test_restoring_defaults_puts_every_widget_back(own_window) -> None:
-    own_window.settings.ass.font_size = 72
+    own_window.settings.ass.offset_ms = 72
     dialog = SettingsDialog(own_window.settings, parent=own_window)
     row_writer(dialog, "tempo", "window_seconds")(8.0)
     row_writer(dialog, "midi", "wavetone")(False)
@@ -122,7 +122,7 @@ def test_restoring_defaults_puts_every_widget_back(own_window) -> None:
     assert store.get_value(values, "midi", "wavetone") is True
     assert values.midi.playback_delay_ms == 0
     assert store.get_value(values, "tempo", "window_seconds") == 12.0
-    assert values.ass.font_size == 72
+    assert values.ass.offset_ms == 72
     dialog.close()
 
 

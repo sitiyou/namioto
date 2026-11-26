@@ -2,7 +2,7 @@
 
 [README](../README.md) · [Editor guide](usage.md) · [Lyrics](lyrics.md)
 
-Examples below use a configured Namioto checkout. Use `uv run` with a resolved lockfile, or `uv run --no-sync` if you installed a local kara-templater wheel. [Source setup](development.md#source-setup) `namioto-cli` runs tasks without a GUI; `namioto-ctl`
+Examples below use a configured Namioto checkout. [Source setup](development.md#source-setup) `namioto-cli` runs tasks without a GUI; `namioto-ctl`
 controls an already running editor.
 
 ```bash
@@ -131,54 +131,34 @@ uv run namioto-cli clip processed-voice.wav --model game --audio-origin 42.1
 Scripts can call `namioto.analysis.clip.analyze_clip()` with the same inputs.
 Results are returned as data without updating project notes or lyric mapping.
 
-## Export karaoke
+## Export ASS
 
-Share the saved `.nto` to hand off the timed lyrics. The Namioto
+ASS export writes one event per timed lyric line using a single default style.
+Share the saved `.nto` to hand off the editable timing, including individual
+readings, note times, chapters and tracks. The
 [project reader](../namioto/karaoke/song_input.py) validates the saved KRC against
 the project notes at their stored precision.
 
-The editor-compatible export commands work with exchanged files or a live editing session.
-
 ```bash
+uv run namioto-cli export --project song.nto --out song.ass
 uv run namioto-cli export --krc song.krc --midi song.mid --no-wavetone --out song.ass
 uv run namioto-cli export --session --out song.ass --watch
 uv run namioto-cli export --session --out song.ass --save-krc song.krc --save-midi song.mid
 ```
 
-The output suffix selects standard ASS or a standalone libplacebo Hook. `--format` selects the format explicitly. The built-in ASS template uses native, hard-edged wipes and centisecond timing. The built-in Hook template supports `--feather` and `--pulse`. For example:
+The offset is read from `--offset-ms`, then `NAMIOTO_ASS_OFFSET_MS`, then the
+running editor in session mode, with a default of zero. A positive offset
+delays the subtitle.
 
-```bash
-namioto-cli export --session --template default --set layout=single --out song.hook --fps 60
-mpv --vo=gpu-next --sub-auto=no --glsl-shader=song.hook video.mp4
-ffmpeg -init_hw_device vulkan=vk -i video.mp4 -vf 'fps=60,libplacebo=custom_shader_path=song.hook' -c:a copy karaoke.mp4
-```
+Session mode snapshots the current mapping and writes the files on the CLI
+machine. The optional `--save-krc` and `--save-midi` flags also save the exchange
+files. KRC/MIDI file mode removes WaveTone's leading MIDI bar by default.
+Pass `--no-wavetone` for ordinary MIDI. Session mode follows the editor's
+compatibility setting.
 
-Use the hook on video with the same aspect ratio and time origin. FFmpeg's filter frame rate must match the export rate. Fonts are resolved at export. Ordinary ASS uses the playback machine's fonts.
-See [Python templates](karaoke-templates.md) for registration, parameters and script reloading.
-
-KRC/MIDI file mode uses the mapping encoded in the exchanged KRC. Session mode snapshots
-the running editor's current mapping. Use `--save-krc` and `--save-midi` with `--session`
-to write the exchange files. Session CLI outputs are written on the CLI machine.
-
-`--watch` builds immediately and rebuilds after changes settle. Invalid inputs leave the
-last successful output intact. A disconnected session exits instead of selecting another
-editor. Stop watching with `Ctrl+C`.
-
-Settings resolve per field in this order:
-
-1. Explicit template parameter (`--set key=value`), followed by the dedicated command-line option.
-2. `NAMIOTO_ASS_` environment variable, using the uppercase field name.
-3. Current GUI export setting, in session mode only.
-4. Built-in default.
-
-Saved user preferences are not a CLI fallback. For example, `--font-size` corresponds to
-`NAMIOTO_ASS_FONT_SIZE`; spacing defaults to 5. `--channel-colors '0=FF0000,1=00FF00'`
-selects red and green highlights. GUI and ctl exports ignore these environment variables.
-
-Set `--palt true` on the default template to use a horizontal font’s OpenType proportional spacing for body and ruby. ASS carries the measured positions. Install the same font on the playback machine.
-
-KRC/MIDI file mode removes WaveTone's leading MIDI bar by default. Pass `--no-wavetone` for ordinary
-MIDI. Session mode follows the editor's compatibility setting.
+`--watch` builds immediately and rebuilds after changes settle. Invalid inputs
+leave the last successful output intact. A disconnected session exits. Stop
+watching with `Ctrl+C`.
 
 ## Remote control
 

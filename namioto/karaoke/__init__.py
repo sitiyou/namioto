@@ -8,8 +8,9 @@ mapping, `operations.py` holds the mapping's operations, and `ass` writes the su
 time. The whole package is Qt-free; the names it re-exports are its public surface.
 """
 
-from namioto.karaoke.ass import ExportSettings, generate_ass
+from namioto.karaoke.ass import generate_ass
 from namioto.karaoke.canonical import rebuild
+from namioto.karaoke.export_settings import ExportSettings
 from namioto.karaoke.model import Chapter, Group, KrcError, Line, Lyrics, Ruby, Unit, Word
 from namioto.karaoke.operations import Drop, Match, Merge, Operation, SoundRef
 from namioto.karaoke.parser import parse
