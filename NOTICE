@@ -58,6 +58,13 @@ Third-party code and assets
   release is a non-commercial distribution. The program itself - the AGPL-3.0 sources, the wheel and
   the frozen builds - contains none of the models named here.
 
+### RomajiASR model (downloaded from upstream)
+- Upstream: Xiantaidu / RomajiASR, https://github.com/Xiantaidu/RomajiASR
+- Namioto downloads the v1.0.0 ONNX archive on demand for Japanese singing recognition.
+  Refer to the upstream release for the weights, which are separate from Namioto.
+- The upstream code and its Japanese HuBERT base model use Apache-2.0. Namioto runs the graph
+  directly using ONNX Runtime.
+
 ### GAME (Generative Adaptive MIDI Extractor)
 - Upstream: Team OpenVPI, https://github.com/openvpi/GAME
 - License: MIT (code) / Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International

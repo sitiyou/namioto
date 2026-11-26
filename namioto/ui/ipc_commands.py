@@ -21,15 +21,20 @@ import hashlib
 import json
 import math
 import sys
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+from PySide6.QtCore import Slot
+
 from namioto import __version__, ipc, midi, project, subtitle
+from namioto.analysis import devices
 from namioto.channels import CHANNEL_COUNT, Channel, free_channel
 from namioto.channels import set_field as channel_set_field
 from namioto.ipc import IpcError
 from namioto.karaoke import KrcError
+from namioto.ui.loading import LoadingThread
 from namioto.ui.roll import PITCH_MAX, PITCH_MIN
 
 MATCH_SECONDS = 1e-3  # how close two notes have to be to count as the same one when removing
@@ -105,6 +110,33 @@ def _flag(params: dict, name: str, default: bool = False) -> bool:
     return value
 
 
+class ClipAnalysis(LoadingThread):
+    """Run the same clip analysis as the CLI off the editor event loop."""
+
+    def __init__(self, audio: str, clip_options: dict):
+        super().__init__(audio)
+        self.clip_options = clip_options
+        self.result: dict | IpcError = IpcError("failed", "Clip analysis finished without a result")
+        self.reply: Callable[[dict | IpcError], None] | None = None
+        self.failed.connect(self._set_error)
+        self.finished.connect(self._deliver)
+
+    def load(self) -> None:
+        from namioto.analysis.clip import analyze_clip
+
+        self.result = analyze_clip(self.path, **self.clip_options)
+
+    @Slot(str)
+    def _set_error(self, error: str) -> None:
+        self.result = IpcError("failed", error)
+
+    @Slot()
+    def _deliver(self) -> None:
+        reply, self.reply = self.reply, None
+        if reply is not None:
+            reply(self.result)
+
+
 class WindowBridge:
     """The remote methods over one `MainWindow`, and the events its changes raise."""
 
@@ -117,6 +149,7 @@ class WindowBridge:
         self._tempo_job = {}
         self._game_process = None
         self._alignment_worker = None
+        self._clip_worker = None
         self._analysis_jobs = {}
         self._group_changes = False
         self._subtitle_revision = 0
@@ -349,6 +382,23 @@ class WindowBridge:
             params={"job": "ID returned by analysis.align"},
         )
         add(
+            "analysis.clip",
+            self.analyze_clip,
+            summary="Run a model over a selected audio clip",
+            params={
+                "model": "game, mms, yohane or romajiasr",
+                "audio?": "audio file, defaults to the editor's loaded audio",
+                "start?": "window start in file seconds, default 0",
+                "end?": "window end in file seconds",
+                "audio_origin?": "recording time at file time zero",
+                "device?": "cpu (default) or gpu",
+                "model_dir?": "local model directory",
+                "candidates?": "list of KRC readings for MMS or Yohane",
+                "size?": "GAME model size: small, medium or large",
+                "language?": "GAME language code, such as ja",
+            },
+        )
+        add(
             "analysis.phrase",
             self.phrase,
             summary="Read one voice on a display line and its analysis evidence",
@@ -412,6 +462,8 @@ class WindowBridge:
             self._tempo_worker.wait()
         if self._alignment_worker is not None:
             self._alignment_worker.wait()
+        if self._clip_worker is not None:
+            self._clip_worker.wait()
         for signal, slot in self._connections:
             with contextlib.suppress(TypeError):
                 signal.disconnect(slot)
@@ -1104,6 +1156,57 @@ class WindowBridge:
         if "model" not in job:
             raise IpcError("unknown_job", "No matching alignment job")
         return dict(job)
+
+    def analyze_clip(self, params: dict) -> ipc.DeferredReply:
+        from namioto.analysis.clip import MODELS
+
+        if self._clip_worker is not None:
+            raise IpcError("busy", "Clip analysis is running")
+        model = _text(params, "model")
+        if model not in MODELS:
+            raise IpcError("bad_params", "Unknown clip model")
+        candidates = params.get("candidates", [])
+        if not isinstance(candidates, list) or any(not isinstance(text, str) for text in candidates):
+            raise IpcError("bad_params", "candidates must be a list of KRC strings")
+        if model in ("mms", "yohane") and not candidates:
+            raise IpcError("bad_params", "Supply one or more KRC candidates for the clip")
+        if model in ("game", "romajiasr") and candidates:
+            raise IpcError("bad_params", "KRC candidates are only used by MMS and Yohane")
+        audio = _string(params, "audio", required=False, default=self.window.audio_path)
+        if not audio:
+            raise IpcError("missing_input", "Load a vocal or provide an audio file")
+        device = _text(params, "device", required=False, default="cpu")
+        if device not in devices.RUN_CHOICES:
+            raise IpcError("bad_params", "device must be cpu or gpu")
+        start = _number(params, "start", required=False, low=0)
+        end = _number(params, "end") if "end" in params else None
+        if end is not None and end <= start:
+            raise IpcError("bad_params", "end must be greater than start")
+        clip_options = {
+            "model": model,
+            "candidates": candidates,
+            "start": start,
+            "end": end,
+            "audio_origin": _number(params, "audio_origin", required=False),
+            "device": device,
+            "model_dir": _text(params, "model_dir") if "model_dir" in params else None,
+        }
+        if "size" in params:
+            clip_options["game_size"] = _text(params, "size")
+        if "language" in params:
+            clip_options["game_language"] = _string(params, "language")
+        worker = ClipAnalysis(audio, clip_options)
+
+        def start(reply: Callable[[dict | IpcError], None]) -> None:
+            def complete(result: dict | IpcError) -> None:
+                self._clip_worker = None
+                reply(result)
+
+            self._clip_worker = worker
+            worker.reply = complete
+            worker.start()
+
+        return ipc.DeferredReply(start)
 
     def get_lyrics(self, _params: dict) -> dict:
         window = self.window

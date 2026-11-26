@@ -235,12 +235,19 @@ class Command:
     handler: Callable[[dict], Any]
 
 
+@dataclass(frozen=True)
+class DeferredReply:
+    """Start background work and pass its result or IpcError to the completion callback."""
+
+    start: Callable[[Callable[[Any], None]], None]
+
+
 class Dispatcher:
     """The methods a server offers, each a plain callable over a parameter dict.
 
-    It knows nothing about sockets or Qt: the server hands it a decoded request and writes back what
-    it returns, and `commands` lets a client discover what is there. A handler raises `IpcError` to
-    name its own failure; anything else it raises becomes a `failed` error.
+    It knows nothing about sockets or Qt. A handler can return a result immediately or defer it
+    until a worker finishes. A handler raises `IpcError` to name its own failure; anything else
+    it raises becomes a `failed` error.
     """
 
     def __init__(self) -> None:
@@ -263,7 +270,7 @@ class Dispatcher:
             for command in sorted(self._commands.values(), key=lambda item: item.name)
         ]
 
-    def handle(self, request: Any) -> dict:
+    def handle(self, request: Any, send: Callable[[dict], None] | None = None) -> dict | None:
         if not isinstance(request, dict):
             return error_for(None, "bad_request", "a request must be a JSON object")
         ident = request.get("id")
@@ -284,7 +291,20 @@ class Dispatcher:
                 {"methods": sorted(self._commands)},
             )
         try:
-            return {"id": ident, "ok": True, "result": command.handler(params)}
+            result = command.handler(params)
+            if not isinstance(result, DeferredReply):
+                return {"id": ident, "ok": True, "result": result}
+            if send is None:
+                raise IpcError("failed", "This transport requires a sender for a deferred reply")
+
+            def complete(value: Any) -> None:
+                if isinstance(value, IpcError):
+                    send(error_for(ident, value.code, value.message, value.details))
+                else:
+                    send({"id": ident, "ok": True, "result": value})
+
+            result.start(complete)
+            return None
         except IpcError as error:
             return error_for(ident, error.code, error.message, error.details)
         except Exception as error:  # a handler's own bug must come back as an answer, not a crash

@@ -73,7 +73,7 @@ and a provider plugin. CPU and CUDA builds conflict: select one, not both. The e
 Settings → Devices chooses the backend used by `--device gpu`. If a GPU provider cannot
 be created, ONNX Runtime reports it and continues on CPU.
 
-Models are downloaded separately from this project's `models` release or GAME's release.
+Models are downloaded separately from this project's `models` release or their upstream releases.
 They are not included in builds. Configure a GitHub mirror or proxy in Settings → Network
 if needed. Models have separate licenses, including non-commercial restrictions; see
 [NOTICE](../NOTICE).
@@ -130,6 +130,45 @@ uv run namioto-cli clip processed-voice.wav --model game --audio-origin 42.1
 
 Scripts can call `namioto.analysis.clip.analyze_clip()` with the same inputs.
 Results are returned as data without updating project notes or lyric mapping.
+
+### Run clip analysis over IPC
+
+`analysis.clip` accepts the same models and file-relative `start` and `end` as the CLI.
+Pass `audio` as a file path on the editor's machine, or omit it to use the loaded audio.
+Use `audio_origin` for a prepared excerpt. The returned notes or sound times use recording seconds.
+
+```bash
+uv run namioto-ctl analysis.clip model=game start=42.1 end=44.6
+uv run namioto-ctl analysis.clip model=mms start=42.1 end=44.6 \
+  candidates='["宇宙[う,ちゅう]をこえて", "宇宙[そら]をこえて"]'
+```
+
+The request returns the CLI JSON once background analysis completes. Allow extra time with
+`namioto-ctl --timeout SECONDS` when a model needs to download. GAME accepts `size` and
+`language`. MMS and Yohane require at least one KRC string in `candidates`. All models
+accept `device` and `model_dir`. Clip analysis is read-only. Use the
+[remote project analysis methods](#remote-control) for a full track.
+
+### Recognize Japanese sung sounds
+
+```bash
+uv run namioto-cli clip vocal.wav --model romajiasr --start 22.3 --end 25.5
+uv run namioto-cli clip excerpt.wav --model romajiasr --audio-origin 22.3 --device gpu
+```
+
+Use an isolated vocal and select up to 30 seconds per call. RomajiASR proposes sounds from
+the audio alone. The result contains `transcription` (space-separated tokens), `frame_seconds`
+(0.02), and `tokens` with `text`, `time`, `start_frame`, and exclusive `end_frame`. Frames are
+relative to the selected window. `time` is the first predicted frame's center in recording
+seconds. Use these positions for playback and check precise sound boundaries with forced alignment.
+
+The first call downloads the [RomajiASR v1.0.0 ONNX archive](https://github.com/Xiantaidu/RomajiASR/releases/tag/v1.0.0)
+(168 MiB) under Namioto's `models/romajiasr` data directory. To reuse an extracted archive, pass
+`--dir` or set `NAMIOTO_ROMAJIASR_MODEL` to the directory with `model.onnx` and `phoneme_vocab.json`.
+
+```bash
+uv run namioto-ctl --timeout 120 analysis.clip model=romajiasr audio=/path/to/vocal.wav start=22.3 end=25.5
+```
 
 ## Export ASS
 

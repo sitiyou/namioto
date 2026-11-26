@@ -3,9 +3,11 @@
 
 from __future__ import annotations
 
+import hashlib
 import subprocess
 import sys
 import zipfile
+from dataclasses import replace
 
 import pytest
 
@@ -145,6 +147,24 @@ def test_unpacking_takes_the_folder_holding_the_first_file(tmp_path, monkeypatch
     assert target == model_store.path("aligner", "mms", "ja")
     assert (target / "model.onnx").read_text() == "weights"
     assert model_store.installed("aligner", "mms", "ja")
+
+
+def test_a_pinned_archive_is_verified_before_installing(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path))
+    archive = tmp_path / "release.zip"
+    with zipfile.ZipFile(archive, "w") as bundle:
+        bundle.writestr("model.onnx", "weights")
+        bundle.writestr("phoneme_vocab.json", "{}")
+
+    with pytest.raises(ValueError, match="SHA-256 verification"):
+        model_store.unpack("romajiasr", archive)
+    assert not model_store.path("romajiasr").exists()
+
+    model = replace(model_store.MODELS["romajiasr"], sha256=hashlib.sha256(archive.read_bytes()).hexdigest())
+    monkeypatch.setitem(model_store.MODELS, "romajiasr", model)
+    target = model_store.unpack("romajiasr", archive)
+    assert model_store.installed("romajiasr")
+    assert model_store.unpack("romajiasr", archive) == target
 
 
 def test_nothing_installed_and_no_download_says_what_to_do(tmp_path, monkeypatch) -> None:

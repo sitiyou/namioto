@@ -5,9 +5,9 @@
 local endpoint. `QLocalServer` provides Unix sockets and Windows named pipes, restricted to the
 current user. Unix endpoints also live in a private directory (0700, with a 0600 socket).
 
-Everything runs on the GUI thread, so a handler may touch the window directly. The editor starts
-one of these from `namioto.ui.app`, hands it a `WindowBridge` for the methods, and stops it when
-the window closes.
+Socket I/O and dispatch run on the GUI thread so handlers may touch the window directly. A handler
+may defer its reply until a worker has delivered a result to the GUI thread. The editor starts the
+server from `namioto.ui.app` and stops it when the window closes.
 """
 
 from __future__ import annotations
@@ -47,6 +47,8 @@ class _Connection(QObject):
         socket.disconnected.connect(self._close)
 
     def send(self, message: dict) -> None:
+        if self._closed:
+            return
         self.socket.write(encode(message))
         self.socket.flush()
 
@@ -78,7 +80,9 @@ class _Connection(QObject):
         except (ValueError, UnicodeDecodeError):
             self.send(error_for(None, "bad_request", "a request must be one line of JSON"))
             return
-        self.send(self.server.dispatcher.handle(request))
+        reply = self.server.dispatcher.handle(request, self.send)
+        if reply is not None:
+            self.send(reply)
 
     def _close(self) -> None:
         if self._closed:

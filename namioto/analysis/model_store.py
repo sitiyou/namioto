@@ -16,6 +16,7 @@ apply to every download.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import pathlib
 import shutil
@@ -52,6 +53,7 @@ class Model:
     directory: str = ""
     asset: str = ""  # the release URL of one variant, once one is published; `{model}` is its key
     hint: str = ""  # what to tell the user instead, while nothing is published to fetch
+    sha256: str = ""  # digest for a pinned release asset
 
     def url(self, parts: tuple[str, ...]) -> str:
         """Where one variant is published: the entry's URL with the first key filled in."""
@@ -87,6 +89,14 @@ MODELS: dict[str, Model] = {
         files=("deeptemp-k16-3.onnx",),
         directory="tempocnn",
         asset="https://github.com/sitiyou/namioto/releases/download/models/tempocnn-onnx.zip",
+    ),
+    "romajiasr": Model(
+        name="RomajiASR",
+        env="NAMIOTO_ROMAJIASR_MODEL",
+        files=("model.onnx", "phoneme_vocab.json"),
+        directory="romajiasr",
+        asset="https://github.com/Xiantaidu/RomajiASR/releases/download/v1.0.0/model_onnx.zip",
+        sha256="8aa7e5c6f66cbe00018a33717531bd7f14e096fb6a7f0fcaf4e7c21623e62166",
     ),
 }
 
@@ -168,6 +178,10 @@ def install(
 def unpack(name: str, archive: pathlib.Path, parts: tuple[str, ...] = ()) -> pathlib.Path:
     """Unpack a downloaded release into its place, top-level folder and all."""
     model = MODELS[name]
+    if model.sha256:
+        with archive.open("rb") as stream:
+            if hashlib.file_digest(stream, "sha256").hexdigest() != model.sha256:
+                raise ValueError(f"{model.name} download failed SHA-256 verification")
     target = path(name, *parts)
     target.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(dir=target.parent) as staging:
@@ -176,9 +190,17 @@ def unpack(name: str, archive: pathlib.Path, parts: tuple[str, ...] = ()) -> pat
         source = next((path.parent for path in pathlib.Path(staging).rglob(model.files[0])), None)
         if source is None:
             raise ValueError(f"{archive.name} holds no {model.files[0]}: not a {model.name} package")
-        target.mkdir(parents=True, exist_ok=True)
-        for entry in source.iterdir():
-            shutil.move(str(entry), str(target / entry.name))
+        _whole(model, source)
+        try:
+            source.rename(target)
+        except OSError:
+            if not target.is_dir():
+                raise
+            # Some variants share a directory. Merge those assets into the existing copy.
+            if model.sha256 and installed(name, *parts):
+                return target
+            for entry in source.iterdir():
+                shutil.move(str(entry), str(target / entry.name))
     return target
 
 

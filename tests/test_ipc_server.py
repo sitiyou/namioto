@@ -651,6 +651,121 @@ def test_alignment_evidence_job(qt_app, window, endpoint, monkeypatch):
     assert failure(qt_app, endpoint, "analysis.alignment", {"job": "old"}).code == "unknown_job"
 
 
+def test_clip_reply_waits_for_the_worker_while_other_clients_can_call(qt_app, endpoint, monkeypatch, tmp_path):
+    from namioto.analysis import clip
+    from namioto.ui.ipc_server import _Connection
+
+    assert failure(qt_app, endpoint, "analysis.clip", {"model": "romajiasr"}).code == "missing_input"
+    audio = tmp_path / "excerpt.wav"
+    options = {"model": "romajiasr", "start": 0.5, "end": 2.0, "audio_origin": 42.0, "device": "gpu"}
+    params = {"audio": str(audio), **options}
+    started = threading.Event()
+    release = threading.Event()
+    recognized = {"model": "romajiasr", "transcription": "so ra", "tokens": [{"text": "so", "time": 42.6}]}
+    sent_in = []
+    send = _Connection.send
+
+    def analyze(path, **clip_options):
+        assert path == audio
+        assert clip_options == {"model_dir": None, "candidates": [], **options}
+        started.set()
+        assert release.wait(TIMEOUT)
+        return recognized
+
+    def observe_send(connection, message):
+        if message.get("result") == recognized:
+            sent_in.append(threading.get_ident())
+        send(connection, message)
+
+    monkeypatch.setattr(clip, "analyze_clip", analyze)
+    monkeypatch.setattr(_Connection, "send", observe_send)
+    with ipc.Client(endpoint) as waiting:
+        responses = []
+        thread = threading.Thread(
+            target=lambda: responses.append(waiting.request("analysis.clip", params)), daemon=True
+        )
+        thread.start()
+        try:
+            assert _run(qt_app, lambda: started.wait(TIMEOUT))
+            assert call(qt_app, endpoint, "ping") == {"pong": True}
+            assert failure(qt_app, endpoint, "analysis.clip", params).code == "busy"
+            assert not responses
+        finally:
+            release.set()
+            _run(qt_app, lambda: thread.join(TIMEOUT))
+        assert responses == [recognized]
+        assert _run(qt_app, lambda: waiting.request("ping")) == {"pong": True}
+    assert sent_in == [threading.get_ident()]
+
+
+def test_clip_can_reply_to_a_new_request_after_a_disconnect(qt_app, endpoint, window, monkeypatch):
+    from namioto.analysis import clip
+
+    started = threading.Event()
+    release = threading.Event()
+    params = {"model": "game", "audio": "clip.wav"}
+    result = {"notes": []}
+
+    def analyze(_audio, **_options):
+        started.set()
+        assert release.wait(TIMEOUT)
+        return result
+
+    monkeypatch.setattr(clip, "analyze_clip", analyze)
+    try:
+        with ipc.Client(endpoint) as departing:
+            departing._socket.sendall(ipc.encode({"id": 8, "method": "analysis.clip", "params": params}))
+            assert _run(qt_app, lambda: started.wait(TIMEOUT))
+        assert call(qt_app, endpoint, "ping") == {"pong": True}
+    finally:
+        release.set()
+    deadline = time.monotonic() + TIMEOUT
+    while window._bridge._clip_worker is not None and time.monotonic() < deadline:
+        qt_app.processEvents()
+        time.sleep(0.002)
+    assert call(qt_app, endpoint, "analysis.clip", params) == result
+
+
+def test_clip_reply_reports_a_worker_failure(qt_app, endpoint, monkeypatch):
+    from namioto.analysis import clip
+
+    def analyze(_audio, **_options):
+        raise ValueError("invalid clip")
+
+    monkeypatch.setattr(clip, "analyze_clip", analyze)
+    error = failure(qt_app, endpoint, "analysis.clip", {"model": "game", "audio": "clip.wav"})
+    assert error.code == "failed"
+    assert error.message == "ValueError: invalid clip"
+
+
+@pytest.mark.parametrize("model", ["game", "mms"])
+def test_clip_ipc_passes_windows_and_model_options(qt_app, endpoint, window, monkeypatch, tmp_path, model):
+    from namioto.analysis import clip
+
+    audio = tmp_path / "vocal.wav"
+    monkeypatch.setattr(window, "audio_path", str(audio))
+    candidates = ["宇宙[そら]"] if model == "mms" else []
+    params = {"model": model, "start": 0.5, "end": 2.0, "audio_origin": 42.0}
+    options = {**params, "device": "cpu", "model_dir": None, "candidates": candidates}
+    if model == "mms":
+        assert failure(qt_app, endpoint, "analysis.clip", params).code == "bad_params"
+        params["candidates"] = candidates
+    else:
+        params.update(size="large", language="ja")
+        options.update(game_size="large", game_language="ja")
+    assert failure(qt_app, endpoint, "analysis.clip", {**params, "end": 0.4}).code == "bad_params"
+    result = {"model": model, "audio": str(audio), "window": {"start": 0.5, "end": 2.0, "audio_origin": 42.0}}
+
+    def analyze(path, **clip_options):
+        assert path == audio
+        assert clip_options == options
+        return result
+
+    monkeypatch.setattr(clip, "analyze_clip", analyze)
+    assert call(qt_app, endpoint, "analysis.clip", params) == result
+    assert not window.project_dirty
+
+
 def test_spectrum_frame_window(qt_app, window, endpoint):
     import numpy as np
 

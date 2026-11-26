@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: AGPL-3.0-only
-"""Inspect a vocal clip with GAME or compare KRC readings with a forced aligner."""
+"""Inspect a vocal clip for melody, candidate readings, or Japanese sung sounds."""
 
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ from namioto.analysis.audio_window import AudioWindow
 if TYPE_CHECKING:
     from namioto.analysis.align import Token
 
-MODELS = ("game", "mms", "yohane")
+MODELS = ("game", "mms", "yohane", "romajiasr")
 
 
 def analyze_clip(
@@ -48,11 +48,15 @@ def analyze_clip(
         "window": {"start": start, "end": end, "audio_origin": audio_origin},
     }
 
+    if model in ("game", "romajiasr") and candidates:
+        raise ValueError("KRC candidates are only used by MMS and Yohane")
+    if model == "romajiasr":
+        from namioto.analysis import romajiasr
+
+        return {**result, **romajiasr.recognize(audio, window, provider, directory)}
     if model == "game":
         from namioto.analysis import game
 
-        if candidates:
-            raise ValueError("KRC candidates are only used by MMS and Yohane")
         backend = game.OnnxBackend(game.resolve_model(directory, size=game_size), provider=provider)
         notes = game.extract(backend, audio, window=window, language=game_language)
         return {**result, "notes": [{"onset": a, "offset": b, "pitch": pitch} for a, b, pitch in notes]}
