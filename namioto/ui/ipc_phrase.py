@@ -113,6 +113,8 @@ class Phrase:
         cells = _whole(params, "cells", required=False, default=2)
         if cells not in (1, 2, 4, 8, 16, 32):
             raise IpcError("bad_params", "Unsupported subdivisions per quarter note")
+        estimate_phase = _flag(params, "estimate_phase", default=True)
+        include_summary = _flag(params, "signal_summary", default=True)
         bpm = self.window.view.bpm
         game = next((job for job in reversed(jobs) if "notes" in job), None)
         result = {
@@ -137,16 +139,36 @@ class Phrase:
                 "editor_offset_ms": round(self.window.view.offset * 1000),
             },
         }
+        quantization = []
         if game:
-            grid = bridge.transcription_grid({"job": game["job"], "cells": cells, "estimate_phase": True})
+            grid = bridge.transcription_grid({"job": game["job"], "cells": cells, "estimate_phase": estimate_phase})
 
             def section(rows):
                 return [n for n in rows if n["onset"] < end and n["offset"] > start]
 
-            result["game"] = {"job": game["job"], "raw": section(game["notes"]), "quantized": section(grid["notes"])}
-            result["grid"]["estimated_offset_ms"] = grid["offset_ms"]
+            quantization = [
+                row
+                for row in grid["quantization"]
+                if (row["onset"]["raw"] < end and row["offset"]["raw"] > start)
+                or (
+                    row["quantized_index"] is not None
+                    and row["onset"]["snapped"] < end
+                    and row["offset"]["snapped"] > start
+                )
+            ]
+            result["game"] = {
+                "job": game["job"],
+                "offset_ms": grid["offset_ms"],
+                "raw": section(game["notes"]),
+                "quantized": section(grid["notes"]),
+                "quantization": quantization,
+            }
+            if estimate_phase:
+                result["grid"]["estimated_offset_ms"] = grid["offset_ms"]
         else:
             result["missing"].append("game")
+        if include_summary:
+            self._add_signal_summary(result, quantization, notes, start, end)
         if _flag(params, "spectrum"):
             image = self.window.view.spectrum
             if image is None:
@@ -170,6 +192,30 @@ class Phrase:
             if result["rms"] is None:
                 result["missing"].append("rms")
         return result
+
+    def _add_signal_summary(self, result, quantization, notes, start, end):
+        from namioto.analysis.phrase_signal import summarize
+
+        if quantization:
+            identity = [{"raw_index": row["raw_index"], "pitch": row["pitch"]} for row in quantization]
+            ranges = [
+                tuple((row["onset"][kind], row["offset"][kind], row["pitch"]) for kind in ("raw", "snapped"))
+                for row in quantization
+            ]
+        else:
+            notes = [note for note in notes if note.start < end and note.end > start]
+            identity = [{"note_id": note.id, "pitch": note.pitch} for note in notes]
+            ranges = [((note.start, note.end, note.pitch),) * 2 for note in notes]
+        if not ranges:
+            return
+        path = self.window.audio_path
+        summary = summarize(path, ranges, self.window.project_settings.analysis.a4) if path else None
+        if summary is None:
+            result["missing"].append("signal_summary")
+            return
+        for row, key in zip(summary["notes"], identity, strict=True):
+            row.update(key)
+        result["signal_summary"] = summary
 
     def apply(self, bridge, params):
         if _text(params, "revision") != self.revision:

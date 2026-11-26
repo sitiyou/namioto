@@ -825,6 +825,48 @@ def test_game_grid_preview_preserves_raw_notes(qt_app, endpoint, window):
     assert window.transport.grid_offset.value() == 0
 
 
+def test_phrase_flags_audible_release_removed_by_eighth_note_grid(qt_app, endpoint, window, tmp_path, monkeypatch):
+    import numpy as np
+    import soundfile as sf
+
+    path = tmp_path / "voice.wav"
+    time_axis = np.arange(12000) / 12000
+    tone = 0.3 * np.sin(2 * np.pi * 440 * time_axis)
+    sf.write(path, tone * ((time_axis >= 0.25) & (time_axis < 0.62)), 12000)
+    monkeypatch.setattr(window, "audio_path", str(path))
+    call(qt_app, endpoint, "lyrics.set", {"text": "あ"})
+    call(qt_app, endpoint, "transport.set_bpm", {"bpm": 120})
+    window._bridge._remember_job(
+        {
+            "job": "raw",
+            "audio": str(path),
+            "status": "complete",
+            "kind": "game",
+            "notes": [{"onset": 0.25, "offset": 0.62, "pitch": 69}],
+        }
+    )
+    params = {"line": 0, "start": 0.2, "end": 0.8, "estimate_phase": False}
+    row = call(qt_app, endpoint, "analysis.phrase", params)
+    (detail,) = row["game"]["quantization"]
+    assert detail["offset"] == {
+        "raw": 0.62,
+        "snapped": 0.5,
+        "shift_ms": -120,
+        "midpoint_distance_ms": 5,
+        "finer_grid": 0.625,
+        "review": True,
+    }
+    assert not detail["onset"]["review"]
+    (signal,) = row["signal_summary"]["notes"]
+    assert signal["raw_index"] == detail["raw_index"]
+    release = signal["offset"]
+    assert release["between"] == pytest.approx(release["before"], abs=1)
+    assert release["after"][0] < release["before"][0] - 12
+    assert release["harmonic_drop"] == pytest.approx(0.63, abs=0.01)
+    assert "spectrum" not in row and "rms" not in row
+    assert "signal_summary" not in call(qt_app, endpoint, "analysis.phrase", dict(params, signal_summary=False))
+
+
 def test_phrase_edit_preview_commit_undo_and_stale_revision(qt_app, window, endpoint):
     def request(method, **params):
         return call(qt_app, endpoint, method, params)
@@ -919,6 +961,10 @@ def test_phrase_rejects_cross_line_edit_and_pages_signal(qt_app, window, endpoin
     assert row["rms"]["next_start"] == 5.12
     assert row["spectrum"]["next_start"] == 2.56
     assert len(row["notes"]) == len(row["context_notes"]) == 1
+    assert [note["note_id"] for note in row["signal_summary"]["notes"]] == [
+        row["notes"][0]["id"],
+        row["context_notes"][0]["id"],
+    ]
     payload = {
         "line": 0,
         "revision": row["revision"],

@@ -18,6 +18,8 @@ from namioto.analysis.game import (
     asset_url,
     collect_notes,
     download_model,
+    editor_grid,
+    editor_grid_review,
     estimate_grid_period,
     estimate_grid_phase,
     extract,
@@ -84,6 +86,19 @@ def test_quantized_puts_the_notes_on_the_offset_grid() -> None:
     assert snapped == [(0.5, 1.0, 60.0)]  # the cells sit at 0.25 + k*0.25, so the note lands on 1.0
     assert unit == pytest.approx(0.25)
     assert phase == pytest.approx(0.25)
+
+
+def test_grid_review_keeps_raw_indices_for_a_dropped_note_and_a_closed_gap() -> None:
+    raw = [(0.26, 0.42, 65.0), (0.36, 0.46, 66.0), (0.53, 0.75, 67.0)]
+    notes, unit, offset, rows = editor_grid_review(raw, 120, 2, 0.0, False)
+    assert (notes, unit, offset) == editor_grid(raw, 120, 2, 0.0, False)
+    assert [row["raw_index"] for row in rows] == [0, 1, 2]
+    assert [row["quantized_index"] for row in rows] == [0, None, 1]
+    assert rows[0]["offset"]["review"]
+    assert rows[1]["flags"] == ["dropped", "onset_pushed"]
+    assert rows[1]["onset"]["shift_ms"] == 140
+    assert rows[2]["flags"] == ["gap_closed"]
+    assert rows[2]["closed_gap"] == {"previous_raw_index": 0, "start": 0.42, "end": 0.53}
 
 
 def test_the_grid_phase_is_the_one_that_fits_the_onsets() -> None:

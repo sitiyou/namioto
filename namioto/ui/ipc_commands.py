@@ -350,7 +350,7 @@ class WindowBridge:
         add(
             "analysis.transcription_grid",
             self.transcription_grid,
-            summary="Preview GAME notes on the beat grid",
+            summary="Preview GAME notes on the beat grid with boundary review cues",
             params={
                 "job": "completed GAME job ID",
                 "cells": "subdivisions per quarter note: 1, 2, 4, 8, 16 or 32",
@@ -407,8 +407,10 @@ class WindowBridge:
                 "channel?": "MIDI channel (default 0)",
                 "context?": "neighboring sounds on each side (default 1)",
                 "cells?": "cells per beat (default 2)",
+                "estimate_phase?": "use the GAME-estimated offset (default true); false uses the editor offset",
                 "start?": "audio window start in seconds",
                 "end?": "window end in seconds",
+                "signal_summary?": "include compact boundary and gap audio evidence (default true)",
                 "spectrum?": "include pitch bands",
                 "rms?": "include per-channel linear RMS",
             },
@@ -1009,7 +1011,7 @@ class WindowBridge:
             raise IpcError("bad_params", "Unsupported subdivisions per quarter note")
         bpm = self.window.transport.bpm.value()
         raw = [(n["onset"], n["offset"], n["pitch"]) for n in job["notes"]]
-        notes, unit, phase = game.editor_grid(
+        notes, unit, phase, review = game.editor_grid_review(
             raw, bpm, cells, self.window.transport.grid_offset.value() / 1000, _flag(params, "estimate_phase")
         )
         return {
@@ -1019,6 +1021,7 @@ class WindowBridge:
             "cell_seconds": unit,
             "offset_ms": round(phase * 1000),
             "notes": [{"onset": a, "offset": b, "pitch": pitch} for a, b, pitch in notes],
+            "quantization": review,
         }
 
     def _remember_job(self, job):

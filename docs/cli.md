@@ -291,6 +291,15 @@ job without `estimate_phase` to use the editor's offset. The preview leaves the
 document's notes alone, and the raw result remains available through
 `analysis.transcription`. [Grid fit check](../skills/namioto-nicokara/references/timing-from-audio.md#check-the-eighth-note-grid)
 
+The preview's `quantization` rows link each GAME `raw_index` to a
+`quantized_index` in the full job, with a null index for a dropped note.
+Each onset and offset includes the raw and snapped seconds, the signed
+`shift_ms`, distance to the nearest grid midpoint in milliseconds, and
+`finer_grid`, the nearest point on a grid with half the cell length.
+`review` marks boundaries within one eighth of a cell from the midpoint
+and boundaries involved in dropped notes, pushed onsets or closed gaps.
+Use these as review cues. They measure quantization geometry and collisions.
+
 ### Review and edit one phrase
 
 After running GAME or a lyric aligner, call `analysis.phrase line=0 channel=0`.
@@ -301,11 +310,24 @@ side in the same voice. Context note IDs resolve through `context_notes`.
 
 The result uses the latest completed GAME job for the recording and the latest
 matching MMS and Yohane jobs for that channel's lyrics. It returns both GAME
-note lists over the phrase window, the estimated and current editor grid
-offsets, and the model times, scores and onset bounds for each sound. The
-default grid has two cells per beat (eighth notes). Missing evidence is listed
-in `missing`. With no mapped or aligned times, supply `start` and `end` in
-seconds to select the audio interval.
+note lists and matching `game.quantization` rows over the phrase window, the
+grid offsets, and the model times, scores and onset bounds for each sound.
+The default GAME grid has two cells per beat (eighth notes) and uses the
+estimated phase. Pass `estimate_phase=false` to review the confirmed editor
+grid. `game.offset_ms` reports the offset used. Missing evidence is listed
+in `missing`. With no mapped or aligned times, supply `start` and `end`
+in seconds to select the audio interval.
+
+By default, `signal_summary` measures local harmonic levels at each note pitch
+and short-window RMS from the loaded recording. Rows identify the full GAME
+`raw_index` or, when no GAME notes are in the window, the mapped `note_id`.
+`before`, `between` and `after` give median levels in dBFS around each raw
+and snapped boundary in chronological order, with 60 ms of surrounding
+audio on each side. A null level means the window had no measurement.
+`offset.harmonic_drop` estimates where the pitch-band level stayed at least
+12 dB below the preceding median for two consecutive frames. `gap_before`
+summarizes the audio between separated notes using the preceding pitch.
+Pass `signal_summary=false` to skip these measurements.
 
 Request `spectrum=true` for the editor's note bands or `rms=true` for 20 ms
 linear RMS values per source audio channel. These optional arrays have at most

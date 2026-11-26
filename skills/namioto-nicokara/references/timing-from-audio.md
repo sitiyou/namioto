@@ -12,11 +12,11 @@ Use the confirmed recording as the clock. For GAME, use a vocal stem aligned to 
 
 ## Check the eighth-note grid
 
-Start from the estimated offset and compare attacks and releases in phrases near the beginning, middle and end. Check the grid against the beat in the mix or accompaniment. GAME's acoustic attacks can lean consistently ahead of or behind that beat. Adjust the offset when the snapped notes are consistently early or late. If the error grows through the song, recheck BPM before trying another offset. Check a quick phrase, a held note and a repeated refrain. A good fit preserves the phrasing, including distinct attacks and breathing gaps.
+Start from the estimated offset and compare attacks and releases in phrases near the beginning, middle and end. Check the grid against the beat in the mix or accompaniment. GAME's acoustic attacks can lean consistently ahead of or behind that beat. Check the global offset first when the snapped notes are consistently early or late. If the error grows through the song, recheck BPM before trying another offset. Check a quick phrase, a held note and a repeated refrain. A good fit preserves the phrasing, including distinct attacks and breathing gaps.
 
-**Keep exact eighth-note lengths as the normal result.** For a passage that fits, keep both note boundaries on the confirmed grid. Each note lasts one eighth note or a whole multiple of it. At 120 BPM, one grid cell is 250 ms.
+Compare the eighth-note version with any proposed finer version in the context of the phrase. GAME boundaries, CTC onsets, spectrum frames and listening can estimate different points within the same attack or release. If a vowel continues past the snapped release and both versions preserve the same note and breathing gap, keep the eighth-note version. Use neighboring attacks, the accompaniment and repeated phrases to decide whether a difference changes the rhythm.
 
-If the passage still conflicts with the performed phrasing after adjusting the offset, use the grid as a reference there. Estimate the affected attacks and releases from the available vocal evidence and keep those durations. Leave the passages that fit on the confirmed grid.
+If the eighth-note version loses a clear pickup, reattack, pitch step or meaningful rest, try the coarsest subdivision that preserves it. For a held note, check whether a grid choice changes how the note leads into the next attack or rest. After checking the tempo and offset, use an off-grid boundary for a clear event that still loses its shape on a regular subdivision. Estimate that boundary from the recording.
 
 ## Edit through IPC
 
@@ -24,12 +24,14 @@ Confirm the target project and instance with `state.get`. For a new agent-owned 
 
 To initialize an empty roll from a checked GAME grid, set the BPM and grid offset, then send the reviewed note list with `document.replace_notes`. Each note takes `start`, `duration`, and an integer MIDI `pitch`, with optional `channel`. Convert the grid's end timestamp to a duration and keep all times in seconds. Put the reviewed lyrics in `lyrics.set` and use **Rebuild mapping** in the editor for each vocal channel, or supply reviewed KRC with its NOTE mapping already authored. `analysis.align` provides the onset evidence for an automated pass. Save when the mapping agrees with the notes, then reopen and verify the project.
 
+For a draft entered in seconds, `document.quantize cell=0.5` snaps note starts and ends to the current eighth-note grid. It acts on selected notes, or the entire roll when there is no selection. Use it before applying deliberate timing exceptions. Read back `document.notes` to check for collisions that kept a note from moving.
+
 ## Check the saved project
 
 Save with `Ctrl+S` or `project.save` and let the lyric mapping finish. Over IPC, check `subtitle.pending` in `state.get`. Reopen the saved `.nto` and verify the BPM, grid offset, KRC line breaks, readings and chapter entrances.
 
-- **KRC mapping.** Most lyrics should use the default note-slot counts. Compare NOTE coverage and requested slots on each vocal channel. `document.notes` includes the full note stream, and `analysis.phrase` gives the slot groups and owned note IDs for each line. Check unmatched notes at chapter gaps and the end, and review clusters of `.N`, zero slots and shared groups using the [phrase review checks](timing-analysis.md#resolve-an-uncertain-phrase).
-- **Timing and pitch.** In the piano roll, look for brief same-pitch restarts, short notes followed by long gaps inside a phrase, isolated octave jumps and same-voice overlaps. Check held vowels, pickups and breathing gaps. Compare repeated phrases for consistent note shapes and lyric ownership, while allowing performed variations. Use the agreed grid for sections that fit.
+- **KRC mapping.** Compare NOTE coverage and requested slots on each vocal channel. `document.notes` includes the full note stream, and `analysis.phrase` gives the slot groups and owned note IDs for each line. Check unmatched notes at chapter gaps and the end. Check the sung entries against the equal divisions within shared NOTEs. Review zero slots and multi-NOTE sounds against the phrase's rhythm and the following sound's ownership. [Phrase review checks](timing-analysis.md#resolve-an-uncertain-phrase)
+- **Timing and pitch.** Review every start or end outside the confirmed eighth-note grid, including boundaries on the sixteenth-note grid. This includes notes an eighth plus a sixteenth long. For each exception, identify what the eighth-note version loses in the phrase. Restore the eighth-note boundary when the pulse and phrasing read correctly there. Check held vowels, isolated pitch jumps, same-voice overlaps and the consistency of repeated phrases.
 - **Phrase transitions.** Check the first entrance, places where the song resumes after a break, revised line breaks and overlapping voices. With a preview available, watch the timing at normal speed and check whether rapid wipes, stalls or late line changes reflect the phrase. Listen when audio can be reviewed.
 
 Treat these checks as a combined judgment. GAME, lyric alignment and the spectrum can each leave details ambiguous. Record timing that remains uncertain and matters to the result.

@@ -23,7 +23,7 @@ import argparse
 import json
 import pathlib
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 
 import numpy as np
 
@@ -163,18 +163,20 @@ def quantize_notes(notes: Sequence[Note], unit: float, phase: float = 0.0) -> li
     leaves without a cell of its own has nowhere to sit and is dropped, which is what takes GAME's
     sub-grid fragments out of a quantised run.
     """
-    out = []
+    return [note for note, _ in _snap_ranges(notes, unit, phase) if note[1] > note[0]]
+
+
+def _snap_ranges(notes: Sequence[Note], unit: float, phase: float) -> Iterator[tuple[Note, float]]:
+    """Yield each proposed range and its onset before overlap handling, including dropped notes."""
     last_time = 0.0
     for onset, oset, pitch in notes:
-        onset = unit * round((onset - phase) / unit)
+        nearest_onset = unit * round((onset - phase) / unit)
         oset = unit * round((oset - phase) / unit)
         # a monophonic line: a note the grid put before the one before it ended starts at that end
-        onset = max(onset, last_time)
-        if oset <= onset:  # what is left is shorter than a cell, so there is no note here
-            continue
-        out.append((onset, oset, pitch))
-        last_time = oset
-    return out
+        onset = max(nearest_onset, last_time)
+        yield (onset, oset, pitch), nearest_onset
+        if oset > onset:
+            last_time = oset
 
 
 def estimate_grid_phase(onsets, unit: float) -> float:
@@ -425,13 +427,70 @@ def quantized(
 
 def editor_grid(notes: Sequence[Note], bpm: float, cells: int, offset: float, estimate_phase: bool):
     """Snap a stored GAME run using the editor's millisecond grid offset."""
+    unit = (60.0 / bpm) / cells
+    offset = _editor_phase(notes, unit, offset, estimate_phase)
+    return quantized(notes, bpm, cells, phase=offset, offset=offset)
+
+
+def _editor_phase(notes: Sequence[Note], unit: float, offset: float, estimate_phase: bool) -> float:
     if estimate_phase:
-        unit = 60.0 / bpm / cells
         phase = estimate_grid_phase([note[0] for note in notes], unit)
         offset = round(phase * 1000) / 1000
         if round((unit - phase) * 1000) == 0:
             offset = 0.0
-    return quantized(notes, bpm, cells, phase=offset, offset=offset)
+    return offset
+
+
+def _boundary_review(raw: float, snapped: float, unit: float, phase: float, *, review: bool) -> dict:
+    cell = (raw - phase) / unit
+    midpoint_distance = abs(cell % 1 - 0.5) * unit
+    return {
+        "raw": raw,
+        "snapped": snapped,
+        "shift_ms": round((snapped - raw) * 1000, 3),
+        "midpoint_distance_ms": round(midpoint_distance * 1000, 3),
+        "finer_grid": phase + round(cell * 2) * (unit / 2),
+        "review": review or midpoint_distance <= unit / 8,
+    }
+
+
+def editor_grid_review(notes: Sequence[Note], bpm: float, cells: int, offset: float, estimate_phase: bool):
+    """Return the editor grid and one review row per raw note, with zero-based note indices."""
+    unit = (60.0 / bpm) / cells
+    phase = _editor_phase(notes, unit, offset, estimate_phase)
+    snapped, review = [], []
+    last = None
+    for index, (raw, (grid, nearest_onset)) in enumerate(zip(notes, _snap_ranges(notes, unit, phase), strict=True)):
+        onset, end, pitch = grid
+        dropped = end <= onset
+        pushed = onset > nearest_onset
+        flags = []
+        if dropped:
+            flags.append("dropped")
+        if pushed:
+            flags.append("onset_pushed")
+        gap = None
+        if not dropped and last is not None:
+            last_index, last_raw_end, last_grid_end = last
+            if onset == last_grid_end and raw[0] - last_raw_end > 1e-6:
+                flags.append("gap_closed")
+                gap = {"previous_raw_index": last_index, "start": last_raw_end, "end": raw[0]}
+                review[last_index]["offset"]["review"] = True
+        row = {
+            "raw_index": index,
+            "quantized_index": None if dropped else len(snapped),
+            "pitch": pitch,
+            "onset": _boundary_review(raw[0], onset + phase, unit, phase, review=bool(flags)),
+            "offset": _boundary_review(raw[1], end + phase, unit, phase, review=dropped),
+            "flags": flags,
+        }
+        if gap is not None:
+            row["closed_gap"] = gap
+        review.append(row)
+        if not dropped:
+            snapped.append((onset + phase, end + phase, pitch))
+            last = (index, raw[1], end)
+    return snapped, unit, phase, review
 
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
