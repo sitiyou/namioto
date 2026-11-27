@@ -72,8 +72,10 @@ uv sync --extra webgpu
 
 CUDA requires the GPU runtime, CUDA 12 and cuDNN 9. WebGPU uses Vulkan with the CPU runtime
 and a provider plugin. CPU and CUDA builds conflict: select one, not both. The editor's
-Settings → Devices chooses the backend used by `--device gpu`. If a GPU provider cannot
-be created, ONNX Runtime reports it and continues on CPU.
+Settings → Devices chooses the GPU backend, with **Automatic** selecting the first available
+backend. For analysis, the default device is `auto` in the editor, CLI and IPC. Both `auto`
+and `gpu` use the configured GPU backend when available and fall back to CPU. Select `cpu`
+to force CPU. The GAME and alignment dialogs remember your last choice.
 
 Models are downloaded separately from this project's `models` release or their upstream releases.
 They are not included in builds. Configure a GitHub mirror or proxy in Settings → Network
@@ -277,6 +279,8 @@ Rows begin at the returned audio time, are spaced by `step` seconds and start at
 For melody evidence, start `analysis.transcribe size=large language=ja` on the current
 vocal. Poll `analysis.transcription job=ID` for GAME's raw note list (onset and offset in
 seconds, fractional MIDI pitch). Both analysis commands leave the project's notes untouched.
+`analysis.align`, `analysis.transcribe` and `analysis.clip` accept `device=auto` (default),
+`device=cpu` and `device=gpu`. See [Devices and models](#devices-and-models).
 
 Run `analysis.detect_bpm algorithm=wavetone` on the mix or accompaniment and poll
 `analysis.bpm_result job=ID`. The result includes the BPM, WaveTone's ranked

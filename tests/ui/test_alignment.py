@@ -121,6 +121,7 @@ def test_a_missing_runtime_stops_the_alignment(own_window, monkeypatch) -> None:
 def test_the_align_dialog_remembers_what_was_chosen(own_window) -> None:
     dialog = AlignDialog("vocal.wav", "あん\n", parent=own_window)
     parameter_writer(dialog, "model")("yohane")
+    parameter_writer(dialog, "device")("cpu")
     parameter_writer(dialog, "chunk")("off")
     dialog.reject()
 

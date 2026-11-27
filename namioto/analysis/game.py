@@ -511,8 +511,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--device",
         choices=devices.RUN_CHOICES,
-        default="cpu",
-        help="run on the CPU, or on the GPU backend the settings name",
+        default=devices.DEFAULT_RUN,
+        help="inference device (default: %(default)s)",
     )
     parser.add_argument("--batch-size", type=int, default=4, help="chunks per inference batch")
     parser.add_argument("--seg-threshold", type=float, default=0.2, help="boundary decoding threshold")

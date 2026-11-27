@@ -1,5 +1,9 @@
 # GAME and alignment controls
 
+The IPC methods `analysis.transcribe`, `analysis.align` and `analysis.clip` default to
+`device=auto`, which uses the GPU backend selected in Settings → Devices if available and falls
+back to CPU. Pass `device=cpu` to force CPU.
+
 ## Measure and preview
 
 1. Measure BPM on the accompaniment or mix with `analysis.detect_bpm algorithm=wavetone`. Poll `analysis.bpm_result job=ID` and compare beats near the beginning, middle and end. Check half or double tempo and any growing displacement before moving notes.

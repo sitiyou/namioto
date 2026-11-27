@@ -82,6 +82,20 @@ def test_a_gpu_that_is_not_there_falls_back_to_the_cpu(monkeypatch) -> None:
     assert devices.resolve("gpu") == "cpu"
 
 
+def test_webgpu_needs_a_bindable_device(monkeypatch) -> None:
+    provider = "WebGpuExecutionProvider"
+    monkeypatch.setattr(devices, "installed", lambda: (provider, "CPUExecutionProvider"))
+    monkeypatch.setattr(devices, "configured_gpu", lambda: "webgpu")
+    cpu = types.SimpleNamespace(ep_name="CPUExecutionProvider")
+    gpu = types.SimpleNamespace(ep_name=provider)
+    inventory = [cpu]
+    monkeypatch.setitem(sys.modules, "onnxruntime", types.SimpleNamespace(get_ep_devices=lambda: inventory))
+
+    assert devices.resolve("auto") == "cpu"
+    inventory.append(gpu)
+    assert devices.resolve("auto") == "webgpu"
+
+
 def test_a_working_runtime_has_nothing_to_report() -> None:
     assert devices.validate() is None
 

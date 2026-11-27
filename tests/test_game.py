@@ -142,8 +142,9 @@ def test_the_backend_hands_its_provider_to_every_session(tmp_path, monkeypatch) 
     assert seen == [["CUDAExecutionProvider", "CPUExecutionProvider"]] * len(MODEL_FILES)
 
 
-def test_the_cli_runs_on_the_cpu_unless_asked_otherwise() -> None:
-    assert parse_args(["song.wav"]).device == "cpu"
+def test_the_cli_selects_the_device_automatically_by_default() -> None:
+    assert parse_args(["song.wav"]).device == "auto"
+    assert parse_args(["song.wav", "--device", "cpu"]).device == "cpu"
     assert parse_args(["song.wav", "--device", "gpu"]).device == "gpu"
     with pytest.raises(SystemExit):
         parse_args(["song.wav", "--device", "cuda"])

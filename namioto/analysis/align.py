@@ -111,9 +111,9 @@ PARAMETERS: tuple[Field, ...] = (
     Field(
         "device",
         "choice",
-        "cpu",
+        devices.DEFAULT_RUN,
         "Device",
-        "Run on the CPU, or on the GPU backend the settings name; the settings window says which",
+        "Run on the CPU or use the configured GPU backend when available",
         choices=devices.RUN_CHOICES,
         labels=devices.RUN_LABELS,
     ),
@@ -804,8 +804,8 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--device",
         choices=devices.RUN_CHOICES,
-        default="cpu",
-        help="run on the CPU, or on the GPU backend the settings name",
+        default=devices.DEFAULT_RUN,
+        help="inference device (default: auto)",
     )
     parser.add_argument("--out", type=pathlib.Path, help="write the alignment here instead of to stdout")
     return parser.parse_args(argv)

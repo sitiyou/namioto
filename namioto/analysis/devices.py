@@ -15,10 +15,12 @@ from __future__ import annotations
 
 import importlib
 from dataclasses import dataclass
+from threading import Lock
 
-# what a run asks for; the GPU one is turned into a device key by `resolve`
-RUN_CHOICES = ("cpu", "gpu")
-RUN_LABELS = ("CPU", "GPU")
+# what a run asks for, before resolving it to a backend
+DEFAULT_RUN = "auto"
+RUN_CHOICES = (DEFAULT_RUN, "cpu", "gpu")
+RUN_LABELS = ("Automatic", "CPU", "GPU")
 # the WebGPU provider's own hint for which of the machine's GPUs to put the work on: it defaults to
 # the discrete one, and asking for the integrated one is how a run is made lighter
 POWER_PREFERENCES = ("high-performance", "low-power")
@@ -107,20 +109,22 @@ def installed() -> tuple[str, ...]:
 
 # the plugin libraries already put up; the runtime refuses a second registration of one
 _REGISTERED: set[str] = set()
+_REGISTRATION_LOCK = Lock()
 
 
 def _register(ort) -> None:
     """Bring up the plugin execution providers this registry names; one not installed is left out."""
-    for device in DEVICES:
-        if not device.plugin or device.key in _REGISTERED:
-            continue
-        try:
-            plugin = importlib.import_module(device.plugin)
-            library = plugin.get_library_path()
-        except (ImportError, RuntimeError):
-            continue
-        ort.register_execution_provider_library(device.key, library)
-        _REGISTERED.add(device.key)
+    with _REGISTRATION_LOCK:
+        for device in DEVICES:
+            if not device.plugin or device.key in _REGISTERED:
+                continue
+            try:
+                plugin = importlib.import_module(device.plugin)
+                library = plugin.get_library_path()
+            except (ImportError, RuntimeError):
+                continue
+            ort.register_execution_provider_library(device.key, library)
+            _REGISTERED.add(device.key)
 
 
 # what the interface says when a run cannot open a model; kept as the English a catalog can key on,
@@ -162,8 +166,17 @@ def missing(key: str) -> tuple[str, ...]:
 
 
 def available(key: str) -> bool:
-    """Whether a device can be used at all: its own provider decides, not the CPU fallback."""
-    return get(key).providers[0] in installed()
+    """Check for a provider and, for plugin providers, a device it can bind to."""
+    device = get(key)
+    provider = device.providers[0]
+    if provider not in installed():
+        return False
+    if not device.plugin:
+        return True
+
+    import onnxruntime as ort
+
+    return any(entry.ep_name == provider for entry in ort.get_ep_devices())
 
 
 def first_available_gpu() -> str:
@@ -183,8 +196,8 @@ def configured_gpu() -> str:
 
 
 def resolve(choice: str) -> str:
-    """The device key a run's CPU/GPU choice stands for; an unavailable GPU falls back to the CPU."""
-    if choice != "gpu":
+    """Resolve automatic and GPU requests through settings, with CPU fallback."""
+    if choice not in (DEFAULT_RUN, "gpu"):
         return "cpu"
     key = configured_gpu()
     return key if available(key) else "cpu"

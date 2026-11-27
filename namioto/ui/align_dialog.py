@@ -213,7 +213,7 @@ class AlignDialog(QDialog):
         self._remember()
         model = self._parameters["model"]
         provider = devices.resolve(self._parameters["device"])
-        if self._parameters["device"] == "gpu" and provider == "cpu":
+        if self._parameters["device"] != "cpu" and provider == "cpu":
             self.log.appendPlainText(tr("No GPU backend is available; running on the CPU"))
         chunk = self._parameters["chunk"]
         self.progress.setRange(0, 0)  # busy until the first chunk of the model's pass comes back

@@ -633,19 +633,30 @@ def test_editor_exports_ass_without_loading_a_project_template(qt_app, window, e
 
 
 def test_alignment_evidence_job(qt_app, window, endpoint, monkeypatch):
+    from namioto.analysis import devices
     from namioto.ui.align_dialog import Aligner
 
     assert failure(qt_app, endpoint, "analysis.align").code == "missing_input"
     monkeypatch.setattr(window, "audio_path", "voice.wav")
     call(qt_app, endpoint, "lyrics.set", {"text": "あ"})
+    assert failure(qt_app, endpoint, "analysis.align", {"device": "invalid"}).code == "bad_params"
     times = [[(0.1, 0.25)]]
-    monkeypatch.setattr(Aligner, "load", lambda self: self.aligned.emit((times, self.model, [], [], [[0.9]], [[None]])))
+
+    def load(self):
+        if self.provider != "webgpu":
+            raise ValueError(f"unexpected provider: {self.provider}")
+        self.aligned.emit((times, self.model, [], [], [[0.9]], [[None]]))
+
+    monkeypatch.setattr(devices, "configured_gpu", lambda: "webgpu")
+    monkeypatch.setattr(devices, "available", lambda key: key == "webgpu")
+    monkeypatch.setattr(Aligner, "load", load)
     job = call(qt_app, endpoint, "analysis.align", {"model": "yohane"})["job"]
     deadline = time.monotonic() + TIMEOUT
     while time.monotonic() < deadline:
         result = call(qt_app, endpoint, "analysis.alignment", {"job": job})
-        if result["status"] == "complete":
+        if result["status"] != "running":
             break
+    assert result["status"] == "complete", result
     assert result["times"] == [[[0.1, 0.25]]]
     assert result["scores"] == [[0.9]]
     assert failure(qt_app, endpoint, "analysis.alignment", {"job": "old"}).code == "unknown_job"
@@ -746,12 +757,12 @@ def test_clip_ipc_passes_windows_and_model_options(qt_app, endpoint, window, mon
     monkeypatch.setattr(window, "audio_path", str(audio))
     candidates = ["宇宙[そら]"] if model == "mms" else []
     params = {"model": model, "start": 0.5, "end": 2.0, "audio_origin": 42.0}
-    options = {**params, "device": "cpu", "model_dir": None, "candidates": candidates}
+    options = {**params, "device": "auto", "model_dir": None, "candidates": candidates}
     if model == "mms":
         assert failure(qt_app, endpoint, "analysis.clip", params).code == "bad_params"
         params["candidates"] = candidates
     else:
-        params.update(size="large", language="ja")
+        params.update(size="large", language="ja", device="auto")
         options.update(game_size="large", game_language="ja")
     assert failure(qt_app, endpoint, "analysis.clip", {**params, "end": 0.4}).code == "bad_params"
     result = {"model": model, "audio": str(audio), "window": {"start": 0.5, "end": 2.0, "audio_origin": 42.0}}
@@ -786,8 +797,10 @@ def test_transcription_job_crash_is_reported(qt_app, window, endpoint, monkeypat
     assert failure(qt_app, endpoint, "analysis.transcribe").code == "missing_input"
     monkeypatch.setattr(window, "audio_path", "voice.wav")
     assert failure(qt_app, endpoint, "analysis.transcribe", {"size": "unknown"}).code == "bad_params"
+    assert failure(qt_app, endpoint, "analysis.transcribe", {"device": "invalid"}).code == "bad_params"
     monkeypatch.setattr(sys, "executable", "/missing/namioto-test-python")
-    job = call(qt_app, endpoint, "analysis.transcribe")["job"]
+    job = call(qt_app, endpoint, "analysis.transcribe", {"device": "cpu"})["job"]
+    assert window._bridge._game_process.arguments()[-2:] == ["--device", "cpu"]
     deadline = time.monotonic() + TIMEOUT
     while time.monotonic() < deadline:
         result = call(qt_app, endpoint, "analysis.transcription", {"job": job})

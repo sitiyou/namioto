@@ -38,6 +38,7 @@ from namioto.ui.loading import LoadingThread
 from namioto.ui.roll import PITCH_MAX, PITCH_MIN
 
 MATCH_SECONDS = 1e-3  # how close two notes have to be to count as the same one when removing
+ANALYSIS_DEVICE_PARAM = "auto (default), cpu or gpu"
 
 
 def _required(params: dict, name: str) -> Any:
@@ -108,6 +109,13 @@ def _flag(params: dict, name: str, default: bool = False) -> bool:
     if not isinstance(value, bool):
         raise IpcError("bad_params", f"{name} must be true or false")
     return value
+
+
+def _analysis_device(params: dict) -> str:
+    device = _text(params, "device", required=False, default=devices.DEFAULT_RUN)
+    if device not in devices.RUN_CHOICES:
+        raise IpcError("bad_params", "device must be auto, cpu or gpu")
+    return device
 
 
 class ClipAnalysis(LoadingThread):
@@ -361,7 +369,11 @@ class WindowBridge:
             "analysis.transcribe",
             self.start_transcription,
             summary="Measure melody notes from the current vocal using GAME",
-            params={"size?": "small, medium or large", "language?": "universal, en, ja, yue or zh"},
+            params={
+                "size?": "small, medium or large",
+                "language?": "universal, en, ja, yue or zh",
+                "device?": ANALYSIS_DEVICE_PARAM,
+            },
         )
         add(
             "analysis.transcription",
@@ -373,7 +385,11 @@ class WindowBridge:
             "analysis.align",
             self.start_alignment,
             summary="Measure sound onsets from the current vocal and KRC in the background",
-            params={"model?": "mms or yohane", "channel?": "lyric channel, default 0"},
+            params={
+                "model?": "mms or yohane",
+                "channel?": "lyric channel, default 0",
+                "device?": ANALYSIS_DEVICE_PARAM,
+            },
         )
         add(
             "analysis.alignment",
@@ -391,7 +407,7 @@ class WindowBridge:
                 "start?": "window start in file seconds, default 0",
                 "end?": "window end in file seconds",
                 "audio_origin?": "recording time at file time zero",
-                "device?": "cpu (default) or gpu",
+                "device?": ANALYSIS_DEVICE_PARAM,
                 "model_dir?": "local model directory",
                 "candidates?": "list of KRC readings for MMS or Yohane",
                 "size?": "GAME model size: small, medium or large",
@@ -1089,11 +1105,21 @@ class WindowBridge:
             raise IpcError("missing_input", "Load a vocal first")
         size = _text(params, "size", required=False, default="small")
         language = _string(params, "language", required=False, default="universal")
+        device = _analysis_device(params)
         if size not in GAME_SIZES or (language != "universal" and language not in LANGUAGE_CODES):
             raise IpcError("bad_params", "Unknown GAME size or language")
         job = {"job": uuid4().hex, "status": "running", "audio": self.window.audio_path, "kind": "game"}
         process = QProcess()
-        arguments = ["-m", "namioto.analysis.game", self.window.audio_path, "--json", "--size", size]
+        arguments = [
+            "-m",
+            "namioto.analysis.game",
+            self.window.audio_path,
+            "--json",
+            "--size",
+            size,
+            "--device",
+            device,
+        ]
         if language and language != "universal":
             arguments.extend(["--language", language])
 
@@ -1137,7 +1163,8 @@ class WindowBridge:
         if model not in align.MODELS:
             raise IpcError("bad_params", "Unknown alignment model")
         channel = _whole(params, "channel", required=False, default=0, low=0, high=15)
-        worker = Aligner(self.window.audio_path, self.window.lyrics_text, model, channel=channel)
+        provider = devices.resolve(_analysis_device(params))
+        worker = Aligner(self.window.audio_path, self.window.lyrics_text, model, provider=provider, channel=channel)
         job = {"job": uuid4().hex, "status": "running", "model": model, "channel": channel}
 
         job.update(audio=self.window.audio_path, lyrics_key=self.alignment_key(self.window.lyrics_text, channel))
@@ -1178,9 +1205,7 @@ class WindowBridge:
         audio = _string(params, "audio", required=False, default=self.window.audio_path)
         if not audio:
             raise IpcError("missing_input", "Load a vocal or provide an audio file")
-        device = _text(params, "device", required=False, default="cpu")
-        if device not in devices.RUN_CHOICES:
-            raise IpcError("bad_params", "device must be cpu or gpu")
+        device = _analysis_device(params)
         start = _number(params, "start", required=False, low=0)
         end = _number(params, "end") if "end" in params else None
         if end is not None and end <= start:

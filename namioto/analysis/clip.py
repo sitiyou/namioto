@@ -27,7 +27,7 @@ def analyze_clip(
     end: float | None = None,
     audio_origin: float = 0.0,
     candidates: Sequence[str] = (),
-    device: str = "cpu",
+    device: str = devices.DEFAULT_RUN,
     model_dir: str | Path | None = None,
     game_size: str = "small",
     game_language: str | None = None,
@@ -124,7 +124,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--candidate", dest="candidates", action="append", default=[], help="KRC for this clip; repeat to compare"
     )
-    parser.add_argument("--device", choices=devices.RUN_CHOICES, default="cpu")
+    parser.add_argument("--device", choices=devices.RUN_CHOICES, default=devices.DEFAULT_RUN)
     parser.add_argument("--dir", dest="model_dir", type=Path, help="local model directory")
     parser.add_argument("--size", dest="game_size", default="small", help="GAME model size: small, medium or large")
     parser.add_argument("--language", dest="game_language", help="GAME language code, e.g. ja")

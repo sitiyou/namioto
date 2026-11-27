@@ -118,8 +118,11 @@ def _show_device_status(editor: QComboBox, status: QLabel) -> None:
         status.setToolTip("")
         status.setStyleSheet("")
         return
-    missing = ", ".join(devices.missing(key)) or device.providers[0]
-    status.setText(tr("{name} is not available: {missing} is missing", name=name, missing=missing))
+    missing = ", ".join(devices.missing(key))
+    if missing:
+        status.setText(tr("{name} is not available: {missing} is missing", name=name, missing=missing))
+    else:
+        status.setText(tr("No device is available for {name}", name=name))
     status.setToolTip(tr(device.hint))
     _warn(status)
 

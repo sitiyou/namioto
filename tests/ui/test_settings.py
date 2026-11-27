@@ -108,6 +108,12 @@ def test_the_gpu_row_says_whether_its_runtime_is_installed(qt_app, monkeypatch) 
     _show_device_status(combo, status)
     assert "NVIDIA CUDA is available" in status.text()
 
+    write("webgpu")
+    monkeypatch.setattr(devices, "installed", lambda: ("WebGpuExecutionProvider", "CPUExecutionProvider"))
+    monkeypatch.setattr(devices, "available", lambda key: False)
+    _show_device_status(combo, status)
+    assert status.text() == "No device is available for Vulkan"
+
 
 def test_restoring_defaults_puts_every_widget_back(own_window) -> None:
     own_window.settings.ass.offset_ms = 72

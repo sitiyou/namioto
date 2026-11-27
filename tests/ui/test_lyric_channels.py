@@ -313,7 +313,7 @@ def test_align_dialog_exposes_rebuild_mapping_without_constraints(own_window, mo
     calls = []
     monkeypatch.setattr(dialog, "_start", lambda: calls.append(dialog.parameters()))
     dialog.rebuild.click()
-    assert calls == [{"model": "mms", "device": "cpu", "chunk": "silence"}]
+    assert calls == [{"model": "mms", "device": "auto", "chunk": "silence"}]
     assert not hasattr(dialog, "run")
     assert all(field.name != "use_constraints" for field, _read, _write in dialog._fields)
 

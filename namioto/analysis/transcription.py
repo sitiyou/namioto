@@ -44,9 +44,9 @@ PARAMETERS: tuple[Field, ...] = (
     Field(
         "device",
         "choice",
-        "cpu",
+        devices.DEFAULT_RUN,
         "Device",
-        "Run on the CPU, or on the GPU backend the settings name; the settings window says which",
+        "Run on the CPU or use the configured GPU backend when available",
         choices=devices.RUN_CHOICES,
         labels=devices.RUN_LABELS,
     ),
