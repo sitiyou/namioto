@@ -10,6 +10,7 @@ import numpy as np
 from PySide6.QtCore import Signal
 from PySide6.QtGui import QImage
 
+from namioto.analysis.choices import SPECTRUM_FRAME_RATES
 from namioto.analysis.spectrum import NoteSpectrum, analyse
 from namioto.ui.loading import LoadingThread
 
@@ -77,7 +78,7 @@ class SpectrumLoader(LoadingThread):
         self,
         path: str | Path,
         channels: str = "mono",
-        t_num: float = 40.0,
+        t_num: float | None = None,
         fft_points: int = 8192,
         a4: float = 440.0,
         backend: str = "wavetone",
@@ -85,7 +86,7 @@ class SpectrumLoader(LoadingThread):
     ):
         super().__init__(path, parent)
         self.channels = channels
-        self.t_num = t_num
+        self.t_num = SPECTRUM_FRAME_RATES[backend] if t_num is None else t_num
         self.fft_points = fft_points
         self.a4 = a4
         self.backend = backend

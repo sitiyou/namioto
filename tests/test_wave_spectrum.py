@@ -68,10 +68,10 @@ def test_tones_peak_in_their_own_band(note):
     rate = 22050
     audio = np.sin(2 * np.pi * freq_table()[note] * np.arange(rate * 2) / rate)
     result = wave_notes(audio, rate)
-    assert result.table[20:60].mean(axis=0).argmax() == note
+    assert result.table[50:150].mean(axis=0).argmax() == note
     assert result.table.dtype == np.float32
-    assert result.frames == 80
-    assert result.frame_ms == 25
+    assert result.frames == 200
+    assert result.frame_ms == 10
 
 
 def test_silence_nyquist_progress_and_short_input():

@@ -26,8 +26,10 @@ uv run namioto-cli tempocnn song.mp3
 ```
 
 Spectrum analyses 84 bands (C1–B7); `--bench` adds timings and `--threshold` adds detected
-note spans. WaveTone's volume-envelope estimator is the editor default. `tempo` uses a
-librosa beat tracker and least-squares fit; local estimates use 12-second windows, 6 seconds
+note spans. The default spectrum rate is 100 frames/s for WaveTone and 40 frames/s for
+noteDigger. Use `--t-num` to choose a different rate. WaveTone's volume-envelope estimator
+is the editor default for BPM. `tempo` uses a librosa beat tracker and least-squares fit. Local
+estimates use 12-second windows, 6 seconds
 apart. JSON output includes beats. TempoCNN works best on full mixes rather than stems.
 
 ## Extract singing-voice notes
@@ -328,6 +330,19 @@ audio on each side. A null level means the window had no measurement.
 12 dB below the preceding median for two consecutive frames. `gap_before`
 summarizes the audio between separated notes using the preceding pitch.
 Pass `signal_summary=false` to skip these measurements.
+
+When the editor has a note spectrum, `pitch_change_before` compares the two
+expected MIDI pitch bands at a close handoff. `before_db` and `after_db` are
+the second band's level relative to the first, measured over up to 60 ms on
+either side of the handoff. Positive values favor the second band. `note_spectrum` identifies
+the backend and its frame spacing. Compare the two levels for evidence of a
+pitch change and use local audio to judge its timing.
+
+`unmapped_gaps` identifies explicit zero-slot sounds between mapped notes on
+the requested line. For each gap, `high_band` gives the peak time, peak level
+and median level in the 2.5–8 kHz band, measured with windows inside the gap.
+It is null if no full window or frequency band is available. Use it to
+localize possible weak consonants and check the passage in context.
 
 Request `spectrum=true` for the editor's note bands or `rms=true` for 20 ms
 linear RMS values per source audio channel. These optional arrays have at most

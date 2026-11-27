@@ -11,4 +11,5 @@ from __future__ import annotations
 
 ALGORITHMS = ("wavetone", "librosa", "tempocnn")
 CHANNEL_MODES = ("mono", "left", "right", "sum", "side", "both")
-SPECTRUM_BACKENDS = ("wavetone", "notedigger")
+SPECTRUM_FRAME_RATES = {"wavetone": 100.0, "notedigger": 40.0}
+SPECTRUM_BACKENDS = tuple(SPECTRUM_FRAME_RATES)

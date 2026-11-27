@@ -239,6 +239,7 @@ def test_the_spectrum_loader_takes_every_analysis_parameter(tmp_path) -> None:
 
 def test_loading_a_file_hands_the_document_to_the_analysers(own_window, monkeypatch) -> None:
     captured = fake_loaders(monkeypatch)
+    own_window.project_settings.analysis.t_num = 50.0
     own_window.project_settings.analysis.fft_points = 4096
     own_window.project_settings.analysis.a4 = 441.0
     store.set_value(own_window.settings, "tempo", "window_seconds", 8.0)
@@ -248,7 +249,7 @@ def test_loading_a_file_hands_the_document_to_the_analysers(own_window, monkeypa
     own_window.load_audio("/tmp/song.wav")
 
     analysis, _song, tempo = captured
-    assert analysis == {"backend": "notedigger", "channels": "left", "t_num": 40.0, "fft_points": 4096, "a4": 441.0}
+    assert analysis == {"backend": "notedigger", "channels": "left", "t_num": 50.0, "fft_points": 4096, "a4": 441.0}
     assert tempo == {"algorithm": "wavetone", "window_seconds": 8.0, "window_hop_seconds": 6.0}
     assert own_window.state.last_audio_dir == "/tmp"
     assert own_window.edit.transcribe.isEnabled()

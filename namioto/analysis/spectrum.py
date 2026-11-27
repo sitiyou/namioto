@@ -29,7 +29,7 @@ import numpy as np
 from scipy import fft as sp_fft
 from scipy import sparse
 
-from namioto.analysis.choices import CHANNEL_MODES
+from namioto.analysis.choices import CHANNEL_MODES, SPECTRUM_BACKENDS, SPECTRUM_FRAME_RATES
 
 NOTE_COUNT = 84
 MIDI_OFFSET = 24
@@ -162,7 +162,7 @@ def stft_notes(
     audio: np.ndarray | list[np.ndarray],
     sample_rate: int,
     *,
-    t_num: float = 40.0,
+    t_num: float = SPECTRUM_FRAME_RATES["notedigger"],
     fft_points: int = 8192,
     a4: float = 440.0,
     block_frames: int = 128,
@@ -234,7 +234,7 @@ def wave_notes(
     audio: np.ndarray | list[np.ndarray],
     sample_rate: int,
     *,
-    t_num: float = 40.0,
+    t_num: float = SPECTRUM_FRAME_RATES["wavetone"],
     a4: float = 440.0,
     progress=None,
     timings: dict | None = None,
@@ -299,7 +299,7 @@ def analyse(
     channels: str = "mono",
     backend: str = "wavetone",
     cache: bool = True,
-    t_num: float = 40.0,
+    t_num: float | None = None,
     fft_points: int = 8192,
     a4: float = 440.0,
     progress=None,
@@ -308,10 +308,12 @@ def analyse(
     """Decode and analyse audio, reusing content-addressed results unless cache=False."""
     from namioto.analysis import spectrum_cache
 
-    if backend not in ("wavetone", "notedigger"):
+    if backend not in SPECTRUM_FRAME_RATES:
         raise ValueError(f"Unknown spectrum backend: {backend!r}")
     if channels not in CHANNEL_MODES:
         raise ValueError(f"Unknown channel mode {channels!r}, expected one of {CHANNEL_MODES}")
+    if t_num is None:
+        t_num = SPECTRUM_FRAME_RATES[backend]
     options = {"backend": backend, "channels": channels, "t_num": float(t_num), "a4": float(a4)}
     if backend == "notedigger":
         options["fft_points"] = fft_points
@@ -378,9 +380,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("audio", help="input audio file")
     parser.add_argument("--channels", choices=CHANNEL_MODES, default="mono", help="which channels to analyse")
-    parser.add_argument("--t-num", type=float, default=40.0, help="analysis frames per second (default: 40)")
+    frame_rates = ", ".join(f"{backend}: {rate:g}" for backend, rate in SPECTRUM_FRAME_RATES.items())
+    parser.add_argument("--t-num", type=float, help=f"analysis frames per second (defaults by backend: {frame_rates})")
     parser.add_argument(
-        "--backend", choices=("wavetone", "notedigger"), default="wavetone", help="spectrum backend (default: wavetone)"
+        "--backend", choices=SPECTRUM_BACKENDS, default="wavetone", help="spectrum backend (default: wavetone)"
     )
     parser.add_argument(
         "--fft-points", type=int, default=8192, help="noteDigger FFT size (default: 8192; ignored by wavetone)"

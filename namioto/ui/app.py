@@ -236,7 +236,9 @@ class MainWindow(QMainWindow):
         self.resize(1200, 720)
         self.settings = settings if settings is not None else store.load()
         self.state = window_state.load()
-        self.project_settings = project.default_settings(self.state.project)
+        self.project_settings = project.default_settings(
+            self.state.project, spectrum_backend=self.settings.devices.spectrum_backend
+        )
         i18n.set_language(self.settings.general.language)
         _install_translations(i18n.current())
         self.settings_store = SettingsStore(self.settings, parent=self)
@@ -531,7 +533,9 @@ class MainWindow(QMainWindow):
         self._release_lyrics_copy()
         self._loading = True
         try:
-            self.project_settings = project.default_settings(self.state.project)
+            self.project_settings = project.default_settings(
+                self.state.project, spectrum_backend=self.settings.devices.spectrum_backend
+            )
             for name, value in (analysis or {}).items():
                 if ("analysis", name) in project.FIELD_SPECS:
                     params.set_value(self.project_settings, "analysis", name, value)
@@ -959,7 +963,7 @@ class MainWindow(QMainWindow):
         beside = Path(path).with_suffix(project.SUFFIX)
         if beside.exists():
             return self.load_project(beside)
-        document = project.default_settings(self.state.project)
+        document = project.default_settings(self.state.project, spectrum_backend=self.settings.devices.spectrum_backend)
         dialog = OpenAudioDialog(path, document, self)
         if dialog.exec() != QDialog.DialogCode.Accepted:
             return False
@@ -2236,6 +2240,7 @@ class MainWindow(QMainWindow):
         self.audio_path = path
         self._audio_generation += 1
         generation = self._audio_generation
+        self.view.set_spectrum(None)
         self.edit.transcribe.setEnabled(True)
         self.transport.bpm_analysis.setEnabled(True)
         self._mark_dirty()

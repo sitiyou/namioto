@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 from namioto import params
-from namioto.analysis.choices import CHANNEL_MODES
+from namioto.analysis.choices import CHANNEL_MODES, SPECTRUM_FRAME_RATES
 from namioto.channels import CHANNEL_COUNT, Channel, valid_color
 from namioto.lyric_colors import DEFAULT_COLORS
 from namioto.params import Field, Section
@@ -67,7 +67,7 @@ PROJECT_SECTIONS: tuple[Section, ...] = (
             Field(
                 "t_num",
                 "float",
-                40.0,
+                SPECTRUM_FRAME_RATES["wavetone"],
                 "Frames/s",
                 "Analysis frames per second: the time resolution of the spectrum",
                 low=1,
@@ -246,13 +246,14 @@ ProjectSettings = params.build(PROJECT_SECTIONS)
 FIELD_SPECS = ProjectSettings.__field_specs__
 
 
-def default_settings(remembered: Mapping | None = None) -> ProjectSettings:
+def default_settings(remembered: Mapping | None = None, *, spectrum_backend: str = "wavetone") -> ProjectSettings:
     """The values a document starts from when the file names none of its own.
 
     `remembered` is what the window kept of the last document; only the fields marked reusable take
-    from it, and every other one keeps the table's default.
+    from it. The initial spectrum frame rate comes from the selected backend.
     """
     settings = ProjectSettings()
+    settings.analysis.t_num = SPECTRUM_FRAME_RATES[spectrum_backend]
     if not isinstance(remembered, Mapping):
         return settings
     for section in PROJECT_SECTIONS:

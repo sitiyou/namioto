@@ -867,6 +867,53 @@ def test_phrase_flags_audible_release_removed_by_eighth_note_grid(qt_app, endpoi
     assert "signal_summary" not in call(qt_app, endpoint, "analysis.phrase", dict(params, signal_summary=False))
 
 
+def test_phrase_summarizes_a_pitch_change_and_a_high_band_sound_in_a_mapped_gap(
+    qt_app, endpoint, window, tmp_path, monkeypatch
+):
+    import numpy as np
+    import soundfile as sf
+
+    from namioto.analysis.spectrum import wave_notes
+
+    rate = 16000
+    t = np.arange(rate * 2) / rate
+    audio = 0.3 * np.sin(2 * np.pi * 261.626 * t) * ((t >= 0.25) & (t < 0.5))
+    audio += 0.3 * np.sin(2 * np.pi * 440 * t) * ((t >= 0.5) & (t < 0.75))
+    audio += 0.1 * np.sin(2 * np.pi * 3500 * t) * ((t >= 0.81) & (t < 0.87))
+    path = tmp_path / "voice.wav"
+    sf.write(path, audio, rate)
+    monkeypatch.setattr(window, "audio_path", str(path))
+    window.view.set_spectrum(wave_notes(audio, rate))
+    call(qt_app, endpoint, "lyrics.set", {"text": "あいし.0て"})
+    call(
+        qt_app,
+        endpoint,
+        "document.add_notes",
+        {
+            "notes": [
+                {"start": 0.25, "duration": 0.25, "pitch": 60},
+                {"start": 0.5, "duration": 0.25, "pitch": 69},
+                {"start": 1.0, "duration": 0.2, "pitch": 69},
+            ]
+        },
+    )
+    row = call(qt_app, endpoint, "analysis.phrase", {"line": 0})
+    summary = row["signal_summary"]
+    assert summary["note_spectrum"] == {"backend": "wavetone", "step_ms": 10}
+    change = summary["notes"][1]["pitch_change_before"]
+    assert change["pitches"] == [60, 69]
+    assert change["before_db"] < -12
+    assert change["after_db"] > 12
+    (gap,) = summary["unmapped_gaps"]
+    assert gap["sounds"] == [2]
+    assert gap["start"] == pytest.approx(0.75)
+    assert gap["end"] == pytest.approx(1.0)
+    high_band = gap["high_band"]
+    assert 0.81 < high_band["peak_at"] < 0.87
+    assert high_band["peak_dbfs"] > high_band["median_dbfs"] + 20
+    assert "spectrum" not in row
+
+
 def test_phrase_edit_preview_commit_undo_and_stale_revision(qt_app, window, endpoint):
     def request(method, **params):
         return call(qt_app, endpoint, method, params)

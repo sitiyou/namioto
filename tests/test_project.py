@@ -251,6 +251,13 @@ def test_only_the_habits_are_worth_carrying_across_projects() -> None:
     }
 
 
+def test_spectrum_frame_rate_default_follows_the_backend() -> None:
+    assert project.default_settings().analysis.t_num == 100.0
+    assert project.default_settings(spectrum_backend="notedigger").analysis.t_num == 40.0
+    assert project.default_settings({"analysis": {"t_num": 40}}).analysis.t_num == 40.0
+    assert project.settings_from_dict({"analysis": {"t_num": 40}}).analysis.t_num == 40.0
+
+
 def test_a_new_document_takes_the_remembered_values_it_is_worth_carrying() -> None:
     settings = project.default_settings({"spectrum": {"gain": 300.0, "contrast": 1.4}, "editor": {"zoom_x": 96.0}})
     assert settings.spectrum.gain == 300.0

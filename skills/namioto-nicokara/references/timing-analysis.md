@@ -12,6 +12,7 @@ Set the reviewed KRC with `lyrics.set`, run `analysis.align model=mms channel=CH
 
 - `game.quantization` marks the onset and release separately. Review boundaries marked `review`, and check dropped notes, pushed onsets and closed gaps. `shift_ms` shows how far the boundary moved, with negative values indicating an earlier time. A small `midpoint_distance_ms` means a small change to the raw time could move the snap by a whole grid cell. Use `finer_grid` to test whether an identified event or rest survives a finer subdivision. [Grid fit check](timing-from-audio.md#check-the-eighth-note-grid)
 - `signal_summary` is included by default for positioned notes. Compare the harmonic level at the NOTE pitch and the short-window RMS `before`, `between` and `after` the raw and snapped boundaries. At a release, `harmonic_drop` gives an approximate time for a clear energy drop. Check these measurements even for unflagged snaps when the vowel or rest disagrees with GAME.
+- `pitch_change_before` uses the editor's spectrum to compare the two candidate NOTE pitches across a close handoff. A negative `before_db` and positive `after_db` support the pitch change. Use the recording to place the boundary.
 
 | Check | What to compare |
 | --- | --- |
@@ -26,3 +27,11 @@ Check both the vocal and mix when available. For overlapping voices, slides or c
 Use [independent clip analysis](../../../docs/cli.md#inspect-an-audio-clip) when the whole-song result is ambiguous. Keep the complete disputed words and neighboring sounds in the window. Compare MMS and Yohane on the same KRC and audio if available. A low score, wide onset interval or cluster of nearly simultaneous onsets is a review cue. A narrow interval or agreement between models can still reflect the wrong lyric position. If the readings are in doubt, [verify what was sung](sung-words.md#check-lyric-readings) before editing notes. GAME can also recheck the bounded passage on a filtered or separated vocal on the same clock.
 
 Keep display punctuation and symbols such as ☆, ♥ and ♪, then check ownership of the next sound. Use the [phrase preview](../../../docs/cli.md#review-and-edit-one-phrase) to confirm a local edit and its neighbors before applying it. If reviewing a wipe jump or stall at playback time, account for the known delivery offset to find it on the recording clock.
+
+## Place a sound in an internal pause
+
+When a `.0` sound falls between separated NOTEs in a continuous phrase, assign it a timing NOTE in the interval. Zero slots leave the sound's placement ambiguous between the preceding release and the next attack.
+
+Locate the sound using the vocal and mix, the beat, and repeated phrases. Check whether it has a vowel, a weak or unvoiced consonant, or a closure. Use the local spectrum, RMS and alignment bounds together with listening. In `signal_summary.unmapped_gaps`, compare the high-frequency peak time and level with the gap's median to find possible friction or breath. An absent GAME note or an uncertain MMS onset can accompany a real but weak articulation.
+
+Use the whole interval when it fits the articulation, such as a closure spanning the gap. If the sound occupies only part of the interval, use the coarsest subdivision that places it there and preserves the remaining rest. For example, a weak `し` just before `て` can take the last sixteenth of an eighth-note gap. Keep the neighboring release and attack where the recording places them. If the evidence leaves the position uncertain, choose the best-supported interval and record the uncertainty.

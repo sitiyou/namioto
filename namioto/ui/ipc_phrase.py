@@ -206,16 +206,55 @@ class Phrase:
             notes = [note for note in notes if note.start < end and note.end > start]
             identity = [{"note_id": note.id, "pitch": note.pitch} for note in notes]
             ranges = [((note.start, note.end, note.pitch),) * 2 for note in notes]
-        if not ranges:
+        gaps = self._unmapped_gaps(start, end)
+        if not ranges and not gaps:
             return
         path = self.window.audio_path
-        summary = summarize(path, ranges, self.window.project_settings.analysis.a4) if path else None
+        image = self.window.view.spectrum
+        summary = (
+            summarize(
+                path,
+                ranges,
+                self.window.project_settings.analysis.a4,
+                spectrum=image.spectrum if image is not None else None,
+                unmapped_gaps=[(gap["start"], gap["end"]) for gap in gaps],
+            )
+            if path
+            else None
+        )
         if summary is None:
             result["missing"].append("signal_summary")
             return
         for row, key in zip(summary["notes"], identity, strict=True):
             row.update(key)
+        for row, gap in zip(summary.get("unmapped_gaps", ()), gaps, strict=True):
+            row.update(gap)
         result["signal_summary"] = summary
+
+    def _unmapped_gaps(self, start, end):
+        """Name explicit zero-slot sounds between mapped notes on the requested line."""
+        dropped = {ref for run in self.runs if run.slots == 0 for ref in run.sounds}
+        if not dropped:
+            return []
+        by_id = {note.id: note for note in self.notes}
+        gaps, pending = [], []
+        previous = None
+        for ref in self.refs:
+            ids = self.ids[ref]
+            if ids:
+                following = by_id[ids[0]]
+                if pending and previous is not None:
+                    low, high = max(start, previous.end), min(end, following.start)
+                    if low < high:
+                        gaps.append({"sounds": list(pending), "start": low, "end": high})
+                previous = by_id[ids[-1]]
+                pending.clear()
+            elif ref in dropped:
+                pending.append(ref.index)
+            else:
+                previous = None
+                pending.clear()
+        return gaps
 
     def apply(self, bridge, params):
         if _text(params, "revision") != self.revision:

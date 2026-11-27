@@ -232,7 +232,7 @@ def test_cancelling_channels_have_a_finite_zero_spectrum(tmp_path, mode, phase):
     with np.errstate(divide="raise", invalid="raise"):
         spectrum = analyse(path, channels=mode)
     assert spectrum.sigma == 0.0
-    assert spectrum.table.shape == (40, NOTE_COUNT)
+    assert spectrum.table.shape == (100, NOTE_COUNT)
     assert np.isfinite(spectrum.table).all()
     assert np.count_nonzero(spectrum.table) == 0
 
@@ -261,7 +261,7 @@ def test_analyse_end_to_end(tmp_path):
     path = write_wav(tmp_path / "a440.wav", tone(440.0, 2.0))
     timings: dict = {}
     spectrum = analyse(path, timings=timings, cache=False)
-    assert spectrum.frames == 80  # 2 s at the default 40 frames per second
+    assert spectrum.frames == 200
     assert note_label(int(spectrum.table.mean(axis=0).argmax())) == "A4"
     assert spectrum.backend == "wavetone"
     assert spectrum.fft_points == 0
@@ -269,6 +269,7 @@ def test_analyse_end_to_end(tmp_path):
     legacy_timings: dict = {}
     legacy = analyse(path, backend="notedigger", timings=legacy_timings, cache=False)
     assert legacy.backend == "notedigger"
+    assert legacy.frame_ms == 25
     decoded, rate = load_channels(path)
     np.testing.assert_array_equal(legacy.table, stft_notes(decoded, rate).table)
     assert {"decode", "weights", "fft", "reduce", "normalize"} <= set(legacy_timings)
