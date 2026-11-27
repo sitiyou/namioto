@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 import sys
 import types
+import weakref
 
 import pytest
 
@@ -76,7 +77,16 @@ def no_blocking_dialogs():
 
         def initialize(self, *args, _init=original_init, **kwargs):
             _init(self, *args, **kwargs)
-            self.exec = lambda *args, **kwargs: type(self).exec(self, *args, **kwargs)
+            # A self-cycle can let a worker thread's garbage collector destroy a Qt widget.
+            widget_ref = weakref.ref(self)
+
+            def execute(*args, **kwargs):
+                widget = widget_ref()
+                if widget is None:
+                    raise ReferenceError("The widget no longer exists")
+                return type(widget).exec(widget, *args, **kwargs)
+
+            self.exec = execute
 
         patcher.setattr(widget_class, "__init__", initialize)
         patcher.setattr(widget_class, "exec", refuse)
