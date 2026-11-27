@@ -57,7 +57,7 @@ freeze() {
 build_app() {
     # a frozen app needs the compiled extension inside the package, so the project is installed as
     # a wheel rather than in the editable layout, which keeps it under build/
-    uv sync --locked --extra cpu --no-editable --reinstall-package namioto
+    uv sync --locked --extra cpu --extra midi --no-editable --reinstall-package namioto
     freeze namioto namioto.ui.app \
         --windowed \
         --collect-data qtawesome \

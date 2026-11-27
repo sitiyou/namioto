@@ -13,6 +13,7 @@ uv run namioto
 ```
 
 Choose `--extra cuda` or `--extra webgpu` instead if needed; see [devices](cli.md#devices-and-models).
+Add `--extra midi` to enable note playback through an external MIDI synthesiser.
 The native audio extension is built with meson-python and pybind11. Build isolation is disabled
 for this package, so the development group provides its build tools. Editing native sources
 rebuilds the extension on the next import.
@@ -53,11 +54,13 @@ main-branch commits, version tags and manual runs. Slow tests are excluded.
 
 Every run builds the CPU-only GUI on Ubuntu 24.04 x86_64 and Windows x64 after checks pass,
 and uploads the AppImage for Linux and the frozen application directory for Windows as Actions
-artifacts. Push a new version tag such as `v0.1.0` to publish a GitHub Release after both builds
-pass. The release includes generated notes and these assets.
+artifacts. Push a version tag matching `pyproject.toml` to build the Python wheels and publish a
+GitHub Release after the desktop and wheel builds pass. The release includes generated notes and
+these assets.
 
 - `namioto-linux-x86_64.AppImage`
 - `namioto-windows-x86_64.zip` (extract the entire archive and run `namioto/namioto.exe`)
+- Python 3.14 wheels for Linux x86-64 (`manylinux_2_28`) and Windows x64
 - `SHA256SUMS`
 
 On a retry, the workflow refreshes an existing draft's assets before publishing it. It reuses
@@ -68,8 +71,9 @@ newer compatible systems; older glibc distributions such as Ubuntu 22.04 are not
 AppImage execution normally requires FUSE; where unavailable, use its
 `--appimage-extract-and-run` option.
 
-No wheel, sdist or separate CLI package is published by this workflow. Both applications keep
-settings and downloaded models in the normal user directories, not beside the executable.
+The GitHub Release hosts the Python wheels. Install the matching wheel into your Python
+environment with the desired analysis extra. The desktop packages include external MIDI
+output and keep settings and downloaded models in the normal user directories.
 
 To package locally, first run `bash build.sh app`, then:
 

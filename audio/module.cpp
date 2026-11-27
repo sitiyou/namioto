@@ -33,7 +33,7 @@ py::array_t<float> process(Stretcher& self, py::array_t<float, py::array::c_styl
 
 PYBIND11_MODULE(_audio, m) {
     m.doc() = "The native audio backend: Signalsmith Stretch and miniaudio.";
-    m.attr("__version__") = "0.1.0";
+    m.attr("__version__") = "0.1.1";
 
     m.def("stretch_version", &namioto::audio::stretch_version);
     m.def("miniaudio_version", &namioto::audio::miniaudio_version);

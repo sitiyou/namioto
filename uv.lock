@@ -544,7 +544,7 @@ wheels = [
 
 [[package]]
 name = "namioto"
-version = "0.1.0"
+version = "0.1.1"
 source = { editable = "." }
 dependencies = [
     { name = "janome" },
@@ -553,7 +553,6 @@ dependencies = [
     { name = "mido" },
     { name = "platformdirs" },
     { name = "pyside6-essentials" },
-    { name = "python-rtmidi" },
     { name = "qtawesome" },
     { name = "scipy" },
 ]
@@ -564,6 +563,9 @@ cpu = [
 ]
 cuda = [
     { name = "onnxruntime-gpu" },
+]
+midi = [
+    { name = "python-rtmidi" },
 ]
 webgpu = [
     { name = "onnxruntime" },
@@ -598,11 +600,11 @@ requires-dist = [
     { name = "onnxruntime-gpu", marker = "extra == 'cuda'", specifier = ">=1.20" },
     { name = "platformdirs", specifier = ">=4.11.8" },
     { name = "pyside6-essentials", specifier = ">=6.9.0" },
-    { name = "python-rtmidi", specifier = ">=1.5.8" },
+    { name = "python-rtmidi", marker = "extra == 'midi'", specifier = ">=1.5.8" },
     { name = "qtawesome", specifier = ">=1.4.2" },
     { name = "scipy", specifier = ">=1.11" },
 ]
-provides-extras = ["cpu", "cuda", "webgpu"]
+provides-extras = ["cpu", "cuda", "webgpu", "midi"]
 
 [package.metadata.requires-dev]
 dev = [

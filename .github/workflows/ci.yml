@@ -83,9 +83,55 @@ jobs:
           if-no-files-found: error
           retention-days: 14
 
+  wheels:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04, build: cp314-manylinux_x86_64}
+          - {os: windows-2022, build: cp314-win_amd64}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.14'
+      - name: Check release version
+        shell: bash
+        run: |
+          python - <<'PY'
+          import os
+          import tomllib
+          from pathlib import Path
+
+          version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+          if os.environ["GITHUB_REF_NAME"] != f"v{version}":
+              raise SystemExit(f"Release tag must be v{version}")
+          PY
+      - name: Build and test wheel
+        env:
+          CIBW_BUILD: ${{ matrix.build }}
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: auditwheel repair --plat manylinux_2_28_x86_64 --only-plat -w {dest_dir} {wheel}
+          CIBW_CONFIG_SETTINGS_WINDOWS: setup-args=--vsenv
+          CIBW_TEST_EXTRAS: cpu
+          CIBW_TEST_COMMAND: >-
+            python -I -c "from namioto import __version__, _audio; from namioto.karaoke.song_input import build_song; assert _audio.__version__ == __version__" &&
+            namioto-cli --help
+        run: |
+          python -m pip install cibuildwheel==4.3.5
+          python -m cibuildwheel --output-dir wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.build }}
+          path: wheelhouse/*.whl
+          if-no-files-found: error
+
   release:
     if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
-    needs: build
+    needs: [build, wheels]
     runs-on: ubuntu-24.04
     concurrency:
       group: release-${{ github.ref }}
@@ -98,6 +144,11 @@ jobs:
         with:
           pattern: namioto-*-x86_64
           path: artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: wheel-cp314-*
+          path: release
+          merge-multiple: true
       - name: Assemble release assets
         run: |
           mkdir -p release
@@ -111,7 +162,13 @@ jobs:
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
-          packages=(namioto-linux-x86_64.AppImage namioto-windows-x86_64.zip)
+          version=${RELEASE_TAG#v}
+          packages=(
+            namioto-linux-x86_64.AppImage
+            namioto-windows-x86_64.zip
+            "namioto-${version}-cp314-cp314-manylinux_2_28_x86_64.whl"
+            "namioto-${version}-cp314-cp314-win_amd64.whl"
+          )
           sha256sum -- "${packages[@]}" > SHA256SUMS
           if draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft)"; then
             if [[ "$draft" == true ]]; then
