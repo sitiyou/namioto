@@ -1,5 +1,7 @@
 # Check sung words with RomajiASR
 
+When native audio input is available, listen directly to a short clip of the isolated vocal (slowed to `0.65×–0.7×` for fast passages, or `L - R` side-isolated for panned calls) to check Japanese lyric readings, elisions, puns and non-lexical calls first. Reserve RomajiASR for environments without audio input or syllables that remain indistinct after listening.
+
 Use RomajiASR when a Japanese lyric reading or the words of a backing response are unclear. It proposes sung sounds as romanized tokens, including morae such as `shi` and the geminate marker `cl` for っ. Compare the proposed sounds with the full phrase, printed lyrics and repeated passages before editing the KRC.
 
 ## Transcribe a passage
