@@ -113,10 +113,11 @@ jobs:
       - name: Build and test wheel
         env:
           CIBW_BUILD: ${{ matrix.build }}
-          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_28
-          CIBW_REPAIR_WHEEL_COMMAND_LINUX: auditwheel repair --plat manylinux_2_28_x86_64 --only-plat -w {dest_dir} {wheel}
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux_2_34
+          CIBW_REPAIR_WHEEL_COMMAND_LINUX: auditwheel repair --plat manylinux_2_34_x86_64 --only-plat -w {dest_dir} {wheel}
           CIBW_CONFIG_SETTINGS_WINDOWS: setup-args=--vsenv
           CIBW_TEST_EXTRAS: cpu
+          CIBW_TEST_ENVIRONMENT: 'PIP_ONLY_BINARY=:all:'
           CIBW_TEST_COMMAND: >-
             python -I -c "from namioto import __version__, _audio; from namioto.karaoke.song_input import build_song; assert _audio.__version__ == __version__" &&
             namioto-cli --help
@@ -166,7 +167,7 @@ jobs:
           packages=(
             namioto-linux-x86_64.AppImage
             namioto-windows-x86_64.zip
-            "namioto-${version}-cp314-cp314-manylinux_2_28_x86_64.whl"
+            "namioto-${version}-cp314-cp314-manylinux_2_34_x86_64.whl"
             "namioto-${version}-cp314-cp314-win_amd64.whl"
           )
           sha256sum -- "${packages[@]}" > SHA256SUMS

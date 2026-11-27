@@ -60,7 +60,7 @@ these assets.
 
 - `namioto-linux-x86_64.AppImage`
 - `namioto-windows-x86_64.zip` (extract the entire archive and run `namioto/namioto.exe`)
-- Python 3.14 wheels for Linux x86-64 (`manylinux_2_28`) and Windows x64
+- Python 3.14 wheels for Linux x86-64 (`manylinux_2_34`) and Windows x64
 - `SHA256SUMS`
 
 On a retry, the workflow refreshes an existing draft's assets before publishing it. It reuses
